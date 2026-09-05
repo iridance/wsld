@@ -432,13 +432,7 @@ func (a *App) cmdStopCt(ctx context.Context, args []string) error {
 
 // ExecShellCommand 回傳容器內要執行的命令：config 覆寫 → 否則 bash→sh 自動退回。
 func ExecShellCommand(cfg config.Config, explicit []string) []string {
-	if len(explicit) > 0 {
-		return explicit
-	}
-	if cfg.ExecShell != "" {
-		return []string{cfg.ExecShell}
-	}
-	return []string{"sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"}
+	return cfg.ExecCommand(explicit)
 }
 
 func (a *App) cmdExec(ctx context.Context, args []string) error {

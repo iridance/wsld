@@ -170,6 +170,17 @@ func isLoopbackHost(h string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// ExecCommand 回傳容器內要執行的命令：explicit 優先 → exec_shell → bash→sh 自動退回（SPEC §2 Terminal）。
+func (c Config) ExecCommand(explicit []string) []string {
+	if len(explicit) > 0 {
+		return explicit
+	}
+	if c.ExecShell != "" {
+		return []string{c.ExecShell}
+	}
+	return []string{"sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"}
+}
+
 // DefaultPath 回傳目前 OS 的預設設定檔路徑。
 func DefaultPath() string { return DefaultPathFor(runtime.GOOS, os.Getenv) }
 

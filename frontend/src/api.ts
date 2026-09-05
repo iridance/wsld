@@ -1,0 +1,125 @@
+// 與 internal/gui Server 溝通的唯一資料路徑（Wails 與測試主機共用）。
+
+export interface Port {
+  IP: string;
+  PrivatePort: number;
+  PublicPort: number;
+  Type: string;
+}
+
+export interface Container {
+  Id: string;
+  Names: string[];
+  Image: string;
+  State: string;
+  Status: string;
+  Ports: Port[];
+}
+
+export interface Status {
+  Distro: string;
+  DistroFound: boolean;
+  DistroRunning: boolean;
+  SystemdActive: boolean;
+  DockerActive: boolean;
+  APIEndpoint: string;
+  APIReachable: boolean;
+  APIError: string;
+  ready: boolean;
+  starting: boolean;
+}
+
+export interface Settings {
+  refresh_interval_sec: number;
+  exec_shell: string;
+  tray_autostart: boolean;
+}
+
+export interface Meta {
+  version: string;
+  lang: string;
+  messages: Record<string, string>;
+  config: Settings;
+  distro: string;
+  api_endpoint: string;
+  autostart_supported: boolean;
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+declare global {
+  interface Window {
+    __WSLD__?: { base: string; token: string };
+  }
+}
+
+const cfg = window.__WSLD__ ?? { base: "", token: "" };
+
+function headers(): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (cfg.token) h["Authorization"] = `Bearer ${cfg.token}`;
+  return h;
+}
+
+async function call<T>(method: string, path: string, body?: unknown, asText = false): Promise<T> {
+  let resp: Response;
+  try {
+    resp = await fetch(cfg.base + path, {
+      method,
+      headers: headers(),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new ApiError(0, "network", String(e));
+  }
+  if (!resp.ok) {
+    let msg = resp.statusText;
+    let code = "error";
+    try {
+      const j = await resp.json();
+      msg = j.error ?? msg;
+      code = j.code ?? code;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(resp.status, code, msg);
+  }
+  if (asText) return (await resp.text()) as unknown as T;
+  if (resp.status === 204) return undefined as unknown as T;
+  return (await resp.json()) as T;
+}
+
+export function wsUrl(path: string, params: Record<string, string | number> = {}): string {
+  const base = cfg.base || window.location.origin;
+  const u = new URL(path, base);
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
+  if (cfg.token) u.searchParams.set("token", cfg.token);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  return u.toString();
+}
+
+export const api = {
+  meta: () => call<Meta>("GET", "/api/meta"),
+  status: () => call<Status>("GET", "/api/status"),
+  startEngine: () => call<Status>("POST", "/api/engine/start"),
+  containers: (all: boolean) => call<Container[]>("GET", `/api/containers?all=${all ? 1 : 0}`),
+  startContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/start`),
+  stopContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/stop`),
+  logs: (id: string, tail = 100) =>
+    call<string>("GET", `/api/containers/${encodeURIComponent(id)}/logs?tail=${tail}`, undefined, true),
+  getSettings: () => call<Settings>("GET", "/api/settings"),
+  putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
+  window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
+  logsStreamUrl: (id: string, tail = 100) =>
+    wsUrl(`/api/containers/${encodeURIComponent(id)}/logs/stream`, { tail }),
+  execUrl: (id: string, cols: number, rows: number) =>
+    wsUrl(`/api/containers/${encodeURIComponent(id)}/exec`, { cols, rows }),
+};
