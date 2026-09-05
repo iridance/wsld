@@ -59,6 +59,21 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 日誌：`wsl -d <distro> -u root -- journalctl -u docker -n 50`。
 
+## 清理磁碟：GUI 的 Images／Volumes
+
+- **Images → 清除未使用**等同 `docker image prune -a`：刪掉所有沒有容器（含已停止容器）引用的映像，含有標籤者。
+- **Volumes → 清除未使用**等同 `docker volume prune -a`：連具名 volume 一起刪，只要沒有容器掛載；資料不可復原，確認框會提醒。
+- 單筆移除使用中的映像／volume 會收到 Docker 的 409（顯示在紅色 banner）。GUI 不會自動 `--force`：先停掉並移除相關容器再刪。
+- Networks 在 GUI 為唯讀；`docker network prune` 請在 WSL 內執行。
+
+## Machines：管理多個 WSL 發行版
+
+- GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤 `wsld` 為 `config.toml` 目前管理的 distro，`default` 為 WSL 預設。
+- ⓘ 顯示該 distro 的 `/etc/wsl.conf`（以 root 執行 `cat`），並判定 `[boot] systemd=true`；沒有檔案時顯示「(no /etc/wsl.conf)」。
+- 「新增發行版」執行 `wsl --install -d <name> --no-launch`。安裝完成後：
+  1. `wsl -d <name>` 進入一次，依提示建立預設使用者；
+  2. 若要改由 wsld 管理該 distro，執行 `wsld init`（會在其中安裝 Docker 並改寫 `config.toml` 的 distro）。
+
 ## 已知限制（v1.0）
 
 - **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64。

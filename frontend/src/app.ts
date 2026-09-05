@@ -1,22 +1,50 @@
-import { api, ApiError, type Container, type Meta, type Settings, type Status } from "./api";
+import {
+  api,
+  ApiError,
+  type Container,
+  type Image,
+  type MachinesResponse,
+  type Meta,
+  type Network,
+  type Settings,
+  type Status,
+  type Volume,
+} from "./api";
 import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
 import { icon, type IconName } from "./icons";
 
 type Panel = { kind: "logs"; id: string; name: string; live: boolean; ws?: WebSocket } | { kind: "term"; id: string; name: string; session?: TerminalSession };
 
+/** 側欄視圖。 */
+export type View = "containers" | "images" | "volumes" | "networks" | "machines";
+const VIEWS: { id: View; icon: IconName; label: string }[] = [
+  { id: "containers", icon: "containers", label: "gui.nav.containers" },
+  { id: "images", icon: "images", label: "gui.nav.images" },
+  { id: "volumes", icon: "volumes", label: "gui.nav.volumes" },
+  { id: "networks", icon: "networks", label: "gui.nav.networks" },
+  { id: "machines", icon: "machines", label: "gui.nav.machines" },
+];
+
 interface State {
   meta: Meta;
   status?: Status;
+  view: View;
   containers: Container[];
-  showAll: boolean;
+  images: Image[];
+  volumes: Volume[];
+  networks: Network[];
+  machines?: MachinesResponse;
   lastError?: string;
+  notice?: string;
   starting: boolean;
   paused: boolean;
   refreshCount: number;
   panel?: Panel;
   /** 進行中的容器動作（id → 動作），用於即時回饋；docker stop 可能等 10s 寬限期 */
   pending: Record<string, "starting" | "stopping">;
+  /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
+  busy: Set<string>;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...children: (Node | string)[]) => {
@@ -37,9 +65,17 @@ const btn = (attrs: Record<string, string>, ico: IconName, label: string): HTMLB
   return b;
 };
 
+/** 只有圖示的按鈕：名稱交給 aria-label／title（列表操作、工具列）。 */
+const iconBtn = (attrs: Record<string, string>, ico: IconName, label: string): HTMLButtonElement => {
+  const b = el("button", { ...attrs, class: `icon ${attrs.class ?? ""}`.trim(), "aria-label": label, title: label });
+  b.append(icon(ico));
+  return b;
+};
+
 export class App {
   private st: State;
   private timer?: number;
+  private noticeTimer?: number;
   private root: HTMLElement;
 
   constructor(root: HTMLElement, meta: Meta) {
@@ -47,7 +83,20 @@ export class App {
     setMessages(meta.messages);
     document.documentElement.lang = meta.lang;
     document.title = t("gui.title");
-    this.st = { meta, containers: [], showAll: false, starting: false, paused: false, refreshCount: 0, pending: {} };
+    this.st = {
+      meta,
+      view: loadJSON<View>(LS_VIEW, "containers"),
+      containers: [],
+      images: [],
+      volumes: [],
+      networks: [],
+      starting: false,
+      paused: false,
+      refreshCount: 0,
+      pending: {},
+      busy: new Set(),
+    };
+    if (!VIEWS.some((v) => v.id === this.st.view)) this.st.view = "containers";
     this.build();
     this.bindPause();
     void this.refresh();
@@ -74,7 +123,7 @@ export class App {
       const paused = document.hidden || !document.hasFocus();
       if (paused !== this.st.paused) {
         this.st.paused = paused;
-        this.renderFooter();
+        this.renderHeader();
         if (!paused) void this.refresh();
       }
     };
@@ -85,10 +134,14 @@ export class App {
 
   async refresh(): Promise<void> {
     try {
-      const [status, containers] = await Promise.all([api.status(), this.st.status?.ready === false && !this.st.starting ? Promise.resolve(this.st.containers) : api.containers(this.st.showAll)]);
+      const status = await api.status();
       this.st.status = status;
-      if (status.ready) {
-        this.st.containers = containers;
+      if (this.st.view === "machines") {
+        // WSL 清單不依賴 Docker 引擎
+        this.st.machines = await api.machines();
+        this.st.lastError = undefined;
+      } else if (status.ready) {
+        await this.loadView();
         this.st.lastError = undefined;
       } else if (!this.st.starting) {
         // 引擎未就緒：保留列表但標示斷線
@@ -102,6 +155,36 @@ export class App {
     this.renderAll();
   }
 
+  private async loadView(): Promise<void> {
+    switch (this.st.view) {
+      case "containers":
+        this.st.containers = await api.containers();
+        break;
+      case "images":
+        this.st.images = await api.images();
+        break;
+      case "volumes":
+        this.st.volumes = await api.volumes();
+        break;
+      case "networks":
+        this.st.networks = await api.networks();
+        break;
+      case "machines":
+        this.st.machines = await api.machines();
+        break;
+    }
+  }
+
+  private setView(v: View): void {
+    if (v === this.st.view) return;
+    this.closePanel();
+    this.st.view = v;
+    saveJSON(LS_VIEW, v);
+    this.renderNav();
+    this.renderView();
+    void this.refresh();
+  }
+
   // ---- 動作 -----------------------------------------------------------------
 
   private async startEngine(): Promise<void> {
@@ -111,7 +194,7 @@ export class App {
     this.renderBanner();
     try {
       this.st.status = await api.startEngine();
-      this.st.containers = await api.containers(this.st.showAll);
+      await this.loadView();
     } catch (e) {
       this.st.lastError = e instanceof ApiError ? e.message : String(e);
     } finally {
@@ -121,13 +204,22 @@ export class App {
   }
 
   private async act(fn: () => Promise<void>): Promise<void> {
+    let err: string | undefined;
     try {
       await fn();
-      this.st.lastError = undefined;
     } catch (e) {
-      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      err = e instanceof ApiError ? e.message : String(e);
     }
+    await this.refreshKeeping(err);
+  }
+
+  /** 刷新後仍保留動作錯誤（refresh 成功時會清掉連線錯誤，但使用者要看到動作為何失敗）。 */
+  private async refreshKeeping(err: string | undefined): Promise<void> {
     await this.refresh();
+    if (err) {
+      this.st.lastError = err;
+      this.renderBanner();
+    }
   }
 
   /** 容器 Start/Stop：先標記 pending 立即重繪，完成後清除再刷新。 */
@@ -140,6 +232,33 @@ export class App {
       delete this.st.pending[id];
       this.renderList();
     }
+  }
+
+  /** 資源動作（刪除／prune）：確認 → 標 busy → 執行 → 通知／錯誤 → 刷新。 */
+  private async resourceAction(key: string, confirmText: string, fn: () => Promise<string | undefined>): Promise<void> {
+    if (!(await this.confirm(confirmText))) return;
+    this.st.busy.add(key);
+    this.renderViewBody();
+    let err: string | undefined;
+    try {
+      const msg = await fn();
+      if (msg) this.notify(msg);
+    } catch (e) {
+      err = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      this.st.busy.delete(key);
+    }
+    await this.refreshKeeping(err);
+  }
+
+  private notify(msg: string): void {
+    this.st.notice = msg;
+    this.renderNotice();
+    if (this.noticeTimer) window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.st.notice = undefined;
+      this.renderNotice();
+    }, 8000);
   }
 
   private openLogs(c: Container): void {
@@ -222,24 +341,31 @@ export class App {
     }
   }
 
-  // ---- 渲染 -----------------------------------------------------------------
+  // ---- 渲染：外殼 -----------------------------------------------------------
 
   private build(): void {
     this.root.innerHTML = "";
     this.root.append(
       el("header", { "data-testid": "header" }),
       el("div", { class: "banner", "data-testid": "error-banner", role: "alert", hidden: "" }),
-      el("main", {}, el("div", { class: "list", "data-testid": "container-list" }), el("section", { class: "panel", "data-testid": "panel", hidden: "" })),
+      el("div", { class: "notice", "data-testid": "notice", role: "status", hidden: "" }),
+      el("div", { class: "body" }, el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }), el("main")),
       el("footer", { "data-testid": "status-bar" }),
       this.buildSettingsDialog(),
+      this.buildConfirmDialog(),
+      this.buildMachineConfigDialog(),
+      this.buildAddMachineDialog(),
     );
+    this.renderNav();
+    this.renderView();
     this.renderAll();
   }
 
   private renderAll(): void {
     this.renderHeader();
     this.renderBanner();
-    this.renderList();
+    this.renderNotice();
+    this.renderViewBody();
     this.renderFooter();
   }
 
@@ -253,27 +379,23 @@ export class App {
     startBtn.disabled = this.st.starting || ready;
     startBtn.onclick = () => void this.startEngine();
 
-    const refreshBtn = btn({ "data-testid": "btn-refresh" }, "refresh", t("gui.refresh"));
-    refreshBtn.onclick = () => void this.refresh();
-
-    const showAll = el("input", { type: "checkbox", "data-testid": "chk-show-all" }) as HTMLInputElement;
-    showAll.checked = this.st.showAll;
-    showAll.onchange = () => {
-      this.st.showAll = showAll.checked;
-      void this.refresh();
-    };
-
     const settingsBtn = btn({ "data-testid": "btn-settings" }, "settings", t("gui.settings"));
     settingsBtn.onclick = () => this.openSettings();
 
-    // 標題列左側：連線中的 WSL distro（尚無 config 時退回 app 名稱）
+    // 標題列左側：連線中的 WSL distro（尚無 config 時退回 app 名稱），其後是連線狀態、端點、刷新間隔
     const distro = this.st.status?.Distro || this.st.meta.distro;
     h.replaceChildren(
       el("h1", { "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
       el("span", { class: `badge ${badgeCls}`, "data-testid": "status-connection", "data-state": this.st.starting ? "starting" : ready ? "connected" : "disconnected", text: badgeTxt }),
+      el("span", { class: "meta", "data-testid": "status-endpoint", text: this.st.meta.api_endpoint }),
+      el("span", {
+        class: "meta",
+        "data-testid": "status-refresh",
+        "data-paused": String(this.st.paused),
+        "data-count": String(this.st.refreshCount),
+        text: this.st.paused ? t("gui.status.paused") : `↻ ${this.st.meta.config.refresh_interval_sec}s`,
+      }),
       el("span", { class: "spacer" }),
-      el("label", { class: "check" }, showAll, t("gui.show_all")),
-      refreshBtn,
       startBtn,
       settingsBtn,
     );
@@ -290,22 +412,114 @@ export class App {
     }
   }
 
-  // ---- 列表：欄寬（固定版面、可拖曳、localStorage）與 compose 分組 ---------------
-
-  private colWidths: Record<string, number> = loadJSON(LS_COLS, {});
-  private collapsed: Set<string> = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
-
-  private widthOf(col: Col): number {
-    return Math.max(col.min, this.colWidths[col.key] ?? col.def);
+  private renderNotice(): void {
+    const n = this.root.querySelector<HTMLElement>('[data-testid="notice"]')!;
+    n.hidden = !this.st.notice;
+    n.textContent = this.st.notice ?? "";
   }
 
-  private applyColWidths(table: HTMLTableElement): void {
+  private renderNav(): void {
+    const nav = this.root.querySelector<HTMLElement>('[data-testid="side-nav"]')!;
+    nav.replaceChildren(
+      ...VIEWS.map((v) => {
+        const b = el("button", { class: "nav", "data-testid": `nav-${v.id}`, "data-view": v.id });
+        if (v.id === this.st.view) b.setAttribute("aria-current", "page");
+        b.append(icon(v.icon), el("span", { class: "label", text: t(v.label) }));
+        b.onclick = () => this.setView(v.id);
+        return b;
+      }),
+    );
+  }
+
+  /** 建立目前視圖的骨架（容器視圖含 panel），內容由 renderViewBody 填。 */
+  private renderView(): void {
+    const main = this.root.querySelector("main")!;
+    main.dataset.view = this.st.view;
+    main.setAttribute("data-testid", `view-${this.st.view}`);
+    if (this.st.view === "containers") {
+      main.replaceChildren(el("div", { class: "list", "data-testid": "container-list" }), el("section", { class: "panel", "data-testid": "panel", hidden: "" }));
+    } else {
+      main.replaceChildren(el("div", { class: "toolbar", "data-testid": "toolbar" }), el("div", { class: "list", "data-testid": `${this.st.view}-list` }));
+    }
+    this.renderViewBody();
+  }
+
+  private renderViewBody(): void {
+    switch (this.st.view) {
+      case "containers":
+        this.renderList();
+        break;
+      case "images":
+        this.renderImages();
+        break;
+      case "volumes":
+        this.renderVolumes();
+        break;
+      case "networks":
+        this.renderNetworks();
+        break;
+      case "machines":
+        this.renderMachines();
+        break;
+    }
+  }
+
+  private renderFooter(): void {
+    const f = this.root.querySelector<HTMLElement>('[data-testid="status-bar"]')!;
+    f.replaceChildren(el("span", { "data-testid": "status-version", text: `v${this.st.meta.version}` }), el("span", { class: "spacer" }), this.langSelect());
+  }
+
+  /** 右下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
+  private langSelect(): HTMLElement {
+    const sel = el("select", { "data-testid": "lang-select", "aria-label": t("gui.lang"), class: "lang" }) as HTMLSelectElement;
+    for (const [v, label] of [["en", "English"], ["zh-TW", "繁體中文"]]) {
+      const o = el("option", { value: v, text: label }) as HTMLOptionElement;
+      o.selected = v === this.st.meta.lang;
+      sel.append(o);
+    }
+    sel.onchange = () => void this.switchLang(sel.value);
+    return el("label", { class: "lang-wrap" }, sel);
+  }
+
+  private async switchLang(lang: string): Promise<void> {
+    const ok = await this.saveSettings({ ...this.st.meta.config, lang });
+    if (!ok) return;
+    try {
+      const meta = await api.meta();
+      this.st.meta = meta;
+      setMessages(meta.messages);
+      document.documentElement.lang = meta.lang;
+      document.title = t("gui.title");
+      this.closePanel();
+      this.build(); // 全部重繪（含對話框文字）
+    } catch (e) {
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.renderBanner();
+    }
+  }
+
+  // ---- 表格共用：固定版面、可拖曳欄寬、localStorage --------------------------
+
+  private colWidths: Record<string, Record<string, number>> = {
+    containers: loadJSON(LS_COLS, {}),
+    images: loadJSON(`${LS_COLS}.images`, {}),
+    volumes: loadJSON(`${LS_COLS}.volumes`, {}),
+    networks: loadJSON(`${LS_COLS}.networks`, {}),
+    machines: loadJSON(`${LS_COLS}.machines`, {}),
+  };
+  private collapsed: Set<string> = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
+
+  private widthOf(view: View, col: Col): number {
+    return Math.max(col.min, this.colWidths[view][col.key] ?? col.def);
+  }
+
+  private applyColWidths(view: View, cols: Col[], table: HTMLTableElement): void {
     // 可調欄位給明確像素寬；最後的操作欄不設寬度，吸收剩餘空間（table-layout: fixed 的行為），
     // 所以拖曳某欄 +N px 時，只有那一欄與操作欄改變。
     let total = 0;
     table.querySelectorAll<HTMLTableColElement>("col").forEach((c) => {
-      const col = COLS.find((x) => x.key === c.dataset.col)!;
-      const w = this.widthOf(col);
+      const col = cols.find((x) => x.key === c.dataset.col)!;
+      const w = this.widthOf(view, col);
       if (col.resizable) c.style.width = `${w}px`;
       total += w;
     });
@@ -313,24 +527,46 @@ export class App {
     table.style.minWidth = `${total}px`;
   }
 
-  private startResize(ev: MouseEvent, col: Col, table: HTMLTableElement): void {
+  private startResize(ev: MouseEvent, view: View, cols: Col[], col: Col, table: HTMLTableElement): void {
     ev.preventDefault();
     const startX = ev.clientX;
-    const startW = this.widthOf(col);
+    const startW = this.widthOf(view, col);
     const move = (e: MouseEvent) => {
-      this.colWidths[col.key] = Math.max(col.min, startW + (e.clientX - startX));
-      this.applyColWidths(table);
+      this.colWidths[view][col.key] = Math.max(col.min, startW + (e.clientX - startX));
+      this.applyColWidths(view, cols, table);
     };
     const up = () => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       document.body.classList.remove("resizing");
-      saveJSON(LS_COLS, this.colWidths);
+      saveJSON(view === "containers" ? LS_COLS : `${LS_COLS}.${view}`, this.colWidths[view]);
     };
     document.body.classList.add("resizing");
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
   }
+
+  /** 建立含 colgroup／thead（可拖曳）的固定版面表格，回傳 table 與 tbody。 */
+  private table(view: View, cols: Col[]): { table: HTMLTableElement; tbody: HTMLTableSectionElement } {
+    const table = el("table", { class: "fixed" });
+    const colgroup = el("colgroup", {}, ...cols.map((c) => el("col", { "data-col": c.key })));
+    const headRow = el("tr");
+    for (const col of cols) {
+      const th = el("th", { "data-col": col.key, text: t(col.label) });
+      if (col.resizable) {
+        const handle = el("div", { class: "col-resizer", "data-testid": "col-resizer", role: "separator", "aria-orientation": "vertical" });
+        handle.onmousedown = (e) => this.startResize(e, view, cols, col, table);
+        th.append(handle);
+      }
+      headRow.append(th);
+    }
+    const tbody = el("tbody");
+    table.append(colgroup, el("thead", {}, headRow), tbody);
+    this.applyColWidths(view, cols, table);
+    return { table, tbody };
+  }
+
+  // ---- 容器列表（compose 分組）------------------------------------------------
 
   private toggleGroup(project: string): void {
     if (this.collapsed.has(project)) this.collapsed.delete(project);
@@ -355,25 +591,13 @@ export class App {
   }
 
   private renderList(): void {
-    const list = this.root.querySelector<HTMLElement>('[data-testid="container-list"]')!;
+    const list = this.root.querySelector<HTMLElement>('[data-testid="container-list"]');
+    if (!list) return;
     if (this.st.containers.length === 0) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty") }));
       return;
     }
-    const table = el("table", { class: "fixed" });
-    const colgroup = el("colgroup", {}, ...COLS.map((c) => el("col", { "data-col": c.key })));
-    const headRow = el("tr");
-    for (const col of COLS) {
-      const th = el("th", { "data-col": col.key, text: t(col.label) });
-      if (col.resizable) {
-        const handle = el("div", { class: "col-resizer", "data-testid": "col-resizer", role: "separator", "aria-orientation": "vertical" });
-        handle.onmousedown = (e) => this.startResize(e, col, table);
-        th.append(handle);
-      }
-      headRow.append(th);
-    }
-    const tbody = el("tbody");
-
+    const { table, tbody } = this.table("containers", COLS);
     const groups = groupContainers(this.st.containers);
     if (!groups) {
       for (const c of this.st.containers) tbody.append(this.containerRow(c, "", name(c)));
@@ -385,8 +609,6 @@ export class App {
         for (const c of g.items) tbody.append(this.containerRow(c, g.project, g.project ? c.Labels?.[LABEL_SERVICE] || name(c) : name(c)));
       }
     }
-    table.append(colgroup, el("thead", {}, headRow), tbody);
-    this.applyColWidths(table);
     list.replaceChildren(table);
   }
 
@@ -430,15 +652,15 @@ export class App {
     const running = c.State === "running";
     const n = name(c);
     const pending = this.st.pending[c.Id];
-    const startBtn = btn({ class: "small", "data-testid": `btn-start-${n}` }, "play", t("gui.start"));
+    const startBtn = iconBtn({ "data-testid": `btn-start-${n}` }, "play", t("gui.start"));
     startBtn.disabled = running || !!pending;
     startBtn.onclick = () => void this.actOn(c.Id, "starting", () => api.startContainer(c.Id));
-    const stopBtn = btn({ class: "small", "data-testid": `btn-stop-${n}` }, "stop", t("gui.stop"));
+    const stopBtn = iconBtn({ "data-testid": `btn-stop-${n}` }, "stop", t("gui.stop"));
     stopBtn.disabled = !running || !!pending;
     stopBtn.onclick = () => void this.actOn(c.Id, "stopping", () => api.stopContainer(c.Id));
-    const logsBtn = btn({ class: "small", "data-testid": `btn-logs-${n}` }, "logs", t("gui.logs"));
+    const logsBtn = iconBtn({ "data-testid": `btn-logs-${n}` }, "logs", t("gui.logs"));
     logsBtn.onclick = () => this.openLogs(c);
-    const termBtn = btn({ class: "small", "data-testid": `btn-term-${n}` }, "terminal", t("gui.terminal"));
+    const termBtn = iconBtn({ "data-testid": `btn-term-${n}` }, "terminal", t("gui.terminal"));
     termBtn.disabled = !running;
     termBtn.onclick = () => this.openTerminal(c);
 
@@ -458,8 +680,9 @@ export class App {
   }
 
   private renderPanel(): void {
-    const sec = this.root.querySelector<HTMLElement>('[data-testid="panel"]')!;
+    const sec = this.root.querySelector<HTMLElement>('[data-testid="panel"]');
     const main = this.root.querySelector("main")!;
+    if (!sec) return;
     const p = this.st.panel;
     if (!p) {
       sec.hidden = true;
@@ -475,7 +698,6 @@ export class App {
         ? el("pre", { class: "logs", "data-testid": "logs-content" })
         : el("div", { class: "xterm-host", "data-testid": "terminal-xterm" });
     sec.setAttribute("data-kind", p.kind);
-    sec.setAttribute("data-testid", "panel");
     sec.replaceChildren(head, body);
     this.renderPanelHead();
   }
@@ -485,7 +707,7 @@ export class App {
     const head = this.root.querySelector<HTMLElement>('[data-testid="panel-head"]');
     if (!p || !head) return;
     const title = el("strong", { "data-testid": "panel-title", text: `${p.kind === "logs" ? t("gui.logs") : t("gui.terminal")} — ${p.name}` });
-    const close = el("button", { class: "small", "data-testid": "btn-panel-close", text: t("gui.close") });
+    const close = iconBtn({ class: "small", "data-testid": "btn-panel-close" }, "close", t("gui.close"));
     close.onclick = () => this.closePanel();
     const kids: (Node | string)[] = [title, el("span", { class: "spacer" })];
     if (p.kind === "logs") {
@@ -498,48 +720,290 @@ export class App {
     head.replaceChildren(...kids);
   }
 
-  private renderFooter(): void {
-    const f = this.root.querySelector<HTMLElement>('[data-testid="status-bar"]')!;
-    const s = this.st.status;
-    const conn = s?.ready ? t("gui.status.connected") : t("gui.status.disconnected");
-    f.replaceChildren(
-      el("span", { "data-testid": "status-distro", text: `${t("status.distro").replace("%s", "")}${this.st.meta.distro}` }),
-      el("span", { "data-testid": "status-endpoint", text: this.st.meta.api_endpoint }),
-      el("span", { class: s?.ready ? "ok" : "bad", "data-testid": "status-api", text: conn }),
-      el("span", { "data-testid": "status-refresh", "data-paused": String(this.st.paused), "data-count": String(this.st.refreshCount), text: this.st.paused ? t("gui.status.paused") : `↻ ${this.st.meta.config.refresh_interval_sec}s` }),
-      el("span", { class: "spacer" }),
-      this.langSelect(),
-      el("span", { "data-testid": "status-version", text: `v${this.st.meta.version}` }),
+  // ---- Images -----------------------------------------------------------------
+
+  private renderImages(): void {
+    const list = this.root.querySelector<HTMLElement>('[data-testid="images-list"]');
+    const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    if (!list || !bar) return;
+    const ready = this.st.status?.ready === true;
+    const prune = btn({ "data-testid": "btn-prune-images" }, "broom", t("gui.prune"));
+    prune.disabled = !ready || this.st.busy.has("prune-images");
+    prune.onclick = () =>
+      void this.resourceAction("prune-images", t("gui.confirm.prune_images"), async () => {
+        const rep = await api.pruneImages();
+        return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
+      });
+    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.images")} · ${this.st.images.length}` }), el("span", { class: "spacer" }), prune);
+
+    if (!ready || this.st.images.length === 0) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.images") }));
+      return;
+    }
+    const { table, tbody } = this.table("images", IMAGE_COLS);
+    const imgs = [...this.st.images].sort((a, b) => imageName(a).localeCompare(imageName(b)));
+    for (const im of imgs) {
+      const short = shortID(im.Id);
+      const nm = imageName(im);
+      const ref = nm === "<none>" ? short : nm;
+      const rm = iconBtn({ "data-testid": `btn-rm-image-${short}`, class: "danger" }, "trash", t("gui.remove"));
+      rm.disabled = this.st.busy.has(`image:${ref}`);
+      rm.onclick = () =>
+        void this.resourceAction(`image:${ref}`, fmt(t("gui.confirm.remove"), ref), async () => {
+          await api.removeImage(ref);
+          return fmt(t("gui.removed"), ref);
+        });
+      tbody.append(
+        el(
+          "tr",
+          { "data-testid": "image-row", "data-ref": ref },
+          el("td", { "data-testid": "image-name", text: nm, title: (im.RepoTags ?? []).join("\n") || nm }),
+          el("td", { "data-testid": "image-id", class: "mono", text: short, title: im.Id }),
+          el("td", { "data-testid": "image-size", text: humanSize(im.Size) }),
+          el("td", { text: fmtUnix(im.Created) }),
+          el("td", { "data-testid": "image-inuse", text: im.Containers < 0 ? "–" : String(im.Containers) }),
+          el("td", { class: "actions" }, rm),
+        ),
+      );
+    }
+    list.replaceChildren(table);
+  }
+
+  // ---- Volumes ----------------------------------------------------------------
+
+  private renderVolumes(): void {
+    const list = this.root.querySelector<HTMLElement>('[data-testid="volumes-list"]');
+    const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    if (!list || !bar) return;
+    const ready = this.st.status?.ready === true;
+    const prune = btn({ "data-testid": "btn-prune-volumes" }, "broom", t("gui.prune"));
+    prune.disabled = !ready || this.st.busy.has("prune-volumes");
+    prune.onclick = () =>
+      void this.resourceAction("prune-volumes", t("gui.confirm.prune_volumes"), async () => {
+        const rep = await api.pruneVolumes();
+        return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
+      });
+    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.volumes")} · ${this.st.volumes.length}` }), el("span", { class: "spacer" }), prune);
+
+    if (!ready || this.st.volumes.length === 0) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.volumes") }));
+      return;
+    }
+    const { table, tbody } = this.table("volumes", VOLUME_COLS);
+    for (const v of [...this.st.volumes].sort((a, b) => a.Name.localeCompare(b.Name))) {
+      const rm = iconBtn({ "data-testid": `btn-rm-volume-${v.Name}`, class: "danger" }, "trash", t("gui.remove"));
+      rm.disabled = this.st.busy.has(`volume:${v.Name}`);
+      rm.onclick = () =>
+        void this.resourceAction(`volume:${v.Name}`, fmt(t("gui.confirm.remove"), v.Name), async () => {
+          await api.removeVolume(v.Name);
+          return fmt(t("gui.removed"), v.Name);
+        });
+      tbody.append(
+        el(
+          "tr",
+          { "data-testid": "volume-row", "data-name": v.Name },
+          el("td", { "data-testid": "volume-name", text: v.Name, title: v.Name }),
+          el("td", { "data-testid": "volume-driver", text: v.Driver }),
+          el("td", { "data-testid": "volume-mountpoint", class: "mono", text: v.Mountpoint, title: v.Mountpoint }),
+          el("td", { text: fmtISO(v.CreatedAt) }),
+          el("td", { class: "actions" }, rm),
+        ),
+      );
+    }
+    list.replaceChildren(table);
+  }
+
+  // ---- Networks ---------------------------------------------------------------
+
+  private renderNetworks(): void {
+    const list = this.root.querySelector<HTMLElement>('[data-testid="networks-list"]');
+    const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    if (!list || !bar) return;
+    const ready = this.st.status?.ready === true;
+    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.networks")} · ${this.st.networks.length}` }));
+    if (!ready || this.st.networks.length === 0) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.networks") }));
+      return;
+    }
+    const { table, tbody } = this.table("networks", NETWORK_COLS);
+    for (const n of [...this.st.networks].sort((a, b) => a.Name.localeCompare(b.Name))) {
+      const builtin = n.Name === "bridge" || n.Name === "host" || n.Name === "none";
+      tbody.append(
+        el(
+          "tr",
+          { "data-testid": "network-row", "data-name": n.Name, "data-builtin": String(builtin) },
+          el("td", { "data-testid": "network-name", class: builtin ? "muted" : "", text: n.Name, title: n.Name }),
+          el("td", { "data-testid": "network-driver", text: n.Driver }),
+          el("td", { "data-testid": "network-scope", text: n.Scope }),
+          el("td", { "data-testid": "network-id", class: "mono", text: shortID(n.Id), title: n.Id }),
+          el("td", { text: fmtISO(n.Created) }),
+        ),
+      );
+    }
+    list.replaceChildren(table);
+  }
+
+  // ---- Machines（本機 WSL）----------------------------------------------------
+
+  private renderMachines(): void {
+    const list = this.root.querySelector<HTMLElement>('[data-testid="machines-list"]');
+    const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    if (!list || !bar) return;
+    const m = this.st.machines;
+    const add = btn({ "data-testid": "btn-add-machine" }, "plus", t("gui.machines.add"));
+    add.disabled = !m?.available || this.st.busy.has("install");
+    add.onclick = () => this.openAddMachine();
+    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.machines")} · ${m?.machines.length ?? 0}` }), el("span", { class: "spacer" }), add);
+
+    if (m && !m.available) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.machines.unavailable") }));
+      return;
+    }
+    if (!m || m.machines.length === 0) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.machines") }));
+      return;
+    }
+    const { table, tbody } = this.table("machines", MACHINE_COLS);
+    for (const d of m.machines) {
+      const cfg = iconBtn({ "data-testid": `btn-machine-config-${d.name}` }, "info", t("gui.machines.config"));
+      cfg.onclick = () => void this.openMachineConfig(d.name);
+      const flags: HTMLElement[] = [];
+      if (d.active) flags.push(el("span", { class: "tag accent", "data-testid": "machine-flag-active", text: t("gui.machines.active"), title: this.st.meta.api_endpoint }));
+      if (d.default) flags.push(el("span", { class: "tag", "data-testid": "machine-flag-default", text: t("gui.machines.default") }));
+      tbody.append(
+        el(
+          "tr",
+          { "data-testid": "machine-row", "data-name": d.name, "data-state": d.state.toLowerCase() },
+          el("td", { "data-testid": "machine-name", text: d.name, title: d.name }),
+          el("td", {}, el("span", { class: `state ${d.state.toLowerCase()}`, "data-testid": "machine-state", text: d.state })),
+          el("td", { "data-testid": "machine-version", text: String(d.version) }),
+          el("td", { class: "flags" }, ...flags),
+          el("td", { class: "actions" }, cfg),
+        ),
+      );
+    }
+    list.replaceChildren(table);
+  }
+
+  private buildMachineConfigDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "machine-config-dialog", class: "wide" }) as HTMLDialogElement;
+    const close = iconBtn({ "data-testid": "machine-config-close", type: "button" }, "close", t("gui.close"));
+    close.onclick = () => d.close();
+    d.append(
+      el("div", { class: "dialog-head" }, el("h2", {}, el("span", { "data-testid": "machine-config-name" }), " — /etc/wsl.conf"), el("span", { class: "spacer" }), close),
+      el("div", { class: "tag", "data-testid": "machine-config-systemd", "data-on": "false" }),
+      el("pre", { class: "conf", "data-testid": "machine-config-conf" }),
     );
+    return d;
   }
 
-  /** 右下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
-  private langSelect(): HTMLElement {
-    const sel = el("select", { "data-testid": "lang-select", "aria-label": t("gui.lang"), class: "lang" }) as HTMLSelectElement;
-    for (const [v, label] of [["en", "English"], ["zh-TW", "繁體中文"]]) {
-      const o = el("option", { value: v, text: label }) as HTMLOptionElement;
-      o.selected = v === this.st.meta.lang;
-      sel.append(o);
-    }
-    sel.onchange = () => void this.switchLang(sel.value);
-    return el("label", { class: "lang-wrap" }, sel);
-  }
-
-  private async switchLang(lang: string): Promise<void> {
-    const ok = await this.saveSettings({ ...this.st.meta.config, lang });
-    if (!ok) return;
+  private async openMachineConfig(name: string): Promise<void> {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="machine-config-dialog"]')!;
+    const nm = d.querySelector<HTMLElement>('[data-testid="machine-config-name"]')!;
+    const sd = d.querySelector<HTMLElement>('[data-testid="machine-config-systemd"]')!;
+    const pre = d.querySelector<HTMLElement>('[data-testid="machine-config-conf"]')!;
+    nm.textContent = name;
+    sd.textContent = "…";
+    sd.dataset.on = "false";
+    pre.textContent = "";
+    if (!d.open) d.showModal();
     try {
-      const meta = await api.meta();
-      this.st.meta = meta;
-      setMessages(meta.messages);
-      document.documentElement.lang = meta.lang;
-      document.title = t("gui.title");
-      this.build(); // 全部重繪（含設定對話框文字）
-      this.renderPanel();
+      const c = await api.machineConfig(name);
+      sd.dataset.on = String(c.systemd);
+      sd.className = `tag ${c.systemd ? "ok" : ""}`;
+      sd.textContent = c.systemd ? t("gui.machines.systemd_on") : t("gui.machines.systemd_off");
+      pre.textContent = c.wsl_conf || t("gui.machines.no_conf");
     } catch (e) {
-      this.st.lastError = e instanceof ApiError ? e.message : String(e);
-      this.renderBanner();
+      pre.textContent = e instanceof ApiError ? e.message : String(e);
     }
+  }
+
+  private buildAddMachineDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "add-machine-dialog" }) as HTMLDialogElement;
+    const sel = el("select", { "data-testid": "add-machine-select" }) as HTMLSelectElement;
+    const err = el("div", { class: "field-error", "data-testid": "add-machine-error", hidden: "" });
+    const install = btn({ class: "primary", type: "submit", "data-testid": "add-machine-install" }, "plus", t("gui.machines.install"));
+    const cancel = btn({ type: "button", "data-testid": "add-machine-cancel" }, "close", t("gui.cancel"));
+    cancel.onclick = () => d.close();
+    const form = el("form", { method: "dialog" }, el("label", {}, t("gui.machines.add"), sel), err, el("div", { class: "row" }, cancel, install));
+    form.noValidate = true;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const nm = sel.value;
+      if (!nm) return;
+      install.disabled = true;
+      install.querySelector(".label")!.textContent = t("gui.machines.installing");
+      err.hidden = true;
+      this.st.busy.add("install");
+      try {
+        await api.installMachine(nm);
+        d.close();
+        this.notify(fmt(t("gui.machines.installed"), nm, nm));
+        await this.refresh();
+      } catch (e) {
+        err.textContent = e instanceof ApiError ? e.message : String(e);
+        err.hidden = false;
+      } finally {
+        this.st.busy.delete("install");
+        install.disabled = false;
+        install.querySelector(".label")!.textContent = t("gui.machines.install");
+      }
+    };
+    d.append(el("h2", { text: t("gui.machines.add") }), form);
+    return d;
+  }
+
+  private async openAddMachine(): Promise<void> {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="add-machine-dialog"]')!;
+    const sel = d.querySelector<HTMLSelectElement>('[data-testid="add-machine-select"]')!;
+    const err = d.querySelector<HTMLElement>('[data-testid="add-machine-error"]')!;
+    const install = d.querySelector<HTMLButtonElement>('[data-testid="add-machine-install"]')!;
+    err.hidden = true;
+    sel.replaceChildren(el("option", { value: "", text: t("gui.machines.loading") }));
+    sel.disabled = true;
+    install.disabled = true;
+    d.showModal();
+    try {
+      const online = await api.machinesOnline();
+      sel.replaceChildren(...online.map((o) => el("option", { value: o.name, text: o.friendly && o.friendly !== o.name ? `${o.friendly} (${o.name})` : o.name })));
+      sel.disabled = false;
+      install.disabled = online.length === 0;
+    } catch (e) {
+      sel.replaceChildren();
+      err.textContent = e instanceof ApiError ? e.message : String(e);
+      err.hidden = false;
+    }
+  }
+
+  // ---- 確認對話框 -------------------------------------------------------------
+
+  private confirmResolve?: (ok: boolean) => void;
+
+  private buildConfirmDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "confirm-dialog" }) as HTMLDialogElement;
+    const ok = btn({ class: "primary danger", type: "button", "data-testid": "confirm-ok" }, "trash", t("gui.confirm"));
+    const cancel = btn({ type: "button", "data-testid": "confirm-cancel" }, "close", t("gui.cancel"));
+    ok.onclick = () => {
+      d.close();
+      this.confirmResolve?.(true);
+      this.confirmResolve = undefined;
+    };
+    cancel.onclick = () => d.close();
+    d.addEventListener("close", () => {
+      this.confirmResolve?.(false);
+      this.confirmResolve = undefined;
+    });
+    d.append(el("p", { "data-testid": "confirm-text" }), el("div", { class: "row" }, cancel, ok));
+    return d;
+  }
+
+  private confirm(text: string): Promise<boolean> {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="confirm-dialog"]')!;
+    d.querySelector('[data-testid="confirm-text"]')!.textContent = text;
+    return new Promise((resolve) => {
+      this.confirmResolve = resolve;
+      d.showModal();
+    });
   }
 
   // ---- 設定 -----------------------------------------------------------------
@@ -571,7 +1035,7 @@ export class App {
       });
       if (ok) {
         d.close();
-        this.renderFooter();
+        this.renderHeader();
       }
     };
     d.append(el("h2", { text: t("gui.settings") }), form);
@@ -607,17 +1071,51 @@ interface Col {
 }
 
 const COLS: Col[] = [
-  // 總和 925px < 預設視窗 1000px，避免一開就出現水平捲軸
+  // 總和 < 預設視窗（1000px − 側欄 96px），避免一開就出現水平捲軸
   { key: "name", label: "gui.col.name", def: 150, min: 80, resizable: true },
   { key: "image", label: "gui.col.image", def: 170, min: 80, resizable: true },
   { key: "state", label: "gui.col.state", def: 85, min: 70, resizable: true },
   { key: "status", label: "gui.col.status", def: 140, min: 80, resizable: true },
   { key: "ports", label: "gui.col.ports", def: 130, min: 80, resizable: true },
-  { key: "actions", label: "gui.col.actions", def: 250, min: 250, resizable: false },
+  { key: "actions", label: "gui.col.actions", def: 140, min: 130, resizable: false },
+];
+
+const IMAGE_COLS: Col[] = [
+  { key: "name", label: "gui.col.name", def: 260, min: 100, resizable: true },
+  { key: "id", label: "gui.col.id", def: 120, min: 90, resizable: true },
+  { key: "size", label: "gui.col.size", def: 90, min: 70, resizable: true },
+  { key: "created", label: "gui.col.created", def: 160, min: 90, resizable: true },
+  { key: "inuse", label: "gui.col.in_use", def: 80, min: 60, resizable: true },
+  { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
+];
+
+const VOLUME_COLS: Col[] = [
+  { key: "name", label: "gui.col.name", def: 220, min: 100, resizable: true },
+  { key: "driver", label: "gui.col.driver", def: 90, min: 60, resizable: true },
+  { key: "mountpoint", label: "gui.col.mountpoint", def: 320, min: 120, resizable: true },
+  { key: "created", label: "gui.col.created", def: 160, min: 90, resizable: true },
+  { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
+];
+
+const NETWORK_COLS: Col[] = [
+  { key: "name", label: "gui.col.name", def: 220, min: 100, resizable: true },
+  { key: "driver", label: "gui.col.driver", def: 100, min: 60, resizable: true },
+  { key: "scope", label: "gui.col.scope", def: 90, min: 60, resizable: true },
+  { key: "id", label: "gui.col.id", def: 120, min: 90, resizable: true },
+  { key: "created", label: "gui.col.created", def: 150, min: 90, resizable: false },
+];
+
+const MACHINE_COLS: Col[] = [
+  { key: "name", label: "gui.col.name", def: 240, min: 100, resizable: true },
+  { key: "state", label: "gui.col.state", def: 110, min: 70, resizable: true },
+  { key: "version", label: "gui.col.version", def: 70, min: 50, resizable: true },
+  { key: "flags", label: "gui.col.flags", def: 160, min: 80, resizable: true },
+  { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
 ];
 
 const LS_COLS = "wsld.colWidths";
 const LS_COLLAPSED = "wsld.collapsedGroups";
+const LS_VIEW = "wsld.view";
 const LABEL_PROJECT = "com.docker.compose.project";
 const LABEL_SERVICE = "com.docker.compose.service";
 
@@ -671,4 +1169,47 @@ function ports(c: Container): string {
     .map((p) => `${p.PublicPort}→${p.PrivatePort}/${p.Type}`)
     .filter((s) => !seen.has(s) && seen.add(s))
     .join(", ");
+}
+
+// ---- 格式化 -----------------------------------------------------------------
+
+/** 依序以 args 取代 %s／%d（與 Go 端 i18n.T 的訊息格式相容）。 */
+function fmt(s: string, ...args: string[]): string {
+  let i = 0;
+  return s.replace(/%[sd]/g, () => args[i++] ?? "");
+}
+
+function shortID(id: string): string {
+  return id.replace(/^sha256:/, "").slice(0, 12);
+}
+
+function imageName(im: Image): string {
+  const tag = im.RepoTags?.[0];
+  return !tag || tag === "<none>:<none>" ? "<none>" : tag;
+}
+
+/** 二進位單位（與 docker CLI 一致的 1024 進位），保留一位小數。 */
+function humanSize(n: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
+}
+
+function fmtDate(d: Date): string {
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function fmtUnix(sec: number): string {
+  return sec ? fmtDate(new Date(sec * 1000)) : "";
+}
+
+function fmtISO(s: string): string {
+  return s ? fmtDate(new Date(s)) : "";
 }

@@ -183,11 +183,16 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | 區域 | 功能 |
 |------|------|
 | Tray | 狀態、Ensure／Start、開主視窗、退出；登入自啟預設關 |
-| 列表 | 刷新（前景 3s；失焦／Tray 暫停）；Start／Stop |
+| 版面 | 上：header（distro、連線、endpoint、刷新間隔、啟動引擎、設定）；左：side nav（大型 icon + 文字）；下：footer（版本、語言） |
+| Containers | 固定顯示全部容器（含已停止）；刷新（前景 3s；失焦／Tray 暫停）；Start／Stop／Logs／Terminal 純圖示操作；compose 分組；欄寬可拖曳 |
+| Images | 列表（repo:tag、ID、大小、建立、使用中）、移除、清除未使用（= `image prune -a`）；使用中不強制刪 |
+| Volumes | 列表、移除、清除未使用（= `volume prune -a`）；使用中不強制刪 |
+| Networks | 唯讀列表 |
+| Machines | 本機 WSL 發行版（狀態、版本、wsld／default 角色）、查看 wsl.conf 與 systemd、以 `wsl --install --no-launch` 新增 |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 選中容器 Exec；bash→sh；config 可覆寫 |
-| 狀態列 | distro、api_endpoint、連線結果 |
-| 語系 | 跟 OS；zh→繁中，否則英 |
+| 破壞性操作 | 一律確認對話框；Docker 409 原樣呈現，不自動 force |
+| 語系 | 預設英；右下角可切繁中並寫入 config |
 
 詳細互動與 test id 寫入 `docs/GUI.md`（Phase 3）。
 

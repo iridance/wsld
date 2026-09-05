@@ -38,6 +38,7 @@ type Engine interface {
 	ExecCreate(ctx context.Context, containerID string, cmd []string, tty bool) (string, error)
 	ExecStart(ctx context.Context, execID string, tty bool) (net.Conn, error)
 	ExecResize(ctx context.Context, execID string, rows, cols int) error
+	Resources
 }
 
 // Lifecycle 是 GUI 需要的生命週期子集（*lifecycle.Manager 滿足）。
@@ -96,6 +97,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/containers/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/containers/{id}/logs/stream", s.handleLogsStream)
 	mux.HandleFunc("GET /api/containers/{id}/exec", s.handleExec)
+	mux.HandleFunc("GET /api/images", s.handleImages)
+	mux.HandleFunc("DELETE /api/images/{ref}", s.handleImageRemove)
+	mux.HandleFunc("POST /api/images/prune", s.handleImagesPrune)
+	mux.HandleFunc("GET /api/volumes", s.handleVolumes)
+	mux.HandleFunc("DELETE /api/volumes/{name}", s.handleVolumeRemove)
+	mux.HandleFunc("POST /api/volumes/prune", s.handleVolumesPrune)
+	mux.HandleFunc("GET /api/networks", s.handleNetworks)
+	mux.HandleFunc("GET /api/machines", s.handleMachines)
+	mux.HandleFunc("GET /api/machines/online", s.handleMachinesOnline)
+	mux.HandleFunc("GET /api/machines/{name}/config", s.handleMachineConfig)
+	mux.HandleFunc("POST /api/machines/install", s.handleMachineInstall)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
@@ -144,7 +156,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 
 type apiError struct {
 	Error string `json:"error"`
-	Code  string `json:"code"` // not_ready | api | not_found | error | usage
+	Code  string `json:"code"` // not_ready | api | not_found | conflict | error | usage
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -169,6 +181,10 @@ func writeEngineErr(w http.ResponseWriter, err error) {
 	default:
 		var ae *dockerapi.APIError
 		if errors.As(err, &ae) {
+			if ae.Status == http.StatusConflict {
+				writeErr(w, http.StatusConflict, "conflict", err)
+				return
+			}
 			writeErr(w, http.StatusBadRequest, "error", err)
 			return
 		}

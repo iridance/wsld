@@ -19,8 +19,8 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 |---|---|---|---|
 | Bootstrap 腳本 | bats、shellcheck、Pester | `scripts/lib/*`、`scripts/tests/*` | 純函式：埠選擇、daemon.json、wsl.conf、參數、`wsl -l -v` 解析 |
 | Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli,gui}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
-| GUI 橋接 | `go test ./internal/gui` | `/api/*` HTTP + WebSocket（token、CORS、logs 串流、exec） | `FakeEngine`／`FakeLifecycle` |
-| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（18 案） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
+| GUI 橋接 | `go test ./internal/gui` | `/api/*` HTTP + WebSocket（token、CORS、logs 串流、exec、images／volumes／networks／machines） | `FakeEngine`／`FakeLifecycle`／`FakeWSL` |
+| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（42 案：`list`、`columns`、`groups`、`panels`、`settings`、`shell`、`views`） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
 | CLI／GUI 端到端 | 手動／CI Windows runner | `dist/wsld.exe`、`dist/wsld-gui.exe` | 見下方「實機驗收」與 `docs/GUI.md` |
 
 ## Go 測試設計

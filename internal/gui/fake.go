@@ -27,6 +27,15 @@ type FakeEngine struct {
 	LastResize [2]int
 	// ActionDelay 讓 Start/Stop 延遲回應（模擬 docker stop 寬限期）。
 	ActionDelay time.Duration
+
+	images   []dockerapi.Image
+	volumes  map[string]*fakeVolume
+	networks []dockerapi.Network
+}
+
+type fakeVolume struct {
+	dockerapi.Volume
+	InUse bool
 }
 
 // SetActionDelay 設定 Start/Stop 的延遲。
@@ -79,6 +88,165 @@ func (f *FakeEngine) Reset() {
 	})
 	f.AddContainer("db", "postgres:16", "exited", nil)
 	f.AppendLog("web", "nginx started", "GET / 200")
+
+	f.mu.Lock()
+	f.images = []dockerapi.Image{
+		{ID: "sha256:aaa111aaa111aaa111", RepoTags: []string{"nginx:1.27"}, Created: 1757000000, Size: 48_000_000, Containers: 1},
+		{ID: "sha256:bbb222bbb222bbb222", RepoTags: []string{"redis:7"}, Created: 1756000000, Size: 41_000_000, Containers: 0},
+		{ID: "sha256:ccc333ccc333ccc333", RepoTags: nil, Created: 1755000000, Size: 9_000_000, Containers: 0},
+	}
+	f.volumes = map[string]*fakeVolume{}
+	f.networks = []dockerapi.Network{
+		{ID: "n1", Name: "bridge", Driver: "bridge", Scope: "local", Created: "2026-09-01T00:00:00Z"},
+		{ID: "n2", Name: "host", Driver: "host", Scope: "local", Created: "2026-09-01T00:00:00Z"},
+		{ID: "n3", Name: "none", Driver: "null", Scope: "local", Created: "2026-09-01T00:00:00Z"},
+		{ID: "n4", Name: "shop_default", Driver: "bridge", Scope: "local", Created: "2026-09-02T00:00:00Z", Labels: map[string]string{"com.docker.compose.project": "shop"}},
+	}
+	f.mu.Unlock()
+	f.AddVolume("pgdata", true)
+	f.AddVolume("orphan", false)
+}
+
+// AddVolume 新增 volume；inUse=true 時 Remove/Prune 會拒絕。
+func (f *FakeEngine) AddVolume(name string, inUse bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumes[name] = &fakeVolume{Volume: dockerapi.Volume{
+		Name: name, Driver: "local", Scope: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data", CreatedAt: "2026-09-03T00:00:00Z",
+	}, InUse: inUse}
+}
+
+// AddImage 新增映像；containers 為使用中的容器數。
+func (f *FakeEngine) AddImage(tag string, size int64, containers int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var tags []string
+	if tag != "" {
+		tags = []string{tag}
+	}
+	f.images = append(f.images, dockerapi.Image{ID: fmt.Sprintf("sha256:%012x%012x", len(f.images)+1, size), RepoTags: tags, Created: 1754000000, Size: size, Containers: containers})
+}
+
+// AddNetwork 新增使用者網路。
+func (f *FakeEngine) AddNetwork(name, driver string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.networks = append(f.networks, dockerapi.Network{ID: fmt.Sprintf("n%d", len(f.networks)+1), Name: name, Driver: driver, Scope: "local", Created: "2026-09-04T00:00:00Z"})
+}
+
+func conflict(msg string) error {
+	return &dockerapi.APIError{Status: 409, Message: msg}
+}
+
+// ListImages 實作 Resources。
+func (f *FakeEngine) ListImages(context.Context) ([]dockerapi.Image, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return nil, err
+	}
+	return append([]dockerapi.Image{}, f.images...), nil
+}
+
+// RemoveImage 實作 Resources：ref 比對 tag、ID 或短 ID。
+func (f *FakeEngine) RemoveImage(_ context.Context, ref string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return err
+	}
+	for i, img := range f.images {
+		if img.Name() == ref || img.ID == ref || img.ShortID() == ref || strings.TrimPrefix(img.ID, "sha256:") == ref {
+			if img.Containers > 0 && !force {
+				return conflict("conflict: unable to remove repository reference " + ref + " (must force) - container is using its referenced image")
+			}
+			f.images = append(f.images[:i], f.images[i+1:]...)
+			return nil
+		}
+	}
+	return &dockerapi.APIError{Status: 404, Message: "No such image: " + ref}
+}
+
+// PruneImages 實作 Resources：移除 Containers==0 的映像。
+func (f *FakeEngine) PruneImages(context.Context) (dockerapi.PruneReport, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return dockerapi.PruneReport{}, err
+	}
+	var kept []dockerapi.Image
+	rep := dockerapi.PruneReport{}
+	for _, img := range f.images {
+		if img.Containers == 0 {
+			rep.Count++
+			rep.SpaceReclaimed += img.Size
+			continue
+		}
+		kept = append(kept, img)
+	}
+	f.images = kept
+	return rep, nil
+}
+
+// ListVolumes 實作 Resources（依名稱排序）。
+func (f *FakeEngine) ListVolumes(context.Context) ([]dockerapi.Volume, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return nil, err
+	}
+	out := []dockerapi.Volume{}
+	for _, v := range f.volumes {
+		out = append(out, v.Volume)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// RemoveVolume 實作 Resources。
+func (f *FakeEngine) RemoveVolume(_ context.Context, name string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return err
+	}
+	v, ok := f.volumes[name]
+	if !ok {
+		return &dockerapi.APIError{Status: 404, Message: "get " + name + ": no such volume"}
+	}
+	if v.InUse && !force {
+		return conflict("remove " + name + ": volume is in use")
+	}
+	delete(f.volumes, name)
+	return nil
+}
+
+// PruneVolumes 實作 Resources：移除未使用的 volume。
+func (f *FakeEngine) PruneVolumes(context.Context) (dockerapi.PruneReport, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return dockerapi.PruneReport{}, err
+	}
+	rep := dockerapi.PruneReport{}
+	for name, v := range f.volumes {
+		if !v.InUse {
+			delete(f.volumes, name)
+			rep.Count++
+			rep.SpaceReclaimed += 1024
+		}
+	}
+	return rep, nil
+}
+
+// ListNetworks 實作 Resources。
+func (f *FakeEngine) ListNetworks(context.Context) ([]dockerapi.Network, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return nil, err
+	}
+	return append([]dockerapi.Network{}, f.networks...), nil
 }
 
 func (f *FakeEngine) idFor(name string) string {

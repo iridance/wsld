@@ -72,6 +72,7 @@ v2.0 = Phase 6
 
 - `wsld-gui.exe`（Wails v2）：Tray、列表、Start／Stop、Logs（100／Live）、**Exec 終端**、狀態列
 - 刷新：前景 3s；Tray／失焦暫停
+- v1.0 後續擴充（已完成）：側欄五視圖（Containers／Images／Volumes／Networks／Machines）、header 整併狀態、footer 版本＋語言、純圖示操作鈕、移除「顯示已停止」與手動刷新
 - 語系：跟 OS（zh→繁中）
 - `docs/GUI.md`；Playwright 關鍵路徑；`docs/TESTING.md` UI 指令
 - 與 `internal` 共用，禁止雙重邏輯
@@ -79,7 +80,7 @@ v2.0 = Phase 6
 ### 完成定義
 
 - [x] SPEC §5.5／§6 GUI 相關項（Wails v2 + systray；`internal/gui` HTTP/WS 橋接；實機驗證見 docs/GUI.md）
-- [x] UI 測試一鍵可跑（`make test-ui`：Playwright 18 案 + `go test ./internal/gui`）
+- [x] UI 測試一鍵可跑（`make test-ui`：Playwright 42 案 + `go test ./internal/gui`）
 
 ---
 

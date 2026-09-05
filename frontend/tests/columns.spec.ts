@@ -21,8 +21,8 @@ test("column widths do not change when content changes", async ({ page, request 
   // 塞一個超長名稱／映像的容器，等它出現在列表
   const longName = "a-very-very-very-very-long-container-name-that-would-widen-the-column";
   await addContainer(request, longName, "registry.example.internal:5000/team/some/really/long/image/path:2026.09.06-rc1");
-  await page.getByTestId("btn-refresh").click();
-  await expect(page.locator(`[data-testid="container-row"][data-name="${longName}"]`)).toBeVisible();
+  // 沒有手動刷新鈕：等自動刷新（預設 3s）帶入新列
+  await expect(page.locator(`[data-testid="container-row"][data-name="${longName}"]`)).toBeVisible({ timeout: 10_000 });
 
   expect(await colWidth(page, "name")).toBeCloseTo(before.name, 0);
   expect(await colWidth(page, "image")).toBeCloseTo(before.image, 0);
@@ -34,7 +34,7 @@ test("column widths do not change when content changes", async ({ page, request 
   expect(overflow).toBe("ellipsis");
 });
 
-test("columns can be resized by dragging the header handle and the width persists", async ({ page }) => {
+test("columns can be resized by dragging the header handle and the width persists", async ({ page, request }) => {
   await page.setViewportSize({ width: 1100, height: 640 });
   await open(page);
   const before = await colWidth(page, "name");
@@ -50,8 +50,9 @@ test("columns can be resized by dragging the header handle and the width persist
   expect(after - before).toBeGreaterThan(70);
   expect(after - before).toBeLessThan(90);
 
-  // 刷新（重繪列表）與重新載入頁面都要保留
-  await page.getByTestId("btn-refresh").click();
+  // 自動刷新（重繪列表）與重新載入頁面都要保留
+  await addContainer(request, "later", "busybox");
+  await expect(page.locator('[data-testid="container-row"][data-name="later"]')).toBeVisible({ timeout: 10_000 });
   await expect.poll(() => colWidth(page, "name")).toBeCloseTo(after, 0);
   await page.reload();
   await expect(page.getByTestId("status-connection")).toBeVisible();

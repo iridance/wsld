@@ -26,7 +26,7 @@ test("saving settings persists refresh interval, exec shell and autostart", asyn
   await page.getByTestId("settings-autostart").check();
   await page.getByTestId("settings-save").click();
   await expect(page.getByTestId("settings-dialog")).toBeHidden();
-  await expect(page.getByTestId("status-refresh")).toHaveText("↻ 5s");
+  await expect(page.getByTestId("status-refresh")).toHaveText("↻ 5s"); // 現在位於 header
 
   const saved = await (await request.get("/api/settings")).json();
   expect(saved).toEqual({ refresh_interval_sec: 5, exec_shell: "zsh", tray_autostart: true, lang: "en" });

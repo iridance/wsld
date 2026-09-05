@@ -156,3 +156,34 @@ func TestExitCodeExtraction(t *testing.T) {
 		t.Fatal("unknown → -1")
 	}
 }
+
+func TestParseOnline(t *testing.T) {
+	txt := "The following is a list of valid distributions that can be installed.\r\nInstall using 'wsl.exe --install <Distro>'.\r\n\r\nNAME                            FRIENDLY NAME\r\nUbuntu                          Ubuntu\r\nDebian                          Debian GNU/Linux\r\nUbuntu-24.04                    Ubuntu 24.04 LTS\r\n"
+	got := ParseOnline(txt)
+	if len(got) != 3 {
+		t.Fatalf("len = %d: %+v", len(got), got)
+	}
+	if got[1] != (OnlineDistro{Name: "Debian", Friendly: "Debian GNU/Linux"}) || got[2].Friendly != "Ubuntu 24.04 LTS" {
+		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestListOnlineAndInstall(t *testing.T) {
+	r := &fakeRunner{out: map[string]result{
+		"--list --online":                 {stdout: "NAME    FRIENDLY NAME\r\nDebian  Debian GNU/Linux\r\n"},
+		"--install -d Debian --no-launch": {stdout: "Installing: Debian\r\n"},
+	}}
+	got, err := ListOnline(context.Background(), r)
+	if err != nil || len(got) != 1 || got[0].Name != "Debian" {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if err := Install(context.Background(), r, "Debian"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(context.Background(), r, ""); err == nil {
+		t.Fatal("empty name must be rejected")
+	}
+	if err := Install(context.Background(), r, "bad name"); err == nil {
+		t.Fatal("names with spaces must be rejected")
+	}
+}

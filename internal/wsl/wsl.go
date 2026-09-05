@@ -215,3 +215,67 @@ func Terminate(ctx context.Context, r Runner, distro string) error {
 	_, _, err := r.Run(ctx, nil, "--terminate", distro)
 	return err
 }
+
+// OnlineDistro 為 `wsl --list --online` 的一列。
+type OnlineDistro struct {
+	Name     string
+	Friendly string
+}
+
+// ParseOnline 解析 `wsl --list --online` 已解碼文字：略過說明行與 NAME 標題列。
+func ParseOnline(txt string) []OnlineDistro {
+	var out []OnlineDistro
+	started := false
+	for _, line := range strings.Split(strings.ReplaceAll(txt, "\r", ""), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if !started {
+			if strings.HasPrefix(t, "NAME") {
+				started = true
+			}
+			continue
+		}
+		f := strings.Fields(t)
+		if len(f) == 0 {
+			continue
+		}
+		out = append(out, OnlineDistro{Name: f[0], Friendly: strings.Join(f[1:], " ")})
+	}
+	return out
+}
+
+// ListOnline 執行 `wsl --list --online`。
+func ListOnline(ctx context.Context, r Runner) ([]OnlineDistro, error) {
+	out, _, err := r.Run(ctx, nil, "--list", "--online")
+	if err != nil {
+		return nil, fmt.Errorf("wsl --list --online: %w", err)
+	}
+	return ParseOnline(DecodeOutput(out)), nil
+}
+
+// Install 執行 `wsl --install -d <name> --no-launch`；名稱只允許 [A-Za-z0-9._-]。
+func Install(ctx context.Context, r Runner, name string) error {
+	if !ValidDistroName(name) {
+		return fmt.Errorf("invalid distro name %q", name)
+	}
+	_, stderr, err := r.Run(ctx, nil, "--install", "-d", name, "--no-launch")
+	if err != nil {
+		return fmt.Errorf("wsl --install %s: %w: %s", name, err, strings.TrimSpace(DecodeOutput(stderr)))
+	}
+	return nil
+}
+
+// ValidDistroName 檢查 distro 名稱是否只含 [A-Za-z0-9._-] 且長度 1..64。
+func ValidDistroName(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}

@@ -67,7 +67,6 @@ test("Terminal opens exec session, echoes typed command, and closes", async ({ p
 
 test("Terminal button is disabled for stopped containers", async ({ page }) => {
   await open(page);
-  await page.getByTestId("chk-show-all").check();
   await expect(page.getByTestId("btn-term-db")).toBeDisabled();
 });
 

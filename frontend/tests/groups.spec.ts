@@ -17,7 +17,6 @@ test("compose containers are grouped under a project header with service names a
   await addComposeContainer(request, "shop", "worker", "python:3.12", "exited");
   await addComposeContainer(request, "blog", "db", "postgres:16");
   await open(page);
-  await page.getByTestId("chk-show-all").check();
 
   // 專案標頭：字母序 blog、shop；未分組容器在最後的「Ungrouped」標頭下
   const headers = page.getByTestId("group-row");
@@ -73,7 +72,6 @@ test("group Stop/Start act on every container of the project", async ({ page, re
   await addComposeContainer(request, "shop", "web", "nginx:1.27");
   await addComposeContainer(request, "shop", "api", "node:22");
   await open(page);
-  await page.getByTestId("chk-show-all").check();
 
   await group(page, "shop").getByTestId("group-stop").click();
   await expect(row(page, "shop-web-1")).toHaveAttribute("data-state", "exited");

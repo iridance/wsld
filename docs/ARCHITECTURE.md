@@ -7,7 +7,8 @@
 ┌──────────────────────────────────────────────────────────┐
 │  wsld-gui.exe (Wails + Playwright 測試)                  │
 │  wsld.exe (CLI)                                          │
-│       └─ internal: lifecycle / dockerapi / config / doctor│
+│       └─ internal: lifecycle / dockerapi / wsl / config /  │
+│                    doctor / gui（HTTP+WS 橋接）            │
 │              TCP → 127.0.0.1:23750+（config）             │
 └─────────────────────────────▲────────────────────────────┘
                 │ wsl.exe     │ localhost forward
@@ -26,7 +27,7 @@
 | 元件 | 職責 |
 |------|------|
 | `wsld` | init／start／ps／logs／doctor／… |
-| `wsld-gui` | Tray、列表、Logs、Exec、ensure |
+| `wsld-gui` | Tray、側欄五視圖（Containers／Images／Volumes／Networks／Machines）、Logs、Exec、ensure |
 | `internal` | 唯一業務邏輯來源 |
 | bootstrap 腳本 | 裝 WSL 功能與 dockerd |
 

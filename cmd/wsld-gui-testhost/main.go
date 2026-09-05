@@ -39,6 +39,7 @@ func main() {
 	engine := gui.NewFakeEngine()
 	life := &gui.FakeLifecycle{Engine: engine, Distro: "Ubuntu-26.04", Endpoint: "tcp://127.0.0.1:23750"}
 	auto := &gui.FakeAutostart{}
+	fwsl := gui.NewFakeWSL()
 	reset := func() {
 		c := config.Default()
 		c.Distro, c.User = "Ubuntu-26.04", "irice"
@@ -52,7 +53,7 @@ func main() {
 	var windowActions []string
 
 	srv := &gui.Server{
-		Engine: engine, Life: life, Autostart: auto, Version: "testhost",
+		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
 		LoadConfig: func() (config.Config, error) { return config.Load(*cfgPath) },
 		SaveConfig: func(c config.Config) error { return config.Save(*cfgPath, c) },
 		Assets:     spaHandler(*dist),
@@ -95,6 +96,31 @@ func main() {
 		}
 		ok(w)
 	})
+	mux.HandleFunc("POST /__test/image", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		size, _ := strconv.ParseInt(q.Get("size"), 10, 64)
+		used, _ := strconv.Atoi(q.Get("containers"))
+		engine.AddImage(q.Get("tag"), size, used)
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/volume", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		engine.AddVolume(q.Get("name"), q.Get("in_use") == "1")
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/network", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		engine.AddNetwork(q.Get("name"), q.Get("driver"))
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/wsl/fail-install", func(w http.ResponseWriter, r *http.Request) {
+		fwsl.FailInstall = r.URL.Query().Get("on") != "0"
+		ok(w)
+	})
+	mux.HandleFunc("GET /__test/wsl/installed", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(fwsl.Installed())
+	})
 	mux.HandleFunc("POST /__test/lang/{lang}", func(w http.ResponseWriter, r *http.Request) {
 		i18n.Set(i18n.Lang(r.PathValue("lang")))
 		ok(w)
@@ -102,6 +128,7 @@ func main() {
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {
 		reset()
 		engine.Reset()
+		fwsl.Reset()
 		life.Broken = false
 		_ = auto.Set(false)
 		i18n.Set(i18n.Lang(*lang))

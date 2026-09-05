@@ -8,6 +8,7 @@
   --bad: #dc2626;
   --warn: #d97706;
   --panel: #ffffff;
+  --side: #eef1f5;
   font-family: "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   color: var(--fg);
@@ -16,13 +17,15 @@
 html, body { margin: 0; height: 100%; background: var(--bg); }
 /* flex 欄位：banner 隱藏（display:none）時不會像 grid 那樣讓 footer 掉到 1fr 行 */
 #app { display: flex; flex-direction: column; height: 100vh; }
-#app > main { flex: 1; min-height: 0; }
+#app > .body { flex: 1; min-height: 0; display: flex; }
+#app > .body > main { flex: 1; min-width: 0; }
 
 header {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
 header h1 { font-size: 16px; margin: 0; }
+header .meta { font-size: 12px; color: var(--muted); }
 .spacer { flex: 1; }
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; color: #fff; background: var(--muted); }
 .badge.ok { background: var(--ok); }
@@ -35,21 +38,51 @@ button {
 }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary.danger { background: var(--bad); border-color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
 button.small { padding: 2px 8px; font-size: 12px; }
 button { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
 button .ico { flex: none; }
 button.small .ico { width: 12px; height: 12px; }
 button.ghost .ico { width: 12px; height: 12px; }
-select.lang { font: inherit; font-size: 12px; padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--fg); }
+/* 只有圖示的操作鈕：無文字、無邊框，hover 才浮出底色 */
+button.icon { border: none; background: transparent; padding: 4px; border-radius: 6px; color: var(--fg); }
+button.icon .ico { width: 16px; height: 16px; }
+button.icon:hover:not(:disabled) { background: #e5ecfb; color: var(--accent); }
+button.icon.danger:hover:not(:disabled) { background: #fee2e2; color: var(--bad); }
+button.icon:disabled { opacity: .35; }
+/* 語言下拉：無邊框，靠 cursor／顏色／hover 底線看出可點 */
+select.lang {
+  font: inherit; font-size: 12px; padding: 1px 4px; border: none; border-radius: 4px;
+  background: transparent; color: var(--accent); cursor: pointer;
+}
+select.lang:hover { text-decoration: underline; }
 .lang-wrap { display: inline-flex; align-items: center; }
 label.check { display: inline-flex; align-items: center; gap: 4px; }
 
 .banner { padding: 8px 14px; background: #fee2e2; color: #7f1d1d; border-bottom: 1px solid #fecaca; }
 .banner[hidden] { display: none; }
+.notice { padding: 8px 14px; background: #dcfce7; color: #14532d; border-bottom: 1px solid #bbf7d0; }
+.notice[hidden] { display: none; }
+
+/* 側欄：大型 icon + 文字 */
+nav.side {
+  width: 96px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: 8px 6px;
+  background: var(--side); border-right: 1px solid var(--border); overflow-y: auto;
+}
+button.nav {
+  flex-direction: column; gap: 4px; padding: 10px 4px; border: none; background: transparent;
+  border-radius: 8px; color: var(--muted); font-size: 12px; width: 100%;
+}
+button.nav .ico { width: 24px; height: 24px; stroke-width: 1.75; }
+button.nav:hover { background: #e2e8f0; color: var(--fg); }
+button.nav[aria-current="page"] { background: var(--panel); color: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
 
 main { display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; overflow: hidden; }
 main.with-panel { grid-template-rows: 1fr 40%; }
+main[data-view]:not([data-view="containers"]) { grid-template-rows: auto 1fr; }
+.toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.toolbar .count { font-size: 12px; color: var(--muted); }
 .list { overflow: auto; }
 /* 固定版面：欄寬只由 <col> 決定，內容不會撐開欄位（超出以省略號截斷） */
 table.fixed { table-layout: fixed; border-collapse: collapse; background: var(--panel); }
@@ -59,21 +92,26 @@ th[data-col] { position: sticky; }
 .col-resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 1; }
 .col-resizer:hover, body.resizing .col-resizer { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 body.resizing { cursor: col-resize; user-select: none; }
-td.actions { overflow: visible; }
+td.actions { overflow: visible; padding-top: 4px; padding-bottom: 4px; }
 td.indent { padding-left: 32px; }
+td.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+td.muted { color: var(--muted); }
 tr.group td { background: #eef2f7; padding: 4px 8px; overflow: visible; }
 .group-bar { display: flex; align-items: center; gap: 8px; position: sticky; left: 0; }
 .group-name { font-weight: 600; }
 tr.group .group-count { color: var(--muted); font-weight: 400; font-size: 12px; }
 button.ghost { background: transparent; border-color: transparent; padding: 0 6px; }
-tr[data-testid="container-row"]:hover td { background: #f1f5ff; }
-td.actions { display: flex; gap: 6px; }
+tbody tr:not(.group):hover td { background: #f1f5ff; }
+td.actions { display: flex; gap: 2px; }
 .state { text-transform: capitalize; }
 .state.running { color: var(--ok); }
-.state.exited, .state.dead { color: var(--muted); }
+.state.exited, .state.dead, .state.stopped { color: var(--muted); }
 .state.pending { color: var(--warn); font-style: italic; }
 tr[data-pending] { opacity: 0.75; }
 .empty { padding: 32px; text-align: center; color: var(--muted); }
+.tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #e5e7eb; color: #374151; margin-right: 4px; }
+.tag.accent { background: #dbeafe; color: #1d4ed8; }
+.tag.ok { background: #dcfce7; color: #166534; }
 
 .panel { border-top: 1px solid var(--border); background: var(--panel); display: grid; grid-template-rows: auto 1fr; min-height: 0; }
 .panel-head { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
@@ -83,15 +121,20 @@ pre.logs { margin: 0; padding: 8px 12px; overflow: auto; font: 12px/1.5 Consolas
 .xterm-host { padding: 4px; background: #1e1e1e; overflow: hidden; }
 
 footer {
-  display: flex; gap: 18px; padding: 6px 14px; font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; gap: 18px; padding: 6px 14px; font-size: 12px; color: var(--muted);
   background: var(--panel); border-top: 1px solid var(--border);
 }
-footer .ok { color: var(--ok); }
-footer .bad { color: var(--bad); }
 
 dialog { border: 1px solid var(--border); border-radius: 8px; padding: 18px; min-width: 360px; }
+dialog.wide { min-width: 520px; }
 dialog h2 { margin: 0 0 12px; font-size: 15px; }
+dialog .dialog-head { display: flex; align-items: center; gap: 8px; }
+dialog .dialog-head h2 { margin: 0; }
 dialog form { display: grid; gap: 10px; }
 dialog label { display: grid; gap: 4px; font-size: 13px; }
-dialog input[type="text"], dialog input[type="number"] { padding: 6px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+dialog input[type="text"], dialog input[type="number"], dialog select { padding: 6px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; }
+dialog p { margin: 0 0 14px; max-width: 420px; }
+dialog pre.conf { margin: 10px 0 0; padding: 10px; background: #0f172a; color: #e2e8f0; border-radius: 6px; font: 12px/1.5 Consolas, "Cascadia Mono", monospace; max-height: 50vh; overflow: auto; }
+.field-error { color: var(--bad); font-size: 12px; }
+.field-error[hidden] { display: none; }

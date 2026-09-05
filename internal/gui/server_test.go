@@ -299,7 +299,8 @@ func TestExecWebSocketEchoAndResize(t *testing.T) {
 func TestExecOnStoppedContainerFails(t *testing.T) {
 	e := newEnv(t, "")
 	resp, b := e.req(t, "GET", "/api/containers/db/exec", "")
-	if resp.StatusCode != 400 || !strings.Contains(string(b), "not running") {
+	// Docker 對未執行容器的 exec 回 409，橋接層原樣轉為 409 conflict
+	if resp.StatusCode != 409 || !strings.Contains(string(b), "not running") {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 }

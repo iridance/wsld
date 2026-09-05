@@ -17,6 +17,62 @@ export interface Container {
   Labels?: Record<string, string> | null;
 }
 
+export interface Image {
+  Id: string;
+  RepoTags: string[] | null;
+  Created: number; // unix seconds
+  Size: number;
+  Containers: number; // -1 = daemon 未計算
+}
+
+export interface Volume {
+  Name: string;
+  Driver: string;
+  Mountpoint: string;
+  CreatedAt: string;
+  Labels: Record<string, string> | null;
+  Scope: string;
+}
+
+export interface Network {
+  Id: string;
+  Name: string;
+  Created: string;
+  Scope: string;
+  Driver: string;
+  Internal: boolean;
+  Labels: Record<string, string> | null;
+}
+
+export interface PruneReport {
+  count: number;
+  space_reclaimed: number;
+}
+
+export interface Machine {
+  name: string;
+  state: string;
+  version: number;
+  default: boolean;
+  active: boolean;
+}
+
+export interface MachinesResponse {
+  available: boolean;
+  machines: Machine[];
+}
+
+export interface MachineConfig {
+  name: string;
+  wsl_conf: string;
+  systemd: boolean;
+}
+
+export interface OnlineDistro {
+  name: string;
+  friendly: string;
+}
+
 export interface Status {
   Distro: string;
   DistroFound: boolean;
@@ -112,7 +168,18 @@ export const api = {
   meta: () => call<Meta>("GET", "/api/meta"),
   status: () => call<Status>("GET", "/api/status"),
   startEngine: () => call<Status>("POST", "/api/engine/start"),
-  containers: (all: boolean) => call<Container[]>("GET", `/api/containers?all=${all ? 1 : 0}`),
+  containers: () => call<Container[]>("GET", "/api/containers?all=1"),
+  images: () => call<Image[]>("GET", "/api/images"),
+  removeImage: (ref: string, force = false) => call<void>("DELETE", `/api/images/${encodeURIComponent(ref)}${force ? "?force=1" : ""}`),
+  pruneImages: () => call<PruneReport>("POST", "/api/images/prune"),
+  volumes: () => call<Volume[]>("GET", "/api/volumes"),
+  removeVolume: (name: string, force = false) => call<void>("DELETE", `/api/volumes/${encodeURIComponent(name)}${force ? "?force=1" : ""}`),
+  pruneVolumes: () => call<PruneReport>("POST", "/api/volumes/prune"),
+  networks: () => call<Network[]>("GET", "/api/networks"),
+  machines: () => call<MachinesResponse>("GET", "/api/machines"),
+  machineConfig: (name: string) => call<MachineConfig>("GET", `/api/machines/${encodeURIComponent(name)}/config`),
+  machinesOnline: () => call<OnlineDistro[]>("GET", "/api/machines/online"),
+  installMachine: (name: string) => call<{ ok: boolean; name: string }>("POST", "/api/machines/install", { name }),
   startContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/start`),
   stopContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/stop`),
   logs: (id: string, tail = 100) =>
