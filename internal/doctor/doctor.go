@@ -2,6 +2,8 @@
 package doctor
 
 import (
+	"github.com/irice/wsl-docker/internal/procutil"
+
 	"context"
 	"fmt"
 	"net"
@@ -369,7 +371,9 @@ func WindowsProcesses(ctx context.Context) ([]string, error) {
 	if runtime.GOOS != "windows" {
 		return nil, nil
 	}
-	out, err := exec.CommandContext(ctx, "tasklist.exe", "/FO", "CSV", "/NH").Output()
+	cmd := exec.CommandContext(ctx, "tasklist.exe", "/FO", "CSV", "/NH")
+	procutil.HideConsole(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

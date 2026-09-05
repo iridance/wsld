@@ -3,6 +3,8 @@
 package wsl
 
 import (
+	"github.com/irice/wsl-docker/internal/procutil"
+
 	"bytes"
 	"context"
 	"errors"
@@ -58,6 +60,7 @@ func (r ExecRunner) Run(ctx context.Context, stdin io.Reader, args ...string) ([
 		path = "wsl.exe"
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
+	procutil.HideConsole(cmd) // GUI（無主控台）呼叫時不可閃出黑視窗
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if stdin != nil {
