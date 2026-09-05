@@ -133,6 +133,19 @@ teardown() {
   [ "$WSLD_USER" = "bob" ]
 }
 
+@test "parse_args --help sets WSLD_HELP and prints usage" {
+  wsld_parse_args --help > "$TMPD/out"
+  [ "$WSLD_HELP" = "1" ]
+  grep -q -- '--port' "$TMPD/out"
+}
+
+@test "main script --help exits 0 without side effects" {
+  run bash "$BATS_TEST_DIRNAME/../02-bootstrap-docker.sh" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--dry-run"* ]]
+  [[ "$output" != *"distro="* ]]
+}
+
 @test "parse_args rejects unknown flag" {
   run wsld_parse_args --bogus
   [ "$status" -eq 2 ]

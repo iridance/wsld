@@ -17,6 +17,7 @@ warn() { printf '[wsld] WARN: %s\n' "$*" >&2; }
 die()  { printf '[wsld] ERROR: %s\n' "$*" >&2; exit "${2:-1}"; }
 
 wsld_parse_args "$@" || exit $?
+[ "$WSLD_HELP" = "1" ] && exit 0
 
 run() {
   if [ "$WSLD_DRY_RUN" = "1" ]; then

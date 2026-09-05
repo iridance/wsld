@@ -15,13 +15,14 @@ wsld_parse_args() {
   WSLD_USER="${SUDO_USER:-${USER:-$(id -un)}}"
   WSLD_INSTALL_COMPOSE=1
   WSLD_DRY_RUN=0
+  WSLD_HELP=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) shift; WSLD_PORT="${1:?--port needs a value}" ;;
       --user) shift; WSLD_USER="${1:?--user needs a value}" ;;
       --no-compose) WSLD_INSTALL_COMPOSE=0 ;;
       --dry-run) WSLD_DRY_RUN=1 ;;
-      -h|--help) wsld_usage; return 0 ;;
+      -h|--help) WSLD_HELP=1; wsld_usage; return 0 ;;
       *) echo "unknown argument: $1" >&2; wsld_usage >&2; return 2 ;;
     esac
     shift
