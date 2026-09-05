@@ -29,6 +29,8 @@
 | Tray | 狀態列（5s ping）、啟動引擎、開啟主視窗、結束；按 X 只縮到 Tray | 實機手測（見下） |
 | 標題列 | 連線徽章、顯示已停止、刷新、啟動引擎、設定 | `list.spec.ts` |
 | 列表 | 名稱／映像／狀態／埠（IPv4/IPv6 去重）／操作；前景 3s 刷新，失焦或隱藏時暫停 | `list.spec.ts` |
+| 欄寬 | `table-layout: fixed`：內容變動不改變欄寬（省略號截斷）；標頭右緣可拖曳調整，寬度存 localStorage | `columns.spec.ts` |
+| Compose 分組 | 依 `com.docker.compose.project` 分組：專案標頭（running/total、折疊、整組 Start／Stop）、組內顯示 service 名；無 compose 容器時維持平面列表 | `groups.spec.ts` |
 | Start／Stop | 呼叫 `/api/containers/{id}/start|stop`，列狀態即時更新 | `list.spec.ts` |
 | Logs | 預設 tail 100；「即時」勾選走 WebSocket 串流 | `panels.spec.ts` |
 | Exec 終端 | xterm.js ↔ `/api/containers/{id}/exec`（WS、hijack）；shell 依 `exec_shell` 或 bash→sh | `panels.spec.ts` |
@@ -71,7 +73,8 @@ Playwright 在 WSL 需要 Chromium 相依套件；本機若無 sudo，可將 `li
 | `POST /__test/lifecycle {...}` | 設定 `Status()`／`Start()` 回應 |
 | `POST /__test/logs {"name","lines":[]}` | 推送即時日誌 |
 | `POST /__test/lang {"lang":"zh-TW"}` | 切換語系 |
-| `POST /__test/containers {...}` | 新增容器 |
+| `POST /__test/container?name=&image=&state=` | 新增容器；帶 `project=&service=` 則為 compose 容器 |
+| `POST /__test/action-delay?ms=` | 讓 Start／Stop 延遲回應（測 pending 回饋） |
 
 ### 實機（Windows）手測項目
 

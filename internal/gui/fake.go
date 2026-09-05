@@ -98,6 +98,18 @@ func (f *FakeEngine) AddContainer(name, image, state string, ports []dockerapi.P
 	return id
 }
 
+// AddComposeContainer 新增帶 compose 標籤的容器（名稱依 compose 慣例 <project>-<service>-1）。
+func (f *FakeEngine) AddComposeContainer(project, service, image, state string) string {
+	id := f.AddContainer(project+"-"+service+"-1", image, state, nil)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containers[id].Labels = map[string]string{
+		dockerapi.LabelComposeProject: project,
+		dockerapi.LabelComposeService: service,
+	}
+	return id
+}
+
 // AppendLog 追加日誌並推給 follow 訂閱者。
 func (f *FakeEngine) AppendLog(name string, lines ...string) {
 	f.mu.Lock()

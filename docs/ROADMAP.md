@@ -106,7 +106,8 @@ v2.0 = Phase 6
 
 ## Phase 5 — 可選（v1 後）
 
-- npiperelay、多 distro、自動更新、Compose 專案視圖等
+- npiperelay、多 distro、自動更新等
+- ~~Compose 專案視圖~~ → 已提前於 v1.0 實作（列表分組、整組 Start／Stop）
 
 ## Phase 6 — WinUI（v2.0）
 

@@ -188,14 +188,27 @@ type Port struct {
 
 // Container 對應 GET /containers/json 的項目子集。
 type Container struct {
-	ID      string   `json:"Id"`
-	Names   []string `json:"Names"`
-	Image   string   `json:"Image"`
-	State   string   `json:"State"`
-	Status  string   `json:"Status"`
-	Created int64    `json:"Created"`
-	Ports   []Port   `json:"Ports"`
+	ID      string            `json:"Id"`
+	Names   []string          `json:"Names"`
+	Image   string            `json:"Image"`
+	State   string            `json:"State"`
+	Status  string            `json:"Status"`
+	Created int64             `json:"Created"`
+	Ports   []Port            `json:"Ports"`
+	Labels  map[string]string `json:"Labels"`
 }
+
+// Compose 標籤（docker compose 為每個容器打上）。
+const (
+	LabelComposeProject = "com.docker.compose.project"
+	LabelComposeService = "com.docker.compose.service"
+)
+
+// ComposeProject 回傳 compose 專案名；非 compose 容器為空字串。
+func (c Container) ComposeProject() string { return c.Labels[LabelComposeProject] }
+
+// ComposeService 回傳 compose 服務名；非 compose 容器為空字串。
+func (c Container) ComposeService() string { return c.Labels[LabelComposeService] }
 
 // Name 回傳第一個名稱（去掉前導 "/"）。
 func (ct Container) Name() string {

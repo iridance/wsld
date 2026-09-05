@@ -88,7 +88,11 @@ func main() {
 		if state == "" {
 			state = "running"
 		}
-		engine.AddContainer(q.Get("name"), q.Get("image"), state, nil)
+		if proj := q.Get("project"); proj != "" {
+			engine.AddComposeContainer(proj, q.Get("service"), q.Get("image"), state)
+		} else {
+			engine.AddContainer(q.Get("name"), q.Get("image"), state, nil)
+		}
 		ok(w)
 	})
 	mux.HandleFunc("POST /__test/lang/{lang}", func(w http.ResponseWriter, r *http.Request) {

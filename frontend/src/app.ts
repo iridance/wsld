@@ -279,47 +279,166 @@ export class App {
     }
   }
 
+  // ---- 列表：欄寬（固定版面、可拖曳、localStorage）與 compose 分組 ---------------
+
+  private colWidths: Record<string, number> = loadJSON(LS_COLS, {});
+  private collapsed: Set<string> = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
+
+  private widthOf(col: Col): number {
+    return Math.max(col.min, this.colWidths[col.key] ?? col.def);
+  }
+
+  private applyColWidths(table: HTMLTableElement): void {
+    // 可調欄位給明確像素寬；最後的操作欄不設寬度，吸收剩餘空間（table-layout: fixed 的行為），
+    // 所以拖曳某欄 +N px 時，只有那一欄與操作欄改變。
+    let total = 0;
+    table.querySelectorAll<HTMLTableColElement>("col").forEach((c) => {
+      const col = COLS.find((x) => x.key === c.dataset.col)!;
+      const w = this.widthOf(col);
+      if (col.resizable) c.style.width = `${w}px`;
+      total += w;
+    });
+    table.style.width = "100%";
+    table.style.minWidth = `${total}px`;
+  }
+
+  private startResize(ev: MouseEvent, col: Col, table: HTMLTableElement): void {
+    ev.preventDefault();
+    const startX = ev.clientX;
+    const startW = this.widthOf(col);
+    const move = (e: MouseEvent) => {
+      this.colWidths[col.key] = Math.max(col.min, startW + (e.clientX - startX));
+      this.applyColWidths(table);
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing");
+      saveJSON(LS_COLS, this.colWidths);
+    };
+    document.body.classList.add("resizing");
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  }
+
+  private toggleGroup(project: string): void {
+    if (this.collapsed.has(project)) this.collapsed.delete(project);
+    else this.collapsed.add(project);
+    saveJSON(LS_COLLAPSED, [...this.collapsed]);
+    this.renderList();
+  }
+
+  /** 對多個容器同時執行動作（群組 Start／Stop），全部標 pending，結束後只刷新一次。 */
+  private async actMany(ids: string[], kind: "starting" | "stopping", fn: (id: string) => Promise<void>): Promise<void> {
+    for (const id of ids) this.st.pending[id] = kind;
+    this.renderList();
+    try {
+      const results = await Promise.allSettled(ids.map(fn));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      this.st.lastError = failed ? (failed.reason instanceof ApiError ? failed.reason.message : String(failed.reason)) : undefined;
+      await this.refresh();
+    } finally {
+      for (const id of ids) delete this.st.pending[id];
+      this.renderList();
+    }
+  }
+
   private renderList(): void {
     const list = this.root.querySelector<HTMLElement>('[data-testid="container-list"]')!;
     if (this.st.containers.length === 0) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty") }));
       return;
     }
-    const thead = el("thead", {}, el("tr", {}, ...["gui.col.name", "gui.col.image", "gui.col.state", "gui.col.status", "gui.col.ports", "gui.col.actions"].map((k) => el("th", { text: t(k) }))));
-    const tbody = el("tbody");
-    for (const c of this.st.containers) {
-      const running = c.State === "running";
-      const n = name(c);
-      const pending = this.st.pending[c.Id];
-      const startBtn = el("button", { class: "small", "data-testid": `btn-start-${n}`, text: t("gui.start") });
-      startBtn.disabled = running || !!pending;
-      startBtn.onclick = () => void this.actOn(c.Id, "starting", () => api.startContainer(c.Id));
-      const stopBtn = el("button", { class: "small", "data-testid": `btn-stop-${n}`, text: t("gui.stop") });
-      stopBtn.disabled = !running || !!pending;
-      stopBtn.onclick = () => void this.actOn(c.Id, "stopping", () => api.stopContainer(c.Id));
-      const logsBtn = el("button", { class: "small", "data-testid": `btn-logs-${n}`, text: t("gui.logs") });
-      logsBtn.onclick = () => this.openLogs(c);
-      const termBtn = el("button", { class: "small", "data-testid": `btn-term-${n}`, text: t("gui.terminal") });
-      termBtn.disabled = !running;
-      termBtn.onclick = () => this.openTerminal(c);
-
-      const rowAttrs: Record<string, string> = { "data-testid": "container-row", "data-name": n, "data-state": c.State };
-      if (pending) rowAttrs["data-pending"] = pending;
-      const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
-      tbody.append(
-        el(
-          "tr",
-          rowAttrs,
-          el("td", { text: n, title: c.Id }),
-          el("td", { text: c.Image }),
-          el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
-          el("td", { text: c.Status }),
-          el("td", { "data-testid": `ports-${n}`, text: ports(c) }),
-          el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn),
-        ),
-      );
+    const table = el("table", { class: "fixed" });
+    const colgroup = el("colgroup", {}, ...COLS.map((c) => el("col", { "data-col": c.key })));
+    const headRow = el("tr");
+    for (const col of COLS) {
+      const th = el("th", { "data-col": col.key, text: t(col.label) });
+      if (col.resizable) {
+        const handle = el("div", { class: "col-resizer", "data-testid": "col-resizer", role: "separator", "aria-orientation": "vertical" });
+        handle.onmousedown = (e) => this.startResize(e, col, table);
+        th.append(handle);
+      }
+      headRow.append(th);
     }
-    list.replaceChildren(el("table", {}, thead, tbody));
+    const tbody = el("tbody");
+
+    const groups = groupContainers(this.st.containers);
+    if (!groups) {
+      for (const c of this.st.containers) tbody.append(this.containerRow(c, "", name(c)));
+    } else {
+      for (const g of groups) {
+        const expanded = !this.collapsed.has(g.project);
+        tbody.append(this.groupRow(g, expanded));
+        if (!expanded) continue;
+        for (const c of g.items) tbody.append(this.containerRow(c, g.project, g.project ? c.Labels?.[LABEL_SERVICE] || name(c) : name(c)));
+      }
+    }
+    table.append(colgroup, el("thead", {}, headRow), tbody);
+    this.applyColWidths(table);
+    list.replaceChildren(table);
+  }
+
+  private groupRow(g: Group, expanded: boolean): HTMLTableRowElement {
+    const running = g.items.filter((c) => c.State === "running").length;
+    const anyPending = g.items.some((c) => this.st.pending[c.Id]);
+    const toggle = el("button", { class: "small ghost", "data-testid": "group-toggle", "aria-label": expanded ? "collapse" : "expand", text: expanded ? "▾" : "▸" });
+    toggle.onclick = () => this.toggleGroup(g.project);
+    const startBtn = el("button", { class: "small", "data-testid": "group-start", text: t("gui.start") });
+    startBtn.disabled = anyPending || running === g.items.length;
+    startBtn.onclick = () =>
+      void this.actMany(g.items.filter((c) => c.State !== "running").map((c) => c.Id), "starting", (id) => api.startContainer(id));
+    const stopBtn = el("button", { class: "small", "data-testid": "group-stop", text: t("gui.stop") });
+    stopBtn.disabled = anyPending || running === 0;
+    stopBtn.onclick = () =>
+      void this.actMany(g.items.filter((c) => c.State === "running").map((c) => c.Id), "stopping", (id) => api.stopContainer(id));
+
+    const cell = el(
+      "td",
+      { colspan: String(COLS.length) },
+      el(
+        "div",
+        { class: "group-bar" },
+        toggle,
+        el("span", { class: "group-name", "data-testid": "group-name", text: g.project || t("gui.group.ungrouped") }),
+        el("span", { class: "group-count", "data-testid": "group-count", text: `${running}/${g.items.length}` }),
+        el("span", { class: "spacer" }),
+        startBtn,
+        stopBtn,
+      ),
+    );
+    return el("tr", { class: "group", "data-testid": "group-row", "data-project": g.project, "aria-expanded": String(expanded) }, cell);
+  }
+
+  private containerRow(c: Container, project: string, display: string): HTMLTableRowElement {
+    const running = c.State === "running";
+    const n = name(c);
+    const pending = this.st.pending[c.Id];
+    const startBtn = el("button", { class: "small", "data-testid": `btn-start-${n}`, text: t("gui.start") });
+    startBtn.disabled = running || !!pending;
+    startBtn.onclick = () => void this.actOn(c.Id, "starting", () => api.startContainer(c.Id));
+    const stopBtn = el("button", { class: "small", "data-testid": `btn-stop-${n}`, text: t("gui.stop") });
+    stopBtn.disabled = !running || !!pending;
+    stopBtn.onclick = () => void this.actOn(c.Id, "stopping", () => api.stopContainer(c.Id));
+    const logsBtn = el("button", { class: "small", "data-testid": `btn-logs-${n}`, text: t("gui.logs") });
+    logsBtn.onclick = () => this.openLogs(c);
+    const termBtn = el("button", { class: "small", "data-testid": `btn-term-${n}`, text: t("gui.terminal") });
+    termBtn.disabled = !running;
+    termBtn.onclick = () => this.openTerminal(c);
+
+    const rowAttrs: Record<string, string> = { "data-testid": "container-row", "data-name": n, "data-state": c.State, "data-project": project };
+    if (pending) rowAttrs["data-pending"] = pending;
+    const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
+    return el(
+      "tr",
+      rowAttrs,
+      el("td", { "data-testid": "ct-name", class: project ? "indent" : "", text: display, title: `${n}\n${c.Id}` }),
+      el("td", { text: c.Image, title: c.Image }),
+      el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
+      el("td", { text: c.Status, title: c.Status }),
+      el("td", { "data-testid": `ports-${n}`, text: ports(c), title: ports(c) }),
+      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn),
+    );
   }
 
   private renderPanel(): void {
@@ -428,6 +547,72 @@ export class App {
 
 function name(c: Container): string {
   return (c.Names?.[0] ?? c.Id.slice(0, 12)).replace(/^\//, "");
+}
+
+// ---- 欄位與分組 -----------------------------------------------------------
+
+interface Col {
+  key: string;
+  label: string;
+  def: number;
+  min: number;
+  resizable: boolean;
+}
+
+const COLS: Col[] = [
+  // 總和 925px < 預設視窗 1000px，避免一開就出現水平捲軸
+  { key: "name", label: "gui.col.name", def: 150, min: 80, resizable: true },
+  { key: "image", label: "gui.col.image", def: 170, min: 80, resizable: true },
+  { key: "state", label: "gui.col.state", def: 85, min: 70, resizable: true },
+  { key: "status", label: "gui.col.status", def: 140, min: 80, resizable: true },
+  { key: "ports", label: "gui.col.ports", def: 130, min: 80, resizable: true },
+  { key: "actions", label: "gui.col.actions", def: 250, min: 250, resizable: false },
+];
+
+const LS_COLS = "wsld.colWidths";
+const LS_COLLAPSED = "wsld.collapsedGroups";
+const LABEL_PROJECT = "com.docker.compose.project";
+const LABEL_SERVICE = "com.docker.compose.service";
+
+interface Group {
+  project: string; // "" = 未分組
+  items: Container[];
+}
+
+/** 依 compose 專案分組；完全沒有 compose 容器時回傳 null（維持平面列表）。 */
+function groupContainers(cs: Container[]): Group[] | null {
+  const byProject = new Map<string, Container[]>();
+  let anyCompose = false;
+  for (const c of cs) {
+    const p = c.Labels?.[LABEL_PROJECT] ?? "";
+    if (p) anyCompose = true;
+    (byProject.get(p) ?? byProject.set(p, []).get(p)!).push(c);
+  }
+  if (!anyCompose) return null;
+  const groups: Group[] = [...byProject.entries()]
+    .filter(([p]) => p !== "")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([project, items]) => ({ project, items: items.sort((a, b) => (a.Labels?.[LABEL_SERVICE] ?? name(a)).localeCompare(b.Labels?.[LABEL_SERVICE] ?? name(b))) }));
+  const rest = byProject.get("");
+  if (rest) groups.push({ project: "", items: rest.sort((a, b) => name(a).localeCompare(name(b))) });
+  return groups;
+}
+
+function loadJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJSON(key: string, v: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(v));
+  } catch {
+    /* ignore quota / privacy errors */
+  }
 }
 
 /** 已發佈埠；dual-stack（0.0.0.0 與 ::）會各回一筆，去重後依對外埠排序。 */

@@ -66,6 +66,7 @@ func TestListContainers(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `[
 		  {"Id":"abc123def456","Names":["/web"],"Image":"nginx:latest","State":"running","Status":"Up 2 hours","Created":1700000000,
+		   "Labels":{"com.docker.compose.project":"shop","com.docker.compose.service":"web"},
 		   "Ports":[{"IP":"0.0.0.0","PrivatePort":80,"PublicPort":8080,"Type":"tcp"}]},
 		  {"Id":"fff","Names":["/db"],"Image":"postgres:16","State":"exited","Status":"Exited (0) 1 day ago","Created":1600000000,"Ports":[]}
 		]`)
@@ -85,6 +86,12 @@ func TestListContainers(t *testing.T) {
 	}
 	if got[1].Name() != "db" {
 		t.Fatalf("got[1].Name = %q", got[1].Name())
+	}
+	if p, s := got[0].ComposeProject(), got[0].ComposeService(); p != "shop" || s != "web" {
+		t.Fatalf("compose labels = %q/%q", p, s)
+	}
+	if p, s := got[1].ComposeProject(), got[1].ComposeService(); p != "" || s != "" {
+		t.Fatalf("non-compose container must have empty project/service, got %q/%q", p, s)
 	}
 }
 

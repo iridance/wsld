@@ -31,6 +31,18 @@ export async function open(page: Page): Promise<void> {
   await expect(page.getByTestId("status-connection")).toBeVisible();
 }
 
+export async function addContainer(request: APIRequestContext, name: string, image: string, state = "running"): Promise<void> {
+  expect((await request.post(`/__test/container?name=${encodeURIComponent(name)}&image=${encodeURIComponent(image)}&state=${state}`)).ok()).toBeTruthy();
+}
+
+export async function addComposeContainer(request: APIRequestContext, project: string, service: string, image: string, state = "running"): Promise<void> {
+  expect((await request.post(`/__test/container?project=${project}&service=${service}&image=${encodeURIComponent(image)}&state=${state}`)).ok()).toBeTruthy();
+}
+
+export function group(page: Page, project: string) {
+  return page.locator(`[data-testid="group-row"][data-project="${project}"]`);
+}
+
 export function row(page: Page, name: string) {
   return page.locator(`[data-testid="container-row"][data-name="${name}"]`);
 }

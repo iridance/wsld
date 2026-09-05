@@ -14,6 +14,7 @@ export interface Container {
   State: string;
   Status: string;
   Ports: Port[];
+  Labels?: Record<string, string> | null;
 }
 
 export interface Status {

@@ -45,9 +45,21 @@ label.check { display: inline-flex; align-items: center; gap: 4px; }
 main { display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; overflow: hidden; }
 main.with-panel { grid-template-rows: 1fr 40%; }
 .list { overflow: auto; }
-table { width: 100%; border-collapse: collapse; background: var(--panel); }
-th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-th { font-weight: 600; color: var(--muted); font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+/* 固定版面：欄寬只由 <col> 決定，內容不會撐開欄位（超出以省略號截斷） */
+table.fixed { table-layout: fixed; border-collapse: collapse; background: var(--panel); }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; position: sticky; top: 0; background: var(--panel); user-select: none; }
+th[data-col] { position: sticky; }
+.col-resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 1; }
+.col-resizer:hover, body.resizing .col-resizer { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+body.resizing { cursor: col-resize; user-select: none; }
+td.actions { overflow: visible; }
+td.indent { padding-left: 32px; }
+tr.group td { background: #eef2f7; padding: 4px 8px; overflow: visible; }
+.group-bar { display: flex; align-items: center; gap: 8px; position: sticky; left: 0; }
+.group-name { font-weight: 600; }
+tr.group .group-count { color: var(--muted); font-weight: 400; font-size: 12px; }
+button.ghost { background: transparent; border-color: transparent; padding: 0 6px; }
 tr[data-testid="container-row"]:hover td { background: #f1f5ff; }
 td.actions { display: flex; gap: 6px; }
 .state { text-transform: capitalize; }
