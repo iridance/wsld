@@ -44,13 +44,24 @@ exec_shell = "zsh"
 refresh_interval_sec = 5
 tray_autostart = true
 api_timeout_sec = 20
+lang = "zh-TW"
 `)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ExecShell != "zsh" || c.RefreshIntervalSec != 5 || !c.TrayAutostart || c.APITimeoutSec != 20 {
+	if c.ExecShell != "zsh" || c.RefreshIntervalSec != 5 || !c.TrayAutostart || c.APITimeoutSec != 20 || c.Lang != "zh-TW" {
 		t.Fatalf("parsed = %+v", c)
+	}
+}
+
+func TestLangDefaultsToEnglish(t *testing.T) {
+	if Default().Lang != "" || Default().LangOrDefault() != "en" {
+		t.Fatalf("default lang should be empty→en, got %q", Default().Lang)
+	}
+	c := Config{Lang: "zh-TW"}
+	if c.LangOrDefault() != "zh-TW" {
+		t.Fatalf("LangOrDefault = %q", c.LangOrDefault())
 	}
 }
 

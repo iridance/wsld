@@ -6,7 +6,9 @@ test.beforeEach(async ({ request }) => {
 });
 
 async function colWidth(page: Page, col: string): Promise<number> {
-  const box = await page.locator(`th[data-col="${col}"]`).boundingBox();
+  const th = page.locator(`th[data-col="${col}"]`);
+  await th.waitFor({ state: "visible" }); // 第一次刷新完成前列表是「沒有容器」佔位
+  const box = await th.boundingBox();
   expect(box).not.toBeNull();
   return box!.width;
 }

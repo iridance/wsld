@@ -69,6 +69,8 @@ type Server struct {
 	Assets http.Handler
 	// OnWindowAction 讓 Wails 端處理 show/hide/quit（測試主機記錄即可）。
 	OnWindowAction func(action string)
+	// OnLangChange 於設定頁切換語系後呼叫（Tray 選單文字需重建）。
+	OnLangChange func(l i18n.Lang)
 
 	startMu   sync.Mutex
 	starting  bool
@@ -201,10 +203,11 @@ type Settings struct {
 	RefreshIntervalSec int    `json:"refresh_interval_sec"`
 	ExecShell          string `json:"exec_shell"`
 	TrayAutostart      bool   `json:"tray_autostart"`
+	Lang               string `json:"lang,omitempty"` // en／zh-TW；PUT 時省略＝不變
 }
 
 func (s *Server) settingsFrom(c config.Config) Settings {
-	st := Settings{RefreshIntervalSec: c.RefreshIntervalSec, ExecShell: c.ExecShell, TrayAutostart: c.TrayAutostart}
+	st := Settings{RefreshIntervalSec: c.RefreshIntervalSec, ExecShell: c.ExecShell, TrayAutostart: c.TrayAutostart, Lang: c.LangOrDefault()}
 	if s.Autostart != nil {
 		if on, err := s.Autostart.Enabled(); err == nil {
 			st.TrayAutostart = on
@@ -458,6 +461,16 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("refresh_interval_sec must be 1..3600"))
 		return
 	}
+	var newLang i18n.Lang
+	if in.Lang != "" {
+		l, ok := i18n.Parse(in.Lang)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "usage", fmt.Errorf("unsupported lang %q (en, zh-TW)", in.Lang))
+			return
+		}
+		newLang = l
+		c.Lang = string(l)
+	}
 	c.RefreshIntervalSec = in.RefreshIntervalSec
 	c.ExecShell = strings.TrimSpace(in.ExecShell)
 	c.TrayAutostart = in.TrayAutostart
@@ -470,6 +483,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if err := s.SaveConfig(c); err != nil {
 		writeErr(w, http.StatusInternalServerError, "error", err)
 		return
+	}
+	if newLang != "" && newLang != i18n.Current() {
+		i18n.Set(newLang) // 後端訊息（meta.messages、Tray）一起切換
+		if s.OnLangChange != nil {
+			s.OnLangChange(newLang)
+		}
 	}
 	writeJSON(w, http.StatusOK, s.settingsFrom(c))
 }

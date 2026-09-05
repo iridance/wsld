@@ -34,6 +34,7 @@ export interface Settings {
   refresh_interval_sec: number;
   exec_shell: string;
   tray_autostart: boolean;
+  lang?: string; // en | zh-TW
 }
 
 export interface Meta {

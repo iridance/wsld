@@ -1,6 +1,7 @@
 import { api, ApiError, type Container, type Meta, type Settings, type Status } from "./api";
 import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
+import { icon, type IconName } from "./icons";
 
 type Panel = { kind: "logs"; id: string; name: string; live: boolean; ws?: WebSocket } | { kind: "term"; id: string; name: string; session?: TerminalSession };
 
@@ -26,6 +27,14 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
   }
   e.append(...children);
   return e;
+};
+
+/** 帶語義圖示的按鈕：<button><svg/><span class="label">text</span></button> */
+const btn = (attrs: Record<string, string>, ico: IconName, label: string): HTMLButtonElement => {
+  const { text: _ignored, ...rest } = attrs;
+  const b = el("button", rest);
+  b.append(icon(ico), el("span", { class: "label", text: label }));
+  return b;
 };
 
 export class App {
@@ -240,11 +249,11 @@ export class App {
     const badgeCls = this.st.starting ? "warn" : ready ? "ok" : "bad";
     const badgeTxt = this.st.starting ? t("gui.status.starting") : ready ? t("gui.status.connected") : t("gui.status.disconnected");
 
-    const startBtn = el("button", { class: "primary", "data-testid": "btn-start-engine", text: t("gui.ensure") });
+    const startBtn = btn({ class: "primary", "data-testid": "btn-start-engine" }, "power", t("gui.ensure"));
     startBtn.disabled = this.st.starting || ready;
     startBtn.onclick = () => void this.startEngine();
 
-    const refreshBtn = el("button", { "data-testid": "btn-refresh", text: t("gui.refresh") });
+    const refreshBtn = btn({ "data-testid": "btn-refresh" }, "refresh", t("gui.refresh"));
     refreshBtn.onclick = () => void this.refresh();
 
     const showAll = el("input", { type: "checkbox", "data-testid": "chk-show-all" }) as HTMLInputElement;
@@ -254,11 +263,13 @@ export class App {
       void this.refresh();
     };
 
-    const settingsBtn = el("button", { "data-testid": "btn-settings", text: t("gui.settings") });
+    const settingsBtn = btn({ "data-testid": "btn-settings" }, "settings", t("gui.settings"));
     settingsBtn.onclick = () => this.openSettings();
 
+    // 標題列左側：連線中的 WSL distro（尚無 config 時退回 app 名稱）
+    const distro = this.st.status?.Distro || this.st.meta.distro;
     h.replaceChildren(
-      el("h1", { text: t("gui.title") }),
+      el("h1", { "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
       el("span", { class: `badge ${badgeCls}`, "data-testid": "status-connection", "data-state": this.st.starting ? "starting" : ready ? "connected" : "disconnected", text: badgeTxt }),
       el("span", { class: "spacer" }),
       el("label", { class: "check" }, showAll, t("gui.show_all")),
@@ -382,16 +393,22 @@ export class App {
   private groupRow(g: Group, expanded: boolean): HTMLTableRowElement {
     const running = g.items.filter((c) => c.State === "running").length;
     const anyPending = g.items.some((c) => this.st.pending[c.Id]);
-    const toggle = el("button", { class: "small ghost", "data-testid": "group-toggle", "aria-label": expanded ? "collapse" : "expand", text: expanded ? "▾" : "▸" });
+    const toggle = el("button", { class: "small ghost", "data-testid": "group-toggle", "aria-label": expanded ? "collapse" : "expand" });
+    toggle.append(icon(expanded ? "chevron-down" : "chevron-right"));
     toggle.onclick = () => this.toggleGroup(g.project);
-    const startBtn = el("button", { class: "small", "data-testid": "group-start", text: t("gui.start") });
-    startBtn.disabled = anyPending || running === g.items.length;
-    startBtn.onclick = () =>
-      void this.actMany(g.items.filter((c) => c.State !== "running").map((c) => c.Id), "starting", (id) => api.startContainer(id));
-    const stopBtn = el("button", { class: "small", "data-testid": "group-stop", text: t("gui.stop") });
-    stopBtn.disabled = anyPending || running === 0;
-    stopBtn.onclick = () =>
-      void this.actMany(g.items.filter((c) => c.State === "running").map((c) => c.Id), "stopping", (id) => api.stopContainer(id));
+    const actions: HTMLElement[] = [];
+    if (g.project) {
+      // 只有 compose 專案才有整組 Start／Stop；未分組只是雜項集合
+      const startBtn = btn({ class: "small", "data-testid": "group-start" }, "play", t("gui.start"));
+      startBtn.disabled = anyPending || running === g.items.length;
+      startBtn.onclick = () =>
+        void this.actMany(g.items.filter((c) => c.State !== "running").map((c) => c.Id), "starting", (id) => api.startContainer(id));
+      const stopBtn = btn({ class: "small", "data-testid": "group-stop" }, "stop", t("gui.stop"));
+      stopBtn.disabled = anyPending || running === 0;
+      stopBtn.onclick = () =>
+        void this.actMany(g.items.filter((c) => c.State === "running").map((c) => c.Id), "stopping", (id) => api.stopContainer(id));
+      actions.push(startBtn, stopBtn);
+    }
 
     const cell = el(
       "td",
@@ -400,11 +417,10 @@ export class App {
         "div",
         { class: "group-bar" },
         toggle,
-        el("span", { class: "group-name", "data-testid": "group-name", text: g.project || t("gui.group.ungrouped") }),
+        el("span", { class: "group-name", "data-testid": "group-name", text: g.project || "-" }),
         el("span", { class: "group-count", "data-testid": "group-count", text: `${running}/${g.items.length}` }),
         el("span", { class: "spacer" }),
-        startBtn,
-        stopBtn,
+        ...actions,
       ),
     );
     return el("tr", { class: "group", "data-testid": "group-row", "data-project": g.project, "aria-expanded": String(expanded) }, cell);
@@ -414,15 +430,15 @@ export class App {
     const running = c.State === "running";
     const n = name(c);
     const pending = this.st.pending[c.Id];
-    const startBtn = el("button", { class: "small", "data-testid": `btn-start-${n}`, text: t("gui.start") });
+    const startBtn = btn({ class: "small", "data-testid": `btn-start-${n}` }, "play", t("gui.start"));
     startBtn.disabled = running || !!pending;
     startBtn.onclick = () => void this.actOn(c.Id, "starting", () => api.startContainer(c.Id));
-    const stopBtn = el("button", { class: "small", "data-testid": `btn-stop-${n}`, text: t("gui.stop") });
+    const stopBtn = btn({ class: "small", "data-testid": `btn-stop-${n}` }, "stop", t("gui.stop"));
     stopBtn.disabled = !running || !!pending;
     stopBtn.onclick = () => void this.actOn(c.Id, "stopping", () => api.stopContainer(c.Id));
-    const logsBtn = el("button", { class: "small", "data-testid": `btn-logs-${n}`, text: t("gui.logs") });
+    const logsBtn = btn({ class: "small", "data-testid": `btn-logs-${n}` }, "logs", t("gui.logs"));
     logsBtn.onclick = () => this.openLogs(c);
-    const termBtn = el("button", { class: "small", "data-testid": `btn-term-${n}`, text: t("gui.terminal") });
+    const termBtn = btn({ class: "small", "data-testid": `btn-term-${n}` }, "terminal", t("gui.terminal"));
     termBtn.disabled = !running;
     termBtn.onclick = () => this.openTerminal(c);
 
@@ -492,8 +508,38 @@ export class App {
       el("span", { class: s?.ready ? "ok" : "bad", "data-testid": "status-api", text: conn }),
       el("span", { "data-testid": "status-refresh", "data-paused": String(this.st.paused), "data-count": String(this.st.refreshCount), text: this.st.paused ? t("gui.status.paused") : `↻ ${this.st.meta.config.refresh_interval_sec}s` }),
       el("span", { class: "spacer" }),
+      this.langSelect(),
       el("span", { "data-testid": "status-version", text: `v${this.st.meta.version}` }),
     );
+  }
+
+  /** 右下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
+  private langSelect(): HTMLElement {
+    const sel = el("select", { "data-testid": "lang-select", "aria-label": t("gui.lang"), class: "lang" }) as HTMLSelectElement;
+    for (const [v, label] of [["en", "English"], ["zh-TW", "繁體中文"]]) {
+      const o = el("option", { value: v, text: label }) as HTMLOptionElement;
+      o.selected = v === this.st.meta.lang;
+      sel.append(o);
+    }
+    sel.onchange = () => void this.switchLang(sel.value);
+    return el("label", { class: "lang-wrap" }, sel);
+  }
+
+  private async switchLang(lang: string): Promise<void> {
+    const ok = await this.saveSettings({ ...this.st.meta.config, lang });
+    if (!ok) return;
+    try {
+      const meta = await api.meta();
+      this.st.meta = meta;
+      setMessages(meta.messages);
+      document.documentElement.lang = meta.lang;
+      document.title = t("gui.title");
+      this.build(); // 全部重繪（含設定對話框文字）
+      this.renderPanel();
+    } catch (e) {
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.renderBanner();
+    }
   }
 
   // ---- 設定 -----------------------------------------------------------------
@@ -503,8 +549,8 @@ export class App {
     const interval = el("input", { type: "number", min: "1", max: "3600", "data-testid": "settings-refresh" }) as HTMLInputElement;
     const shell = el("input", { type: "text", "data-testid": "settings-exec-shell", placeholder: "bash" }) as HTMLInputElement;
     const auto = el("input", { type: "checkbox", "data-testid": "settings-autostart" }) as HTMLInputElement;
-    const save = el("button", { class: "primary", type: "submit", "data-testid": "settings-save", text: t("gui.save") });
-    const close = el("button", { type: "button", "data-testid": "settings-close", text: t("gui.close") });
+    const save = btn({ class: "primary", type: "submit", "data-testid": "settings-save" }, "save", t("gui.save"));
+    const close = btn({ type: "button", "data-testid": "settings-close" }, "close", t("gui.close"));
     close.onclick = () => d.close();
     const form = el(
       "form",
@@ -521,6 +567,7 @@ export class App {
         refresh_interval_sec: Number(interval.value),
         exec_shell: shell.value.trim(),
         tray_autostart: auto.checked,
+        lang: this.st.meta.config.lang,
       });
       if (ok) {
         d.close();

@@ -4,7 +4,7 @@ export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 VERSION ?= 1.0.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt
+.PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt icon winres
 
 test: test-scripts test-go test-ui
 
@@ -30,6 +30,13 @@ build-gui: build-frontend
 	mkdir -p dist
 	GOOS=windows GOARCH=amd64 go build -trimpath -tags desktop,production \
 	  -ldflags "$(LDFLAGS) -H windowsgui" -o dist/wsld-gui.exe ./cmd/wsld-gui
+
+# 圖示（tray.ico／icon.png）與 Windows 資源（.syso：圖示、manifest、版本）
+icon:
+	go run ./cmd/wsld-gui/assets/gen_icon.go
+
+winres: icon
+	go run github.com/tc-hib/go-winres@latest make --in cmd/wsld-gui/winres/winres.json --out cmd/wsld-gui/rsrc --arch amd64
 
 # Playwright UI 測試：以 wsld-gui-testhost（fake backend）驅動同一套前端
 test-ui: build-frontend

@@ -33,6 +33,15 @@ type Config struct {
 	RefreshIntervalSec int    `toml:"refresh_interval_sec"`
 	TrayAutostart      bool   `toml:"tray_autostart"`
 	APITimeoutSec      int    `toml:"api_timeout_sec"`
+	Lang               string `toml:"lang,omitempty"` // "" = en；GUI 右下角切換後寫回
+}
+
+// LangOrDefault 回傳語系，空值為 "en"。
+func (c Config) LangOrDefault() string {
+	if c.Lang == "" {
+		return "en"
+	}
+	return c.Lang
 }
 
 // Default 回傳僅含預設值的設定（distro／user 為空，需由 init 填入）。

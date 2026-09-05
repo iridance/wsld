@@ -8,7 +8,7 @@ async function boot(): Promise<void> {
     const meta = await api.meta();
     new App(root, meta);
   } catch (e) {
-    root.innerHTML = `<div class="banner" data-testid="boot-error" role="alert">wsl-docker backend unreachable: ${String(e)}</div>`;
+    root.innerHTML = `<div class="banner" data-testid="boot-error" role="alert">wsld backend unreachable: ${String(e)}</div>`;
   }
 }
 

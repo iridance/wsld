@@ -29,7 +29,7 @@ test("saving settings persists refresh interval, exec shell and autostart", asyn
   await expect(page.getByTestId("status-refresh")).toHaveText("↻ 5s");
 
   const saved = await (await request.get("/api/settings")).json();
-  expect(saved).toEqual({ refresh_interval_sec: 5, exec_shell: "zsh", tray_autostart: true });
+  expect(saved).toEqual({ refresh_interval_sec: 5, exec_shell: "zsh", tray_autostart: true, lang: "en" });
 
   await page.reload();
   await page.getByTestId("btn-settings").click();

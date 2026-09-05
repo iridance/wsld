@@ -26,7 +26,14 @@ test("compose containers are grouped under a project header with service names a
   await expect(headers.nth(1)).toHaveAttribute("data-project", "shop");
   await expect(headers.nth(2)).toHaveAttribute("data-project", "");
   await expect(group(page, "shop").getByTestId("group-count")).toHaveText("2/3");
-  await expect(group(page, "").getByTestId("group-name")).toHaveText("Ungrouped");
+  // 未分組：只顯示「-」與計數，沒有整組 Start／Stop
+  await expect(group(page, "").getByTestId("group-name")).toHaveText("-");
+  await expect(group(page, "").getByTestId("group-count")).toHaveText("1/2");
+  await expect(group(page, "").getByTestId("group-start")).toHaveCount(0);
+  await expect(group(page, "").getByTestId("group-stop")).toHaveCount(0);
+  await expect(group(page, "shop").getByTestId("group-stop")).toBeVisible();
+  await expect(group(page, "shop").getByTestId("group-stop").locator("svg.ico")).toHaveAttribute("data-icon", "stop");
+  await expect(group(page, "shop").getByTestId("group-start").locator("svg.ico")).toHaveAttribute("data-icon", "play");
 
   // 組內以 service 名顯示，完整容器名保留在 data-name／title
   const api = row(page, "shop-api-1");

@@ -28,6 +28,18 @@ func Set(l Lang) { current.Store(l) }
 // Current 回傳目前語系。
 func Current() Lang { return current.Load().(Lang) }
 
+// Parse 解析使用者輸入的語系代碼（不分大小寫；zh* 視為 zh-TW）。未知或空字串回傳 ok=false。
+func Parse(s string) (Lang, bool) {
+	switch v := strings.ToLower(strings.TrimSpace(s)); {
+	case v == "en":
+		return EN, true
+	case strings.HasPrefix(v, "zh"):
+		return ZhTW, true
+	default:
+		return "", false
+	}
+}
+
 // DetectFrom 由 Windows LANGID（0 表示不可用）與環境變數決定語系。
 func DetectFrom(langID uint16, getenv func(string) string) Lang {
 	if v := strings.ToLower(getenv(EnvOverride)); v != "" {

@@ -73,3 +73,18 @@ func TestEveryKeyHasEnglish(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAcceptsKnownLangsOnly(t *testing.T) {
+	for in, want := range map[string]Lang{"en": EN, "EN": EN, "zh-TW": ZhTW, "zh-tw": ZhTW, "zh": ZhTW} {
+		got, ok := Parse(in)
+		if !ok || got != want {
+			t.Fatalf("Parse(%q) = %q,%v", in, got, ok)
+		}
+	}
+	if _, ok := Parse("klingon"); ok {
+		t.Fatal("unknown language must be rejected")
+	}
+	if _, ok := Parse(""); ok {
+		t.Fatal("empty must be rejected (caller decides default)")
+	}
+}

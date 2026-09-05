@@ -25,6 +25,7 @@ type env struct {
 	cfgP   string
 	token  string
 	window []string
+	s      *Server
 }
 
 func newEnv(t *testing.T, token string) *env {
@@ -43,6 +44,7 @@ func newEnv(t *testing.T, token string) *env {
 		SaveConfig:     func(c config.Config) error { return config.Save(e.cfgP, c) },
 		OnWindowAction: func(a string) { e.window = append(e.window, a) },
 	}
+	e.s = s
 	e.srv = httptest.NewServer(s.Handler())
 	t.Cleanup(e.srv.Close)
 	return e
@@ -337,6 +339,54 @@ func TestSettingsRoundTripAndAutostart(t *testing.T) {
 	resp, _ = e.req(t, "PUT", "/api/settings", `{"refresh_interval_sec":0}`)
 	if resp.StatusCode != 400 {
 		t.Fatalf("invalid interval → %d", resp.StatusCode)
+	}
+}
+
+func TestSettingsLangSwitchPersistsAndChangesMeta(t *testing.T) {
+	e := newEnv(t, "")
+	var notified []string
+	e.s.OnLangChange = func(l i18n.Lang) { notified = append(notified, string(l)) }
+	t.Cleanup(func() { i18n.Set(i18n.EN) })
+
+	// 預設英文，settings 帶 lang
+	_, b := e.req(t, "GET", "/api/meta", "")
+	if !strings.Contains(string(b), `"lang":"en"`) || !strings.Contains(string(b), `"Start engine"`) {
+		t.Fatalf("default meta should be English: %s", b)
+	}
+	_, b = e.req(t, "GET", "/api/settings", "")
+	if !strings.Contains(string(b), `"lang":"en"`) {
+		t.Fatalf("settings should expose lang: %s", b)
+	}
+
+	resp, b := e.req(t, "PUT", "/api/settings", `{"refresh_interval_sec":3,"exec_shell":"","tray_autostart":false,"lang":"zh-TW"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	c, _ := config.Load(e.cfgP)
+	if c.Lang != "zh-TW" {
+		t.Fatalf("cfg.Lang = %q", c.Lang)
+	}
+	if i18n.Current() != i18n.ZhTW {
+		t.Fatalf("server language should switch, got %s", i18n.Current())
+	}
+	if len(notified) != 1 || notified[0] != "zh-TW" {
+		t.Fatalf("OnLangChange = %v", notified)
+	}
+	_, b = e.req(t, "GET", "/api/meta", "")
+	if !strings.Contains(string(b), `"lang":"zh-TW"`) || !strings.Contains(string(b), "啟動引擎") {
+		t.Fatalf("meta should be zh-TW: %s", b)
+	}
+
+	// 未知語系 → 400，且不改變目前語系
+	resp, _ = e.req(t, "PUT", "/api/settings", `{"refresh_interval_sec":3,"lang":"klingon"}`)
+	if resp.StatusCode != 400 || i18n.Current() != i18n.ZhTW {
+		t.Fatalf("invalid lang → %d, current=%s", resp.StatusCode, i18n.Current())
+	}
+	// 省略 lang → 保持原值
+	resp, _ = e.req(t, "PUT", "/api/settings", `{"refresh_interval_sec":4}`)
+	c, _ = config.Load(e.cfgP)
+	if resp.StatusCode != 200 || c.Lang != "zh-TW" {
+		t.Fatalf("omitting lang must keep it: %d %q", resp.StatusCode, c.Lang)
 	}
 }
 

@@ -47,12 +47,17 @@ func main() {
 			startHidden = true
 		}
 	}
-	i18n.Set(i18n.Detect())
-
 	cfgPath := config.DefaultPath()
 	cfg, cfgErr := config.Load(cfgPath)
 	if cfgErr != nil {
 		cfg = config.Default()
+	}
+	// 語系：預設英文；config.lang（GUI 右下角切換後寫入）；WSLD_LANG 環境變數可強制覆寫
+	if l, ok := i18n.Parse(cfg.Lang); ok {
+		i18n.Set(l)
+	}
+	if l, ok := i18n.Parse(os.Getenv(i18n.EnvOverride)); ok {
+		i18n.Set(l)
 	}
 	engine := dockerapi.New(cfg.APIEndpoint, time.Duration(cfg.APITimeoutSec)*time.Second)
 	mgr := &lifecycle.Manager{WSL: wsl.ExecRunner{}, Cfg: cfg, API: engine, Bundle: scripts.BootstrapBundle()}
@@ -63,7 +68,7 @@ func main() {
 
 	exe, _ := os.Executable()
 	exe, _ = filepath.Abs(exe)
-	auto := gui.PlatformAutostart("wsl-docker", fmt.Sprintf(`"%s" --tray`, exe))
+	auto := gui.PlatformAutostart("wsld", fmt.Sprintf(`"%s" --tray`, exe))
 
 	app := &guiApp{}
 	srv := &gui.Server{
@@ -77,6 +82,7 @@ func main() {
 		WSL:            wsl.ExecRunner{},
 		Processes:      doctor.WindowsProcesses,
 		OnWindowAction: app.onWindowAction,
+		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {
@@ -127,6 +133,10 @@ type guiApp struct {
 	engine *dockerapi.Client
 
 	trayStatus *systray.MenuItem
+	trayOpen   *systray.MenuItem
+	trayStart  *systray.MenuItem
+	trayQuit   *systray.MenuItem
+	lastState  string // 最近一次 tray 狀態鍵（gui.status.*），語系切換時重套
 	quitting   atomic.Bool
 }
 
@@ -173,14 +183,15 @@ func (a *guiApp) runTray() {
 
 func (a *guiApp) trayReady() {
 	systray.SetIcon(trayIcon)
-	systray.SetTooltip("wsl-docker")
+	systray.SetTooltip("wsld")
 	a.trayStatus = systray.AddMenuItem(i18n.T("gui.status.disconnected"), "")
 	a.trayStatus.Disable()
 	systray.AddSeparator()
-	open := systray.AddMenuItem(i18n.T("gui.tray.open"), "")
-	start := systray.AddMenuItem(i18n.T("gui.ensure"), "")
+	a.trayOpen = systray.AddMenuItem(i18n.T("gui.tray.open"), "")
+	a.trayStart = systray.AddMenuItem(i18n.T("gui.ensure"), "")
 	systray.AddSeparator()
-	quit := systray.AddMenuItem(i18n.T("gui.tray.quit"), "")
+	a.trayQuit = systray.AddMenuItem(i18n.T("gui.tray.quit"), "")
+	open, start, quit := a.trayOpen, a.trayStart, a.trayQuit
 
 	go func() {
 		for {
@@ -190,7 +201,7 @@ func (a *guiApp) trayReady() {
 				wruntime.WindowUnminimise(a.ctx)
 			case <-start.ClickedCh:
 				go func() {
-					a.setTray(i18n.T("gui.status.starting"))
+					a.setTray("gui.status.starting")
 					req, _ := http.NewRequest(http.MethodPost, a.base+"/api/engine/start", nil)
 					req.Header.Set("Authorization", "Bearer "+a.token)
 					resp, err := (&http.Client{Timeout: 4 * time.Minute}).Do(req)
@@ -223,18 +234,37 @@ func (a *guiApp) pollOnce() {
 	defer cancel()
 	if err := a.engine.Ping(ctx); err != nil {
 		if errors.Is(err, dockerapi.ErrUnreachable) {
-			a.setTray(i18n.T("gui.status.disconnected"))
+			a.setTray("gui.status.disconnected")
 		} else {
-			a.setTray(i18n.T("gui.status.disconnected") + ": " + err.Error())
+			a.setTray("gui.status.disconnected", err.Error())
 		}
 		return
 	}
-	a.setTray(i18n.T("gui.status.connected"))
+	a.setTray("gui.status.connected")
 }
 
-func (a *guiApp) setTray(s string) {
+// setTray 以訊息鍵設定狀態（保留鍵值，語系切換時可重套）。
+func (a *guiApp) setTray(key string, detail ...string) {
+	a.lastState = key
+	s := i18n.T(key)
+	if len(detail) > 0 && detail[0] != "" {
+		s += ": " + detail[0]
+	}
 	if a.trayStatus != nil {
 		a.trayStatus.SetTitle(s)
 	}
-	systray.SetTooltip("wsl-docker — " + s)
+	systray.SetTooltip("wsld — " + s)
+}
+
+// relabelTray 於語系切換後重設 Tray 選單文字。
+func (a *guiApp) relabelTray() {
+	if a.trayOpen == nil {
+		return
+	}
+	a.trayOpen.SetTitle(i18n.T("gui.tray.open"))
+	a.trayStart.SetTitle(i18n.T("gui.ensure"))
+	a.trayQuit.SetTitle(i18n.T("gui.tray.quit"))
+	if a.lastState != "" {
+		a.setTray(a.lastState)
+	}
 }

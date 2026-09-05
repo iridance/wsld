@@ -21,12 +21,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	i18n.Set(i18n.Detect())
+	// 語系：預設英文；config.lang（與 GUI 右下角切換共用）；WSLD_LANG 環境變數可強制覆寫
+	cfgPath := config.DefaultPath()
+	if c, err := config.Load(cfgPath); err == nil {
+		if l, ok := i18n.Parse(c.Lang); ok {
+			i18n.Set(l)
+		}
+	}
+	if l, ok := i18n.Parse(os.Getenv(i18n.EnvOverride)); ok {
+		i18n.Set(l)
+	}
 
 	app := &cli.App{
 		Stdout:     os.Stdout,
 		Stderr:     os.Stderr,
-		ConfigPath: config.DefaultPath(),
+		ConfigPath: cfgPath,
 		WSL:        wsl.ExecRunner{},
 		Processes:  doctor.WindowsProcesses,
 		Bundle:     scripts.BootstrapBundle(),

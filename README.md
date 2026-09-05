@@ -1,6 +1,6 @@
-# wsl-docker（`wsld` / `wsld-gui`）
+# wsld — Windows Subsystem Linux with Docker
 
-Windows 上的輕量 Docker 控制面：把 **WSL2 Ubuntu** 當成開發 machine（原始碼在 Linux FS），同機跑 **rootful dockerd**，再用 **`wsld` CLI + `wsld-gui`（Wails）** 做就緒與容器管理。類似 macOS 上 OrbStack 的體驗，但不需要 Docker Desktop。
+`wsld`（全名 **Windows Subsystem Linux with Docker**；倉庫名 `wsl-docker`）是 Windows 上的輕量 Docker 控制面：把 **WSL2 Ubuntu** 當成開發 machine（原始碼在 Linux FS），同機跑 **rootful dockerd**，再用 **`wsld` CLI + `wsld-gui`（Wails）** 做就緒與容器管理。類似 macOS 上 OrbStack 的體驗，但不需要 Docker Desktop。
 
 - **v1.0**（本版）= Roadmap Phase 1–4：bootstrap、CLI、GUI、打磨；決策見 [docs/SPEC.md](docs/SPEC.md) §2
 - **v2.0** = WinUI 3（Phase 6）
@@ -68,7 +68,7 @@ wsld-gui.exe           # 開主視窗；按 X 縮到系統匣
 wsld-gui.exe --tray    # 只起系統匣
 ```
 
-主視窗：連線狀態、容器列表（Start／Stop／Logs／Exec 終端）、啟動引擎、設定（刷新間隔、終端 shell、登入時啟動 Tray——預設關）。語系跟隨 Windows（中文→繁中）。詳見 [docs/GUI.md](docs/GUI.md)。
+主視窗：標題列顯示連線中的 WSL distro 與狀態、容器列表（compose 專案分組；Start／Stop／Logs／Exec 終端；欄寬可拖曳）、啟動引擎、設定（刷新間隔、終端 shell、登入時啟動 Tray——預設關）。介面預設英文，右下角可切換繁體中文（寫入 `config.toml`，CLI 與 Tray 一併切換）。詳見 [docs/GUI.md](docs/GUI.md)。
 
 ### 4. 重開機之後
 

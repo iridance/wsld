@@ -10,7 +10,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 |---|---|
 | CLI | `wsld start`（喚醒 distro → 確認 systemd → `systemctl start docker` → 等 `_ping`；實測約 3 秒） |
 | GUI | 開 `wsld-gui.exe`，按「啟動引擎」；或 Tray 選單「啟動引擎」 |
-| 登入自啟 | 設定 → 勾「登入時啟動 Tray」（HKCU Run，預設關）。Tray 起來後仍需按一次「啟動引擎」，v1 不會自動拉起 dockerd |
+| 登入自啟 | 設定 → 勾「登入時啟動 Tray」（HKCU Run 值 `wsld`，預設關）。Tray 起來後仍需按一次「啟動引擎」，v1 不會自動拉起 dockerd |
 
 `wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。
 

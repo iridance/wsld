@@ -37,6 +37,12 @@ button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button:disabled { opacity: .5; cursor: default; }
 button.small { padding: 2px 8px; font-size: 12px; }
+button { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
+button .ico { flex: none; }
+button.small .ico { width: 12px; height: 12px; }
+button.ghost .ico { width: 12px; height: 12px; }
+select.lang { font: inherit; font-size: 12px; padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--fg); }
+.lang-wrap { display: inline-flex; align-items: center; }
 label.check { display: inline-flex; align-items: center; gap: 4px; }
 
 .banner { padding: 8px 14px; background: #fee2e2; color: #7f1d1d; border-bottom: 1px solid #fecaca; }

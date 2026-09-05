@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { actionDelay, engine, open, reset, row, setLang } from "./helpers";
+import { actionDelay, engine, open, reset, row } from "./helpers";
 
 test.beforeEach(async ({ request }) => {
   await reset(request);
@@ -146,12 +146,54 @@ test("refresh pauses on blur and resumes on focus", async ({ page }) => {
     .toBeGreaterThan(count);
 });
 
-test("follows OS language: zh-TW renders Traditional Chinese labels", async ({ page, request }) => {
-  await setLang(request, "zh-TW");
+test("defaults to English; the status-bar language switch changes labels and persists", async ({ page }) => {
   await open(page);
+  await expect(page).toHaveTitle("wsld");
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
+  await expect(page.getByTestId("lang-select")).toHaveValue("en");
+
+  await page.getByTestId("lang-select").selectOption("zh-TW");
   await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
   await expect(page.getByTestId("btn-refresh")).toHaveText("刷新");
   await expect(page.getByTestId("status-connection")).toHaveText("已連線");
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
-  await setLang(request, "en");
+
+  await page.reload(); // 存在 config，不是只在記憶體
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
+  await expect(page.getByTestId("lang-select")).toHaveValue("zh-TW");
+
+  await page.getByTestId("lang-select").selectOption("en");
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
+});
+
+test("every button carries a semantic icon before its label", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("chk-show-all").check();
+  const expected: Record<string, string> = {
+    "btn-start-engine": "power",
+    "btn-refresh": "refresh",
+    "btn-settings": "settings",
+    "btn-start-web": "play",
+    "btn-stop-web": "stop",
+    "btn-logs-web": "logs",
+    "btn-term-web": "terminal",
+  };
+  for (const [tid, icon] of Object.entries(expected)) {
+    const b = page.getByTestId(tid);
+    await expect(b.locator("svg.ico").first()).toHaveAttribute("data-icon", icon);
+    // icon 在文字前面，且不進入可存取名稱
+    expect(await b.evaluate((e) => e.firstElementChild?.tagName.toLowerCase())).toBe("svg");
+    await expect(b.locator("svg.ico")).toHaveAttribute("aria-hidden", "true");
+  }
+  await expect(page.getByTestId("btn-start-web")).toHaveText("Start");
+  await page.getByTestId("btn-settings").click();
+  await expect(page.getByTestId("settings-save").locator("svg.ico")).toHaveAttribute("data-icon", "save");
+  await expect(page.getByTestId("settings-close").locator("svg.ico")).toHaveAttribute("data-icon", "close");
+});
+
+test("header shows the connected WSL distro name next to the connection badge", async ({ page }) => {
+  await open(page);
+  await expect(page.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
+  await expect(page.getByTestId("header-distro")).toBeVisible();
 });
