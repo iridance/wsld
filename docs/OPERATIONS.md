@@ -1,0 +1,66 @@
+# 日常操作與已知限制（OPERATIONS）
+
+對應 [SPEC.md](SPEC.md) §6.9：重開機、Docker Desktop 並存、故障排除、已知限制。
+
+## 重開機／WSL 關機後
+
+WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後會停止，dockerd 隨之停止。恢復方式任選其一：
+
+| 方式 | 操作 |
+|---|---|
+| CLI | `wsld start`（喚醒 distro → 確認 systemd → `systemctl start docker` → 等 `_ping`；實測約 3 秒） |
+| GUI | 開 `wsld-gui.exe`，按「啟動引擎」；或 Tray 選單「啟動引擎」 |
+| 登入自啟 | 設定 → 勾「登入時啟動 Tray」（HKCU Run，預設關）。Tray 起來後仍需按一次「啟動引擎」，v1 不會自動拉起 dockerd |
+
+`wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。
+
+`loginctl enable-linger` 已由 bootstrap 開啟，避免最後一個 WSL 終端關閉時 systemd user session 被回收；但 **WSL VM 本身**閒置關機不在此控制範圍，這是 WSL 的行為。
+
+## 與 Docker Desktop 並存
+
+可以同時安裝，但**不建議同時運行兩個引擎**：
+
+- Desktop 的 WSL integration 會往 distro 注入自己的 `docker` CLI 與 socket，`docker ps` 可能看到的是 Desktop 的引擎而非 wsld 管理的 dockerd。
+- `wsld doctor` 會偵測 `Docker Desktop.exe`／`com.docker.backend.exe` 並回 WARN。
+
+建議做法：
+
+1. 只用 wsld：解除安裝 Desktop，或至少在 Desktop 設定關掉「WSL integration」對該 distro 的整合。
+2. 需要 Desktop 時：關掉 wsld 的 dockerd（`wsl -d <distro> -u root -- systemctl stop docker`），再啟動 Desktop；反之亦然。
+3. 用 `DOCKER_HOST` 明確指定要用哪個引擎（wsld：`tcp://127.0.0.1:23750`，實際埠見 `config.toml`）。
+
+## 埠
+
+- 預設 `23750`；`wsld init` 若發現被占用會自動往上找（bats 覆蓋），並寫回 `config.toml` 的 `api_endpoint`。
+- API **只綁 127.0.0.1**。`doctor` 的「API 只綁 loopback」會抓到 `0.0.0.0` 誤綁；「Docker API _ping」會抓到「埠有人聽但不是 Docker」。
+- 手動改埠：改 `/etc/docker/daemon.json` 的 `hosts` 與 `config.toml` 的 `api_endpoint` 兩處，然後 `systemctl restart docker`。
+
+## 故障排除
+
+先跑 `wsld doctor`；每個 FAIL／WARN 都附「↳ 建議」。常見情境：
+
+| 症狀 | 原因 | 處理 |
+|---|---|---|
+| `wsl.exe 不可用` | WSL 功能未啟用 | 以系統管理員執行 `scripts\01-enable-wsl.ps1`，重開機 |
+| `systemd 未啟用` | `/etc/wsl.conf` 缺 `[boot] systemd=true` | bootstrap 會寫入；之後需 `wsl --shutdown` 再進 distro |
+| `bootstrap prerequisites not met`（exit 3） | systemd 剛啟用尚未生效 | `wsl --shutdown` → 重開 distro → `wsld init` |
+| `API 無回應` 但 `docker.service 運作中` | `daemon.json` hosts 沒有 `tcp://127.0.0.1:<port>`，或埠與 config 不一致 | 對照 `daemon.json` 與 `config.toml`；`wsld init` 可重寫 |
+| `有服務監聽但不是 Docker` | 埠被其他程式占用 | 重跑 `wsld init` 自動換埠 |
+| GUI 顯示「請先執行 wsld init」 | `%APPDATA%\wsl-docker\config.toml` 不存在 | `wsld init` |
+| Desktop WARN | Docker Desktop 同時運行 | 見上節 |
+| `docker` 指令在 WSL 內連不到 | 未設 `DOCKER_HOST`，也不在 `docker` 群組 | bootstrap 已把使用者加入 `docker` 群組，重開終端；或 `export DOCKER_HOST=tcp://127.0.0.1:23750` |
+
+日誌：`wsl -d <distro> -u root -- journalctl -u docker -n 50`。
+
+## 已知限制（v1.0）
+
+- **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64。
+- **單一 distro**：一個 config 對應一個 distro；多 distro 為 Phase 5。
+- **rootful dockerd**：容器以 root 執行 dockerd（bootstrap 有把使用者加入 `docker` 群組）。rootless 不在 v1。
+- **無 npiperelay**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
+- **GUI**：
+  - 淺色主題；Tray 選單語系啟動時決定。
+  - 「登入時啟動 Tray」只起 Tray，不自動啟動引擎。
+  - 執行檔未含版本資源／圖示（`.syso`）。
+- **自動更新**：無；以發布頁下載新版覆蓋。
+- **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。

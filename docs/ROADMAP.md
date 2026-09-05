@@ -10,7 +10,7 @@ Phase 0  規格／倉庫骨架 + v1 決策鎖定     ✅
 Phase 1  Bootstrap 腳本可手動跑通         ✅
 Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI v1（Wails + Playwright）     ✅
-Phase 4  打磨（v1.0 必要）                ← 目前
+Phase 4  打磨（v1.0 必要）                ✅  → v1.0
 Phase 5  （可選）npiperelay、自動更新、多 distro
 Phase 6  WinUI 3 GUI                       ← v2.0
 
@@ -95,7 +95,12 @@ v2.0 = Phase 6
 
 ### 完成定義
 
-- [ ] SPEC §6 全過 → **宣告 v1.0**
+- [x] SPEC §6 全過 → **v1.0**（2026-09-06）
+  - §6.1–3 CLI／GUI 同引擎、GUI 冷開→Start→列表／Logs／Exec：實機 + Playwright
+  - §6.4 `docker run -v "$PWD:/app"` 於 WSL `$HOME`：實測 OK
+  - §6.5 `systemctl stop docker` 後 `wsld start` 3 秒恢復（等同重開機路徑）
+  - §6.6–7 doctor 誤綁／Desktop、埠衝突換埠：Go 單測 + bats
+  - §6.8 `make test`；§6.9 docs/OPERATIONS.md；§6.10 LICENSE（MIT）
 
 ---
 

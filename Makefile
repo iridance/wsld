@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 
-VERSION ?= 0.1.0-dev
+VERSION ?= 1.0.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt
