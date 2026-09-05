@@ -53,6 +53,8 @@ td.actions { display: flex; gap: 6px; }
 .state { text-transform: capitalize; }
 .state.running { color: var(--ok); }
 .state.exited, .state.dead { color: var(--muted); }
+.state.pending { color: var(--warn); font-style: italic; }
+tr[data-pending] { opacity: 0.75; }
 .empty { padding: 32px; text-align: center; color: var(--muted); }
 
 .panel { border-top: 1px solid var(--border); background: var(--panel); display: grid; grid-template-rows: auto 1fr; min-height: 0; }

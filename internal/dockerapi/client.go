@@ -39,8 +39,9 @@ func IsNotFound(err error) bool {
 
 // Client 綁定單一 base URL。
 type Client struct {
-	base    string // http://127.0.0.1:23750
-	hc      *http.Client
+	base    string       // http://127.0.0.1:23750
+	hc      *http.Client // 一般請求：整體 timeout
+	longHC  *http.Client // 長時間請求（stop 寬限期、串流）：只靠 ctx deadline
 	timeout time.Duration
 }
 
@@ -50,19 +51,18 @@ func New(endpoint string, timeout time.Duration) *Client {
 	if strings.HasPrefix(base, "tcp://") {
 		base = "http://" + strings.TrimPrefix(base, "tcp://")
 	}
+	tr := &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: timeout}).DialContext,
+		MaxIdleConns:        4,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  true,
+		TLSHandshakeTimeout: timeout,
+	}
 	return &Client{
 		base:    base,
 		timeout: timeout,
-		hc: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				DialContext:         (&net.Dialer{Timeout: timeout}).DialContext,
-				MaxIdleConns:        4,
-				IdleConnTimeout:     30 * time.Second,
-				DisableCompression:  true,
-				TLSHandshakeTimeout: timeout,
-			},
-		},
+		hc:      &http.Client{Timeout: timeout, Transport: tr},
+		longHC:  &http.Client{Transport: tr},
 	}
 }
 
@@ -79,6 +79,11 @@ func (c *Client) hostPort() (string, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, q url.Values, body any) (*http.Response, error) {
+	return c.doWith(ctx, c.hc, method, path, q, body)
+}
+
+// doWith 同 do，但可指定 http.Client（longHC 用於必須超過一般 timeout 的請求）。
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, q url.Values, body any) (*http.Response, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -98,7 +103,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, wrapNetErr(err)
 	}
@@ -242,7 +247,11 @@ func (c *Client) StopContainer(ctx context.Context, id string, timeoutSec int) e
 	if timeoutSec > 0 {
 		q.Set("t", strconv.Itoa(timeoutSec))
 	}
-	resp, err := c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/stop", q, nil)
+	// dockerd 會等到寬限期 t 秒後才 SIGKILL 再回應；deadline = t + 一般 API timeout，
+	// 否則 PID 1 忽略 SIGTERM 的容器會被誤判為「API 無法連線」。
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second+c.timeout)
+	defer cancel()
+	resp, err := c.doWith(ctx, c.longHC, http.MethodPost, "/containers/"+url.PathEscape(id)+"/stop", q, nil)
 	if err != nil {
 		return err
 	}
@@ -311,8 +320,7 @@ func (c *Client) Logs(ctx context.Context, id string, opts LogsOptions) (io.Read
 	}
 	hc := c.hc
 	if opts.Follow {
-		// 串流不可有整體 timeout
-		hc = &http.Client{Transport: c.hc.Transport}
+		hc = c.longHC // 串流不可有整體 timeout
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

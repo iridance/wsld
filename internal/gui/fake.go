@@ -25,6 +25,28 @@ type FakeEngine struct {
 	execEcho   bool
 	// LastResize 為最後一次 resize 的 rows/cols。
 	LastResize [2]int
+	// ActionDelay 讓 Start/Stop 延遲回應（模擬 docker stop 寬限期）。
+	ActionDelay time.Duration
+}
+
+// SetActionDelay 設定 Start/Stop 的延遲。
+func (f *FakeEngine) SetActionDelay(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ActionDelay = d
+}
+
+func (f *FakeEngine) sleepAction(ctx context.Context) {
+	f.mu.Lock()
+	d := f.ActionDelay
+	f.mu.Unlock()
+	if d <= 0 {
+		return
+	}
+	select {
+	case <-time.After(d):
+	case <-ctx.Done():
+	}
 }
 
 // NewFakeEngine 建立含兩個示範容器的假引擎。
@@ -48,6 +70,7 @@ func (f *FakeEngine) Reset() {
 	f.subs = map[string][]chan string{}
 	f.execEcho = true
 	f.LastResize = [2]int{}
+	f.ActionDelay = 0
 	f.mu.Unlock()
 	// dual-stack 發佈埠會回傳 IPv4 與 IPv6 兩筆，前端須去重
 	f.AddContainer("web", "nginx:1.27", "running", []dockerapi.Port{
@@ -135,7 +158,8 @@ func (f *FakeEngine) ListContainers(_ context.Context, all bool) ([]dockerapi.Co
 }
 
 // StartContainer 實作 Engine。
-func (f *FakeEngine) StartContainer(_ context.Context, id string) error {
+func (f *FakeEngine) StartContainer(ctx context.Context, id string) error {
+	f.sleepAction(ctx)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.down(); err != nil {
@@ -150,7 +174,8 @@ func (f *FakeEngine) StartContainer(_ context.Context, id string) error {
 }
 
 // StopContainer 實作 Engine。
-func (f *FakeEngine) StopContainer(_ context.Context, id string, _ int) error {
+func (f *FakeEngine) StopContainer(ctx context.Context, id string, _ int) error {
+	f.sleepAction(ctx)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.down(); err != nil {

@@ -95,6 +95,51 @@ func TestShortIDTruncatesTo12(t *testing.T) {
 	}
 }
 
+// docker stop 會等到寬限期 t 秒才 SIGKILL（PID 1 忽略 SIGTERM 時很常見）；
+// 這段等待不可被一般 API timeout 誤判成 ErrUnreachable。
+func TestStopContainerWaitsBeyondAPITimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/containers/slow/stop":
+			time.Sleep(300 * time.Millisecond) // 比 API timeout 長，比 t + timeout 短
+			w.WriteHeader(http.StatusNoContent)
+		case "/_ping":
+			time.Sleep(300 * time.Millisecond)
+			_, _ = io.WriteString(w, "OK")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, 100*time.Millisecond)
+	ctx := context.Background()
+
+	if err := c.StopContainer(ctx, "slow", 1); err != nil {
+		t.Fatalf("stop within grace period must succeed, got %v", err)
+	}
+	// 對照：一般請求仍受 API timeout 約束
+	if err := c.Ping(ctx); !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("ping should still time out with ErrUnreachable, got %v", err)
+	}
+}
+
+func TestStopContainerHonoursGraceDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, 50*time.Millisecond)
+	start := time.Now()
+	err := c.StopContainer(context.Background(), "hang", 0) // t=0 → 只剩 API timeout 當緩衝
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("expected ErrUnreachable, got %v", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("stop should give up after t+timeout, took %s", time.Since(start))
+	}
+}
+
 func TestStartStopContainerStatusHandling(t *testing.T) {
 	var lastPath, lastQuery string
 	status := http.StatusNoContent

@@ -14,6 +14,8 @@ interface State {
   paused: boolean;
   refreshCount: number;
   panel?: Panel;
+  /** 進行中的容器動作（id → 動作），用於即時回饋；docker stop 可能等 10s 寬限期 */
+  pending: Record<string, "starting" | "stopping">;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...children: (Node | string)[]) => {
@@ -36,7 +38,7 @@ export class App {
     setMessages(meta.messages);
     document.documentElement.lang = meta.lang;
     document.title = t("gui.title");
-    this.st = { meta, containers: [], showAll: false, starting: false, paused: false, refreshCount: 0 };
+    this.st = { meta, containers: [], showAll: false, starting: false, paused: false, refreshCount: 0, pending: {} };
     this.build();
     this.bindPause();
     void this.refresh();
@@ -117,6 +119,18 @@ export class App {
       this.st.lastError = e instanceof ApiError ? e.message : String(e);
     }
     await this.refresh();
+  }
+
+  /** 容器 Start/Stop：先標記 pending 立即重繪，完成後清除再刷新。 */
+  private async actOn(id: string, kind: "starting" | "stopping", fn: () => Promise<void>): Promise<void> {
+    this.st.pending[id] = kind;
+    this.renderList();
+    try {
+      await this.act(fn);
+    } finally {
+      delete this.st.pending[id];
+      this.renderList();
+    }
   }
 
   private openLogs(c: Container): void {
@@ -276,25 +290,29 @@ export class App {
     for (const c of this.st.containers) {
       const running = c.State === "running";
       const n = name(c);
+      const pending = this.st.pending[c.Id];
       const startBtn = el("button", { class: "small", "data-testid": `btn-start-${n}`, text: t("gui.start") });
-      startBtn.disabled = running;
-      startBtn.onclick = () => void this.act(() => api.startContainer(c.Id));
+      startBtn.disabled = running || !!pending;
+      startBtn.onclick = () => void this.actOn(c.Id, "starting", () => api.startContainer(c.Id));
       const stopBtn = el("button", { class: "small", "data-testid": `btn-stop-${n}`, text: t("gui.stop") });
-      stopBtn.disabled = !running;
-      stopBtn.onclick = () => void this.act(() => api.stopContainer(c.Id));
+      stopBtn.disabled = !running || !!pending;
+      stopBtn.onclick = () => void this.actOn(c.Id, "stopping", () => api.stopContainer(c.Id));
       const logsBtn = el("button", { class: "small", "data-testid": `btn-logs-${n}`, text: t("gui.logs") });
       logsBtn.onclick = () => this.openLogs(c);
       const termBtn = el("button", { class: "small", "data-testid": `btn-term-${n}`, text: t("gui.terminal") });
       termBtn.disabled = !running;
       termBtn.onclick = () => this.openTerminal(c);
 
+      const rowAttrs: Record<string, string> = { "data-testid": "container-row", "data-name": n, "data-state": c.State };
+      if (pending) rowAttrs["data-pending"] = pending;
+      const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
       tbody.append(
         el(
           "tr",
-          { "data-testid": "container-row", "data-name": n, "data-state": c.State },
+          rowAttrs,
           el("td", { text: n, title: c.Id }),
           el("td", { text: c.Image }),
-          el("td", {}, el("span", { class: `state ${c.State}`, "data-testid": `state-${n}`, text: c.State })),
+          el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
           el("td", { text: c.Status }),
           el("td", { "data-testid": `ports-${n}`, text: ports(c) }),
           el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn),

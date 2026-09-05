@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/irice/wsl-docker/internal/config"
 	"github.com/irice/wsl-docker/internal/gui"
@@ -64,6 +66,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /__test/engine/{state}", func(w http.ResponseWriter, r *http.Request) {
 		engine.SetDown(r.PathValue("state") == "down")
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/action-delay", func(w http.ResponseWriter, r *http.Request) {
+		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+		engine.SetActionDelay(time.Duration(ms) * time.Millisecond)
 		ok(w)
 	})
 	mux.HandleFunc("POST /__test/lifecycle/{state}", func(w http.ResponseWriter, r *http.Request) {

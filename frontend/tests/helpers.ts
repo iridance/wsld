@@ -9,6 +9,11 @@ export async function engine(request: APIRequestContext, state: "up" | "down"): 
   expect((await request.post(`/__test/engine/${state}`)).ok()).toBeTruthy();
 }
 
+/** 讓 fake 的 stop/start 延遲 ms 毫秒回應（模擬 docker stop 寬限期）。 */
+export async function actionDelay(request: APIRequestContext, ms: number): Promise<void> {
+  expect((await request.post(`/__test/action-delay?ms=${ms}`)).ok()).toBeTruthy();
+}
+
 export async function lifecycle(request: APIRequestContext, state: "ok" | "broken"): Promise<void> {
   expect((await request.post(`/__test/lifecycle/${state}`)).ok()).toBeTruthy();
 }

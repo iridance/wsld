@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { engine, open, reset, row, setLang } from "./helpers";
+import { actionDelay, engine, open, reset, row, setLang } from "./helpers";
 
 test.beforeEach(async ({ request }) => {
   await reset(request);
@@ -38,6 +38,25 @@ test("lists running containers by default; 'Show stopped' reveals exited ones", 
   await page.getByTestId("chk-show-all").check();
   await expect(row(page, "db")).toBeVisible();
   await expect(row(page, "db")).toHaveAttribute("data-state", "exited");
+});
+
+test("slow Stop shows a pending state immediately and disables the row's actions", async ({ page, request }) => {
+  await actionDelay(request, 1500); // docker stop 寬限期可達 10s；UI 必須即時回饋
+  await open(page);
+  await page.getByTestId("chk-show-all").check();
+  await expect(row(page, "web")).toHaveAttribute("data-state", "running");
+
+  await page.getByTestId("btn-stop-web").click();
+  await expect(row(page, "web")).toHaveAttribute("data-pending", "stopping");
+  await expect(page.getByTestId("state-web")).toHaveText("Stopping…");
+  await expect(page.getByTestId("btn-stop-web")).toBeDisabled();
+  await expect(page.getByTestId("btn-start-web")).toBeDisabled();
+  await expect(page.getByTestId("error-banner")).toBeHidden();
+
+  await expect(row(page, "web")).toHaveAttribute("data-state", "exited", { timeout: 5000 });
+  await expect(row(page, "web")).not.toHaveAttribute("data-pending", /.+/);
+  await expect(page.getByTestId("state-web")).toHaveText("exited");
+  await expect(page.getByTestId("error-banner")).toBeHidden();
 });
 
 test("Stop and Start buttons change container state", async ({ page }) => {
