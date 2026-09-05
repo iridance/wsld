@@ -13,3 +13,4 @@ Thumbs.db
 
 # Local config (never commit real machine config)
 /config.local.toml
+/dist/

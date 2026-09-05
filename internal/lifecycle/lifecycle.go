@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/irice/wsl-docker/internal/config"
+	"github.com/irice/wsl-docker/internal/i18n"
 	"github.com/irice/wsl-docker/internal/wsl"
 )
 
@@ -123,24 +124,24 @@ func (m *Manager) dockerActive(ctx context.Context) bool {
 func (m *Manager) Start(ctx context.Context) (Status, error) {
 	list, err := wsl.ListDistros(ctx, m.WSL)
 	if err != nil {
-		return Status{}, fmt.Errorf("%w: wsl.exe 不可用：%v", ErrNotReady, err)
+		return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.wsl_unavailable", err))
 	}
 	d, ok := wsl.FindDistro(list, m.Cfg.Distro)
 	if !ok {
-		return Status{}, fmt.Errorf("%w: 找不到 WSL 發行版 %q；請先執行 wsld init", ErrNotReady, m.Cfg.Distro)
+		return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.distro_missing", m.Cfg.Distro))
 	}
 	if d.Version != 2 {
-		return Status{}, fmt.Errorf("%w: 發行版 %q 是 WSL%d，需要 WSL2（wsl --set-version %s 2）", ErrNotReady, d.Name, d.Version, d.Name)
+		return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.distro_wsl1", d.Name, d.Version, d.Name))
 	}
 	if err := wsl.Wake(ctx, m.WSL, m.Cfg.Distro); err != nil {
-		return Status{}, fmt.Errorf("%w: 無法喚醒 %q：%v", ErrNotReady, m.Cfg.Distro, err)
+		return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.wake_failed", m.Cfg.Distro, err))
 	}
 	if !m.systemdActive(ctx) {
-		return Status{}, fmt.Errorf("%w: %q 內 systemd 未啟用；請確認 /etc/wsl.conf 有 [boot] systemd=true，並執行 wsl --shutdown 後重試", ErrNotReady, m.Cfg.Distro)
+		return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.systemd_off", m.Cfg.Distro))
 	}
 	if !m.dockerActive(ctx) {
 		if _, stderr, err := wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "root", nil, "systemctl", "start", "docker"); err != nil {
-			return Status{}, fmt.Errorf("%w: systemctl start docker 失敗：%v %s", ErrNotReady, err, strings.TrimSpace(string(stderr)))
+			return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.docker_start_failed", err, strings.TrimSpace(string(stderr))))
 		}
 		// 等待 active
 		for i := 0; i < m.pingAttempts(); i++ {
@@ -158,7 +159,7 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 		m.sleep(m.pingInterval())
 	}
 	if lastErr != nil {
-		return m.Status(ctx), fmt.Errorf("%w: %s 無回應：%v（檢查 daemon.json hosts 與 wsld doctor）", ErrAPI, m.Cfg.APIEndpoint, lastErr)
+		return m.Status(ctx), fmt.Errorf("%w: %s", ErrAPI, i18n.T("lc.api_no_response", m.Cfg.APIEndpoint, lastErr))
 	}
 	return m.Status(ctx), nil
 }
@@ -190,17 +191,17 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	cfg := m.Cfg
 	list, err := wsl.ListDistros(ctx, m.WSL)
 	if err != nil {
-		return cfg, fmt.Errorf("%w: wsl.exe 不可用（請先以系統管理員執行 scripts/01-enable-wsl.ps1）：%v", ErrNotReady, err)
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.wsl_unavailable_init", err))
 	}
 
 	var d wsl.Distro
 	if opts.Distro != "" {
 		found, ok := wsl.FindDistro(list, opts.Distro)
 		if !ok {
-			return cfg, fmt.Errorf("%w: 指定的發行版 %q 不存在（wsl -l -v）", ErrNotReady, opts.Distro)
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_distro_missing", opts.Distro))
 		}
 		if found.Version != 2 {
-			return cfg, fmt.Errorf("%w: %q 是 WSL%d，需要 WSL2", ErrNotReady, found.Name, found.Version)
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_distro_wsl1", found.Name, found.Version))
 		}
 		d = found
 	} else {
@@ -211,13 +212,13 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 				name = "Ubuntu"
 			}
 			if opts.SkipInstall {
-				return cfg, fmt.Errorf("%w: 沒有 Ubuntu WSL2 發行版；請安裝後重試（wsl --install -d %s）", ErrNotReady, name)
+				return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_no_ubuntu", name))
 			}
-			m.printf("沒有 Ubuntu WSL2 發行版，執行 wsl --install -d %s --no-launch …\n", name)
+			m.print(i18n.T("lc.init_installing", name))
 			if _, _, err := m.WSL.Run(ctx, nil, "--install", "-d", name, "--no-launch"); err != nil {
-				return cfg, fmt.Errorf("%w: wsl --install -d %s 失敗：%v", ErrNotReady, name, err)
+				return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_install_failed", name, err))
 			}
-			return cfg, fmt.Errorf("%w: 已安裝 %s；請從開始選單開啟 %s 一次建立 Linux 使用者，然後重新執行 wsld init", ErrNotReady, name, name)
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_relaunch", name, name))
 		}
 		d = found
 	}
@@ -227,11 +228,11 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	if user == "" {
 		out, _, err := wsl.RunIn(ctx, m.WSL, d.Name, "", nil, "id", "-un")
 		if err != nil {
-			return cfg, fmt.Errorf("%w: 無法在 %q 內偵測預設使用者：%v", ErrNotReady, d.Name, err)
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_detect", d.Name, err))
 		}
 		user = strings.TrimSpace(wsl.DecodeOutput(out))
 		if user == "" || user == "root" {
-			return cfg, fmt.Errorf("%w: %q 的預設使用者是 root 或未設定；請用 --user 指定一般使用者", ErrNotReady, d.Name)
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_root", d.Name))
 		}
 	}
 	cfg.User = user
@@ -249,34 +250,34 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	if opts.NoCompose {
 		args = append(args, "--no-compose")
 	}
-	m.printf("在 %s 內執行 bootstrap（root）…\n", d.Name)
+	m.print(i18n.T("lc.init_running", d.Name))
 	out, stderr, err := wsl.RunIn(ctx, m.WSL, d.Name, "root", bytes.NewReader(m.Bundle), args...)
 	m.write(out)
 	m.write(stderr)
 	if err != nil {
 		switch wsl.ExitCode(err) {
 		case 3:
-			return cfg, fmt.Errorf("%w: bootstrap 前置條件不符（多半是 systemd 剛啟用）；請在 Windows 執行 wsl --shutdown，重開 %s 後再跑 wsld init", ErrNotReady, d.Name)
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_exit3", d.Name))
 		case 4:
-			return cfg, fmt.Errorf("%w: bootstrap 後 Docker 驗證失敗；wsl -d %s -- journalctl -u docker -n 50", ErrAPI, d.Name)
+			return cfg, fmt.Errorf("%w: %s", ErrAPI, i18n.T("lc.init_exit4", d.Name))
 		default:
-			return cfg, fmt.Errorf("bootstrap 失敗：%v", err)
+			return cfg, errors.New(i18n.T("lc.init_failed", err))
 		}
 	}
 	chosen, ok := ParseBootstrapPort(string(out))
 	if !ok {
-		return cfg, fmt.Errorf("bootstrap 輸出缺少 WSLD_API_PORT，無法確認 API 埠")
+		return cfg, errors.New(i18n.T("lc.init_no_port"))
 	}
 	if chosen != port {
-		m.printf("埠 %d 已被占用，改用 %d（已寫入 config）\n", port, chosen)
+		m.print(i18n.T("lc.init_port_changed", port, chosen))
 	}
 	cfg.APIEndpoint = config.EndpointForPort(chosen)
 	return cfg, nil
 }
 
-func (m *Manager) printf(format string, a ...any) {
+func (m *Manager) print(s string) {
 	if m.Output != nil {
-		fmt.Fprintf(m.Output, format, a...)
+		_, _ = io.WriteString(m.Output, s)
 	}
 }
 

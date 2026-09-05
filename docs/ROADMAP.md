@@ -6,10 +6,10 @@
 ## 總覽
 
 ```text
-Phase 0  規格／倉庫骨架 + v1 決策鎖定     ← 目前（決策已關）
-Phase 1  Bootstrap 腳本可手動跑通
-Phase 2  共用核心 + wsld CLI
-Phase 3  GUI v1（Wails + Playwright）
+Phase 0  規格／倉庫骨架 + v1 決策鎖定     ✅
+Phase 1  Bootstrap 腳本可手動跑通         ✅
+Phase 2  共用核心 + wsld CLI              ✅
+Phase 3  GUI v1（Wails + Playwright）     ← 目前
 Phase 4  打磨（v1.0 必要）
 Phase 5  （可選）npiperelay、自動更新、多 distro
 Phase 6  WinUI 3 GUI                       ← v2.0
@@ -43,9 +43,9 @@ v2.0 = Phase 6
 
 ### 完成定義
 
-- [ ] 手動跑通；Windows `curl http://127.0.0.1:<port>/_ping` → `OK`
-- [ ] WSL `docker info`／`docker compose version` 成功
-- [ ] 只綁 loopback；占用時能選下一埠（與 SPEC 一致）
+- [x] 手動跑通；Windows `curl http://127.0.0.1:<port>/_ping` → `OK`（2026-09-06 Ubuntu-26.04 實測）
+- [x] WSL `docker info`／`docker compose version` 成功（CE 29.8.0／Compose v5.5.1）
+- [x] 只綁 loopback；占用時能選下一埠（bats 覆蓋 + doctor 檢查）
 
 ---
 
@@ -60,9 +60,9 @@ v2.0 = Phase 6
 
 ### 完成定義
 
-- [ ] SPEC CLI 行為與退出碼
-- [ ] 無 Desktop 可驗證生命週期＋API
-- [ ] 自動換埠寫入 config
+- [x] SPEC CLI 行為與退出碼（`internal/cli` 測試覆蓋 0–4）
+- [x] 無 Desktop 可驗證生命週期＋API（實機 init → status → ps/logs/stop-ct/start-ct）
+- [x] 自動換埠寫入 config（bootstrap 輸出 `WSLD_API_PORT` → `lifecycle.Init` → `config.Save`）
 
 ---
 

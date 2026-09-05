@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/irice/wsl-docker/internal/config"
+	"github.com/irice/wsl-docker/internal/i18n"
 	"github.com/irice/wsl-docker/internal/wsl"
 )
 
@@ -114,7 +115,7 @@ type checker struct {
 func (c *checker) add(r Result) { c.rep.Results = append(c.rep.Results, r) }
 
 func (c *checker) skip(id, title, category string) {
-	c.add(Result{ID: id, Title: title, Level: Fail, Category: category, Detail: "skipped: 前置檢查失敗"})
+	c.add(Result{ID: id, Title: title, Level: Fail, Category: category, Detail: i18n.T("doctor.skipped")})
 }
 
 func (c *checker) runIn(ctx context.Context, user string, cmd ...string) (string, error) {
@@ -128,45 +129,45 @@ func (c *checker) run(ctx context.Context) {
 	// 1. wsl
 	list, err := wsl.ListDistros(ctx, c.d.WSL)
 	if err != nil {
-		c.add(Result{ID: "wsl", Title: "wsl.exe 可用", Level: Fail, Category: "engine",
-			Detail: err.Error(), Hint: "以系統管理員執行 scripts/01-enable-wsl.ps1 並重開機"})
-		for _, s := range [][3]string{{"distro", "目標發行版為 WSL2", "engine"}, {"wake", "可喚醒發行版", "engine"},
-			{"systemd", "systemd 已啟用", "engine"}, {"docker_service", "docker.service active", "engine"},
-			{"loopback_only", "API 只綁 loopback", "engine"}, {"linger", "linger 已啟用", "engine"}} {
-			c.skip(s[0], s[1], s[2])
+		c.add(Result{ID: "wsl", Title: i18n.T("doctor.wsl.title"), Level: Fail, Category: "engine",
+			Detail: err.Error(), Hint: i18n.T("doctor.wsl.hint")})
+		for _, s := range [][3]string{{"distro", "doctor.distro.title", "engine"}, {"wake", "doctor.wake.title", "engine"},
+			{"systemd", "doctor.systemd.title", "engine"}, {"docker_service", "doctor.docker_service.title", "engine"},
+			{"loopback_only", "doctor.loopback.title", "engine"}, {"linger", "doctor.linger.title", "engine"}} {
+			c.skip(s[0], i18n.T(s[1]), s[2])
 		}
 		c.checkAPI(ctx)
 		c.checkDesktop(ctx, nil)
 		c.infoChecks()
 		return
 	}
-	c.add(Result{ID: "wsl", Title: "wsl.exe 可用", Level: OK, Detail: fmt.Sprintf("%d 個發行版", len(list))})
+	c.add(Result{ID: "wsl", Title: i18n.T("doctor.wsl.title"), Level: OK, Detail: i18n.T("doctor.wsl.detail", len(list))})
 
 	// 2. distro
 	distro, found := wsl.FindDistro(list, cfg.Distro)
 	switch {
 	case !found:
-		c.add(Result{ID: "distro", Title: "目標發行版為 WSL2", Level: Fail, Category: "engine",
-			Detail: fmt.Sprintf("config 指定 %q 不存在", cfg.Distro), Hint: "執行 wsld init 或修正 config.toml 的 distro"})
+		c.add(Result{ID: "distro", Title: i18n.T("doctor.distro.title"), Level: Fail, Category: "engine",
+			Detail: i18n.T("doctor.distro.missing", cfg.Distro), Hint: i18n.T("doctor.distro.missing_hint")})
 	case distro.Version != 2:
-		c.add(Result{ID: "distro", Title: "目標發行版為 WSL2", Level: Fail, Category: "engine",
-			Detail: fmt.Sprintf("%s 是 WSL%d", distro.Name, distro.Version), Hint: fmt.Sprintf("wsl --set-version %s 2", distro.Name)})
+		c.add(Result{ID: "distro", Title: i18n.T("doctor.distro.title"), Level: Fail, Category: "engine",
+			Detail: i18n.T("doctor.distro.wsl1", distro.Name, distro.Version), Hint: fmt.Sprintf("wsl --set-version %s 2", distro.Name)})
 	default:
-		c.add(Result{ID: "distro", Title: "目標發行版為 WSL2", Level: OK, Detail: fmt.Sprintf("%s (%s)", distro.Name, distro.State)})
+		c.add(Result{ID: "distro", Title: i18n.T("doctor.distro.title"), Level: OK, Detail: fmt.Sprintf("%s (%s)", distro.Name, distro.State)})
 	}
 	engineOK := found && distro.Version == 2
 
 	// 3. wake
 	if engineOK {
 		if _, err := c.runIn(ctx, "", "true"); err != nil {
-			c.add(Result{ID: "wake", Title: "可喚醒發行版", Level: Fail, Category: "engine", Detail: err.Error(),
-				Hint: "wsl --shutdown 後重試；或檢查 wsl -d " + cfg.Distro})
+			c.add(Result{ID: "wake", Title: i18n.T("doctor.wake.title"), Level: Fail, Category: "engine", Detail: err.Error(),
+				Hint: i18n.T("doctor.wake.hint", cfg.Distro)})
 			engineOK = false
 		} else {
-			c.add(Result{ID: "wake", Title: "可喚醒發行版", Level: OK})
+			c.add(Result{ID: "wake", Title: i18n.T("doctor.wake.title"), Level: OK})
 		}
 	} else {
-		c.skip("wake", "可喚醒發行版", "engine")
+		c.skip("wake", i18n.T("doctor.wake.title"), "engine")
 	}
 
 	// 4. systemd
@@ -175,28 +176,28 @@ func (c *checker) run(ctx context.Context) {
 		out, _ := c.runIn(ctx, "", "systemctl", "is-system-running")
 		if out == "running" || out == "degraded" {
 			systemdOK = true
-			c.add(Result{ID: "systemd", Title: "systemd 已啟用", Level: OK, Detail: out})
+			c.add(Result{ID: "systemd", Title: i18n.T("doctor.systemd.title"), Level: OK, Detail: out})
 		} else {
-			c.add(Result{ID: "systemd", Title: "systemd 已啟用", Level: Fail, Category: "engine",
+			c.add(Result{ID: "systemd", Title: i18n.T("doctor.systemd.title"), Level: Fail, Category: "engine",
 				Detail: fmt.Sprintf("systemctl is-system-running → %q", out),
-				Hint:   "/etc/wsl.conf 加入 [boot] systemd=true，然後 wsl --shutdown"})
+				Hint:   i18n.T("doctor.systemd.hint")})
 		}
 	} else {
-		c.skip("systemd", "systemd 已啟用", "engine")
+		c.skip("systemd", i18n.T("doctor.systemd.title"), "engine")
 	}
 
 	// 5. docker.service
 	if systemdOK {
 		out, _ := c.runIn(ctx, "", "systemctl", "is-active", "docker")
 		if out == "active" {
-			c.add(Result{ID: "docker_service", Title: "docker.service active", Level: OK})
+			c.add(Result{ID: "docker_service", Title: i18n.T("doctor.docker_service.title"), Level: OK})
 		} else {
-			c.add(Result{ID: "docker_service", Title: "docker.service active", Level: Fail, Category: "engine",
+			c.add(Result{ID: "docker_service", Title: i18n.T("doctor.docker_service.title"), Level: Fail, Category: "engine",
 				Detail: fmt.Sprintf("systemctl is-active docker → %q", out),
-				Hint:   "wsld start；或 wsl -d " + cfg.Distro + " -u root -- systemctl start docker；未安裝則 wsld init"})
+				Hint:   i18n.T("doctor.docker_service.hint", cfg.Distro)})
 		}
 	} else {
-		c.skip("docker_service", "docker.service active", "engine")
+		c.skip("docker_service", i18n.T("doctor.docker_service.title"), "engine")
 	}
 
 	// 6. api
@@ -206,21 +207,21 @@ func (c *checker) run(ctx context.Context) {
 	if engineOK {
 		c.checkLoopback(ctx)
 	} else {
-		c.skip("loopback_only", "API 只綁 loopback", "engine")
+		c.skip("loopback_only", i18n.T("doctor.loopback.title"), "engine")
 	}
 
 	// 8. linger
 	if systemdOK {
 		out, _ := c.runIn(ctx, "", "loginctl", "show-user", cfg.User, "--property=Linger", "--value")
 		if out == "yes" {
-			c.add(Result{ID: "linger", Title: "linger 已啟用", Level: OK})
+			c.add(Result{ID: "linger", Title: i18n.T("doctor.linger.title"), Level: OK})
 		} else {
-			c.add(Result{ID: "linger", Title: "linger 已啟用", Level: Warn,
-				Detail: fmt.Sprintf("loginctl Linger=%q（使用者 %s）", out, cfg.User),
+			c.add(Result{ID: "linger", Title: i18n.T("doctor.linger.title"), Level: Warn,
+				Detail: i18n.T("doctor.linger.detail", out, cfg.User),
 				Hint:   "wsl -d " + cfg.Distro + " -u root -- loginctl enable-linger " + cfg.User})
 		}
 	} else {
-		c.add(Result{ID: "linger", Title: "linger 已啟用", Level: Warn, Detail: "skipped: systemd 未就緒"})
+		c.add(Result{ID: "linger", Title: i18n.T("doctor.linger.title"), Level: Warn, Detail: i18n.T("doctor.linger.skipped")})
 	}
 
 	// 9. desktop
@@ -231,12 +232,12 @@ func (c *checker) run(ctx context.Context) {
 func (c *checker) checkAPI(ctx context.Context) {
 	cfg := c.d.Cfg
 	if c.d.API == nil {
-		c.add(Result{ID: "api_ping", Title: "Docker API _ping", Level: Fail, Category: "api", Detail: "no client"})
+		c.add(Result{ID: "api_ping", Title: i18n.T("doctor.api.title"), Level: Fail, Category: "api", Detail: "no client"})
 		return
 	}
 	err := c.d.API.Ping(ctx)
 	if err == nil {
-		c.add(Result{ID: "api_ping", Title: "Docker API _ping", Level: OK, Detail: cfg.APIEndpoint})
+		c.add(Result{ID: "api_ping", Title: i18n.T("doctor.api.title"), Level: OK, Detail: cfg.APIEndpoint})
 		return
 	}
 	// 分辨：埠沒人聽 vs 有人聽但不是 Docker
@@ -252,14 +253,14 @@ func (c *checker) checkAPI(ctx context.Context) {
 		}
 	}
 	if dial(ctx, addr) == nil {
-		c.add(Result{ID: "api_ping", Title: "Docker API _ping", Level: Fail, Category: "api",
-			Detail: fmt.Sprintf("%s 有服務監聽但不是 Docker（not Docker）：%v", cfg.APIEndpoint, err),
-			Hint:   "埠被其他程式占用；重新執行 wsld init 讓 bootstrap 換埠，或修改 config.toml 的 api_endpoint"})
+		c.add(Result{ID: "api_ping", Title: i18n.T("doctor.api.title"), Level: Fail, Category: "api",
+			Detail: i18n.T("doctor.api.not_docker", cfg.APIEndpoint, err),
+			Hint:   i18n.T("doctor.api.not_docker_hint")})
 		return
 	}
-	c.add(Result{ID: "api_ping", Title: "Docker API _ping", Level: Fail, Category: "api",
-		Detail: fmt.Sprintf("%s 無回應：%v", cfg.APIEndpoint, err),
-		Hint:   "執行 wsld start；仍失敗則確認 /etc/docker/daemon.json 的 hosts 含 tcp://127.0.0.1:<port> 且與 config 一致"})
+	c.add(Result{ID: "api_ping", Title: i18n.T("doctor.api.title"), Level: Fail, Category: "api",
+		Detail: i18n.T("doctor.api.unreachable", cfg.APIEndpoint, err),
+		Hint:   i18n.T("doctor.api.unreachable_hint")})
 }
 
 var hostRe = regexp.MustCompile(`tcp://([^"'\s]+)`)
@@ -268,7 +269,7 @@ func (c *checker) checkLoopback(ctx context.Context) {
 	cfg := c.d.Cfg
 	port, err := cfg.APIPort()
 	if err != nil {
-		c.add(Result{ID: "loopback_only", Title: "API 只綁 loopback", Level: Fail, Category: "engine", Detail: err.Error()})
+		c.add(Result{ID: "loopback_only", Title: i18n.T("doctor.loopback.title"), Level: Fail, Category: "engine", Detail: err.Error()})
 		return
 	}
 	var bad []string
@@ -298,12 +299,12 @@ func (c *checker) checkLoopback(ctx context.Context) {
 		}
 	}
 	if len(bad) > 0 {
-		c.add(Result{ID: "loopback_only", Title: "API 只綁 loopback", Level: Fail, Category: "engine",
-			Detail: "非 loopback 監聽：" + strings.Join(bad, ", "),
-			Hint:   "daemon.json 的 hosts 只允許 unix socket 與 tcp://127.0.0.1:<port>；修正後 systemctl restart docker"})
+		c.add(Result{ID: "loopback_only", Title: i18n.T("doctor.loopback.title"), Level: Fail, Category: "engine",
+			Detail: i18n.T("doctor.loopback.bad", strings.Join(bad, ", ")),
+			Hint:   i18n.T("doctor.loopback.hint")})
 		return
 	}
-	c.add(Result{ID: "loopback_only", Title: "API 只綁 loopback", Level: OK, Detail: fmt.Sprintf("127.0.0.1:%d", port)})
+	c.add(Result{ID: "loopback_only", Title: i18n.T("doctor.loopback.title"), Level: OK, Detail: fmt.Sprintf("127.0.0.1:%d", port)})
 }
 
 func splitHostPort(s string) (host, port string) {
@@ -345,22 +346,22 @@ func (c *checker) checkDesktop(ctx context.Context, list []wsl.Distro) {
 		}
 	}
 	if len(hits) > 0 {
-		c.add(Result{ID: "docker_desktop", Title: "Docker Desktop 未同時運行", Level: Warn,
+		c.add(Result{ID: "docker_desktop", Title: i18n.T("doctor.desktop.title"), Level: Warn,
 			Detail: strings.Join(hits, ", "),
-			Hint:   "建議不要雙引擎混用：關閉 Docker Desktop（或停用其 WSL integration），CLI/GUI 只看 wsld 管理的引擎"})
+			Hint:   i18n.T("doctor.desktop.hint")})
 		return
 	}
-	c.add(Result{ID: "docker_desktop", Title: "Docker Desktop 未同時運行", Level: OK})
+	c.add(Result{ID: "docker_desktop", Title: i18n.T("doctor.desktop.title"), Level: OK})
 }
 
 func (c *checker) infoChecks() {
 	cfg := c.d.Cfg
-	c.add(Result{ID: "config", Title: "設定", Level: Info,
+	c.add(Result{ID: "config", Title: i18n.T("doctor.config.title"), Level: Info,
 		Detail: fmt.Sprintf("distro=%s user=%s api_endpoint=%s", cfg.Distro, cfg.User, cfg.APIEndpoint),
-		Hint:   "檔案：" + config.DefaultPath()})
-	c.add(Result{ID: "repo_location", Title: "專案位置", Level: Info,
-		Detail: "原始碼請放在 WSL 的 $HOME（例如 ~/Projects），不要放 C:\\（/mnt/c）",
-		Hint:   "跨檔案系統 bind mount 慢且權限行為不同"})
+		Hint:   i18n.T("doctor.config.hint", config.DefaultPath())})
+	c.add(Result{ID: "repo_location", Title: i18n.T("doctor.repo.title"), Level: Info,
+		Detail: i18n.T("doctor.repo.detail"),
+		Hint:   i18n.T("doctor.repo.hint")})
 }
 
 // WindowsProcesses 以 tasklist 取得程序名（非 Windows 回傳 nil）。
