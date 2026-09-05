@@ -1,0 +1,128 @@
+# wsl-docker Roadmap
+
+版本：0.4  
+對應規格：[SPEC.md](SPEC.md)（**v1.0 決策已鎖定**）
+
+## 總覽
+
+```text
+Phase 0  規格／倉庫骨架 + v1 決策鎖定     ← 目前（決策已關）
+Phase 1  Bootstrap 腳本可手動跑通
+Phase 2  共用核心 + wsld CLI
+Phase 3  GUI v1（Wails + Playwright）
+Phase 4  打磨（v1.0 必要）
+Phase 5  （可選）npiperelay、自動更新、多 distro
+Phase 6  WinUI 3 GUI                       ← v2.0
+
+v1.0 = Phase 1 + 2 + 3 + 4 完成並通過 SPEC §6
+v2.0 = Phase 6
+```
+
+---
+
+## Phase 0 — 規格與倉庫
+
+- [x] 倉庫結構、README、SPEC、ROADMAP、ARCHITECTURE、config.example
+- [x] GUI 納入 v1.0；WinUI 列 v2.0
+- [x] TDD + UI 測試 rule
+- [x] grill-me 關閉 v1 開放問題並回寫 SPEC §2
+
+**退出條件**：可開始 Phase 1。
+
+---
+
+## Phase 1 — Bootstrap
+
+**目標**：腳本裝好 Ubuntu + rootful dockerd + `127.0.0.1:23750`（可換埠）。
+
+### 交付
+
+- `scripts/01-enable-wsl.ps1`
+- `scripts/02-bootstrap-docker.sh`（CE + Compose plugin + linger + hosts）
+- `docs/BOOTSTRAP.md`
+
+### 完成定義
+
+- [ ] 手動跑通；Windows `curl http://127.0.0.1:<port>/_ping` → `OK`
+- [ ] WSL `docker info`／`docker compose version` 成功
+- [ ] 只綁 loopback；占用時能選下一埠（與 SPEC 一致）
+
+---
+
+## Phase 2 — Core + `wsld` CLI
+
+### 交付
+
+- Go module；`cmd/wsld`；`internal/{lifecycle,dockerapi,config,doctor}`
+- `%APPDATA%\wsl-docker\config.toml`
+- 命令：`init`／`start`／`status`／`ps`／`logs`／`start-ct`／`stop-ct`／`doctor`（退出碼 0–4）
+- TDD；`docs/TESTING.md`（Go 部分）
+
+### 完成定義
+
+- [ ] SPEC CLI 行為與退出碼
+- [ ] 無 Desktop 可驗證生命週期＋API
+- [ ] 自動換埠寫入 config
+
+---
+
+## Phase 3 — GUI v1（Wails + Playwright）
+
+### 交付
+
+- `wsld-gui.exe`（Wails v2）：Tray、列表、Start／Stop、Logs（100／Live）、**Exec 終端**、狀態列
+- 刷新：前景 3s；Tray／失焦暫停
+- 語系：跟 OS（zh→繁中）
+- `docs/GUI.md`；Playwright 關鍵路徑；`docs/TESTING.md` UI 指令
+- 與 `internal` 共用，禁止雙重邏輯
+
+### 完成定義
+
+- [ ] SPEC §5.5／§6 GUI 相關項
+- [ ] UI 測試一鍵可跑
+
+---
+
+## Phase 4 — 打磨（**v1.0 必要**）
+
+### 交付
+
+- 錯誤字串（WSL／systemd／埠／Desktop）
+- README 快速開始（CLI + GUI）
+- 登入起 Tray：**可選、預設關**
+- 重開機文件、Desktop 並存建議、已知限制
+- `LICENSE`（MIT）
+
+### 完成定義
+
+- [ ] SPEC §6 全過 → **宣告 v1.0**
+
+---
+
+## Phase 5 — 可選（v1 後）
+
+- npiperelay、多 distro、自動更新、Compose 專案視圖等
+
+## Phase 6 — WinUI（v2.0）
+
+- 見 SPEC §1.4；另訂 `docs/GUI-WINUI.md`
+
+---
+
+## 優先序
+
+1. 碼在 WSL、引擎同 distro（rootful）  
+2. 本機 TCP（23750+）  
+3. v1.0 = Phase 1–4；TDD + Playwright  
+4. v2.0 = WinUI  
+5. 只綁 127.0.0.1  
+6. GUI／CLI 共用 core  
+
+## 里程碑
+
+| Phase | 版本角色 |
+|-------|----------|
+| 0 | 前置（已鎖定決策） |
+| 1–4 | **v1.0 必要** |
+| 5 | 之後可選 |
+| 6 | **v2.0** |

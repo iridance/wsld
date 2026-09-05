@@ -1,0 +1,40 @@
+---
+description: TDD 開發流程；每次 UI 改動須有可自動驗證的 UI 測試
+alwaysApply: true
+---
+
+# TDD 與 UI 驗證
+
+## TDD（所有功能／bugfix）
+
+1. **先寫失敗的測試**（紅）→ 寫最小實作（綠）→ 重構；禁止先實作再補測當預設流程。
+2. 業務邏輯（`internal/*`、lifecycle、dockerapi、config、doctor）必須有**單元／整合測試**可在 CI 或本機一鍵跑。
+3. 每個 PR／完成項：相關測試必須通過；不得以「之後再測」合併 UI 或 core 行為變更。
+
+## UI 改動／新增（強制）
+
+每次新增或修改 GUI（含 Tray、主視窗、列表、按鈕、狀態列、對話框）必須同時交付：
+
+1. **可自動執行的 UI 測試**（等價於 Web 的 Playwright），驗證該次改動的可見行為。
+2. 測試須能穩定重跑（盡量不依賴手動點擊）；需要時用 mock／fake Docker API 或測試用 endpoint。
+3. 合併前至少跑通：core 測試 + 受影響的 UI 測試。
+
+### 工具（v1 已鎖定）
+
+| UI 技術 | UI 檢驗 |
+|---------|---------|
+| **Wails v2／WebView2**（v1） | **Playwright** |
+| v2 WinUI | WinAppDriver／Appium Windows／UIA（Phase 6 另訂） |
+
+標準指令寫入 `docs/TESTING.md`／`docs/GUI.md` 後，所有 UI 工作依該指令驗證。
+
+## 反例
+
+- ❌ 改完畫面只靠人工「看一下」
+- ❌ 只有 core 單測、UI 零覆蓋就宣告完成
+- ❌ 先合 UI、測試票另開且無期限
+
+## 正例
+
+- ✅ 新增「Stop 按鈕」→ 先寫 UI 測試：點 Stop 後列狀態變為 exited（mock API）→ 再實作
+- ✅ 改狀態列文案／顏色 → UI 測試斷言對應 role／test id／可存取名稱

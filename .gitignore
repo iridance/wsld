@@ -1,0 +1,15 @@
+# Binaries
+/wdh
+/wdh.exe
+/bin/
+/dist/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local config (never commit real machine config)
+/config.local.toml

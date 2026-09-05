@@ -1,0 +1,2 @@
+# internal 套件佔位（Phase 2）
+# 建議分包：lifecycle / dockerapi / config / doctor
