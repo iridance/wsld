@@ -14,12 +14,25 @@ test("shows status bar with distro, endpoint and connected badge", async ({ page
   await expect(page.getByTestId("status-version")).toHaveText("vtesthost");
 });
 
+test("layout: status bar sticks to the bottom and list fills the rest (banner hidden)", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 640 });
+  await open(page);
+  await expect(page.getByTestId("error-banner")).toBeHidden();
+  const footer = await page.getByTestId("status-bar").boundingBox();
+  const list = await page.getByTestId("container-list").boundingBox();
+  expect(footer).not.toBeNull();
+  expect(list).not.toBeNull();
+  expect(Math.round(footer!.y + footer!.height)).toBe(640);
+  expect(footer!.height).toBeLessThan(60);
+  expect(list!.height).toBeGreaterThan(400);
+});
+
 test("lists running containers by default; 'Show stopped' reveals exited ones", async ({ page }) => {
   await open(page);
   await expect(row(page, "web")).toBeVisible();
   await expect(row(page, "web")).toHaveAttribute("data-state", "running");
   await expect(row(page, "web")).toContainText("nginx:1.27");
-  await expect(row(page, "web")).toContainText("8080→80/tcp");
+  await expect(row(page, "web").getByTestId("ports-web")).toHaveText("8080→80/tcp"); // IPv4/IPv6 去重
   await expect(row(page, "db")).toHaveCount(0);
 
   await page.getByTestId("chk-show-all").check();

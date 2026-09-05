@@ -14,7 +14,9 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); }
-#app { display: grid; grid-template-rows: auto auto 1fr auto; height: 100vh; }
+/* flex 欄位：banner 隱藏（display:none）時不會像 grid 那樣讓 footer 掉到 1fr 行 */
+#app { display: flex; flex-direction: column; height: 100vh; }
+#app > main { flex: 1; min-height: 0; }
 
 header {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px;

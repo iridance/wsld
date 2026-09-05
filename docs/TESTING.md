@@ -3,22 +3,25 @@
 一鍵：
 
 ```bash
-make test          # scripts + Go
+make test          # scripts + Go + UI
 make test-go       # 只跑 Go（含 windows 交叉 vet）
 make test-scripts  # bats + shellcheck + Pester
-make test-ui       # Playwright（Phase 3；見 docs/GUI.md）
+make test-ui       # 建前端 + Playwright（見 docs/GUI.md）
 ```
 
-前置：Go 1.22+（本機用 `~/.local/go`）、bats-core、shellcheck；Pester 用 Windows PowerShell 5.1 內建版本（透過 WSL interop 呼叫 `powershell.exe`）。
+前置：Go 1.22+（本機用 `~/.local/go`）、bats-core、shellcheck；Pester 用 Windows PowerShell 5.1 內建版本（透過 WSL interop 呼叫 `powershell.exe`）；Node 20+ 與 `npx playwright install chromium`。
+
+Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `libasound2t64`：用 `apt-get download` + `dpkg -x` 解到 `~/.local/lib/pw`，執行時帶 `LD_LIBRARY_PATH=$HOME/.local/lib/pw`。
 
 ## 層級
 
 | 層 | 工具 | 範圍 | 說明 |
 |---|---|---|---|
 | Bootstrap 腳本 | bats、shellcheck、Pester | `scripts/lib/*`、`scripts/tests/*` | 純函式：埠選擇、daemon.json、wsl.conf、參數、`wsl -l -v` 解析 |
-| Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
-| CLI 端到端 | 手動／CI Windows runner | `dist/wsld.exe` | 見下方「實機驗收」 |
-| GUI | Playwright | `frontend/`（Phase 3） | 見 `docs/GUI.md` |
+| Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli,gui}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
+| GUI 橋接 | `go test ./internal/gui` | `/api/*` HTTP + WebSocket（token、CORS、logs 串流、exec） | `FakeEngine`／`FakeLifecycle` |
+| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（18 案） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
+| CLI／GUI 端到端 | 手動／CI Windows runner | `dist/wsld.exe`、`dist/wsld-gui.exe` | 見下方「實機驗收」與 `docs/GUI.md` |
 
 ## Go 測試設計
 
@@ -51,9 +54,10 @@ DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d --name t -v "$PWD:/app" alpine s
 ```
 
 2026-09-06 於 Ubuntu-26.04（WSL2）實測：Docker CE 29.8.0、Compose v5.5.1、埠 23750、doctor 11 OK。
+同日 `wsld-gui.exe` 實測：WebView2 開窗、已連線、列出 `nginx:alpine` 容器（埠去重）、按 X 縮 Tray、`--tray` 隱藏啟動。
 
 ## 規範
 
 - TDD：先寫失敗測試再實作（`.cursor/rules/tdd-and-ui-testing.mdc`）。
 - 新增 `wsl.exe` 互動 → 先加 fake 回應；新增 API 端點 → 先加 httptest 案例。
-- UI 改動必附 Playwright 測試（Phase 3 起）。
+- UI 改動必附 Playwright 測試；需要新情境時先擴充 `FakeEngine`／`/__test/*` 再寫 spec。

@@ -49,7 +49,11 @@ func (f *FakeEngine) Reset() {
 	f.execEcho = true
 	f.LastResize = [2]int{}
 	f.mu.Unlock()
-	f.AddContainer("web", "nginx:1.27", "running", []dockerapi.Port{{IP: "0.0.0.0", PrivatePort: 80, PublicPort: 8080, Type: "tcp"}})
+	// dual-stack 發佈埠會回傳 IPv4 與 IPv6 兩筆，前端須去重
+	f.AddContainer("web", "nginx:1.27", "running", []dockerapi.Port{
+		{IP: "0.0.0.0", PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+		{IP: "::", PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+	})
 	f.AddContainer("db", "postgres:16", "exited", nil)
 	f.AppendLog("web", "nginx started", "GET / 200")
 }

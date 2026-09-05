@@ -9,8 +9,8 @@
 Phase 0  規格／倉庫骨架 + v1 決策鎖定     ✅
 Phase 1  Bootstrap 腳本可手動跑通         ✅
 Phase 2  共用核心 + wsld CLI              ✅
-Phase 3  GUI v1（Wails + Playwright）     ← 目前
-Phase 4  打磨（v1.0 必要）
+Phase 3  GUI v1（Wails + Playwright）     ✅
+Phase 4  打磨（v1.0 必要）                ← 目前
 Phase 5  （可選）npiperelay、自動更新、多 distro
 Phase 6  WinUI 3 GUI                       ← v2.0
 
@@ -78,8 +78,8 @@ v2.0 = Phase 6
 
 ### 完成定義
 
-- [ ] SPEC §5.5／§6 GUI 相關項
-- [ ] UI 測試一鍵可跑
+- [x] SPEC §5.5／§6 GUI 相關項（Wails v2 + systray；`internal/gui` HTTP/WS 橋接；實機驗證見 docs/GUI.md）
+- [x] UI 測試一鍵可跑（`make test-ui`：Playwright 18 案 + `go test ./internal/gui`）
 
 ---
 

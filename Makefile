@@ -4,9 +4,9 @@ export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 VERSION ?= 0.1.0-dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win fmt
+.PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt
 
-test: test-scripts test-go
+test: test-scripts test-go test-ui
 
 test-go:
 	gofmt -l ./internal ./cmd ./scripts | tee /dev/stderr | test -z "$$(cat)"
@@ -17,9 +17,23 @@ test-go:
 fmt:
 	gofmt -w ./internal ./cmd ./scripts
 
-build-win:
+build-win: build-gui
 	mkdir -p dist
 	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/wsld.exe ./cmd/wsld
+
+# 前端（Vite）→ frontend/dist，供 go:embed 與 Playwright 使用
+build-frontend:
+	cd frontend && npm ci --no-audit --no-fund && npm run build
+
+# Wails v2 GUI（Windows；WebView2 執行期由 Wails 自帶 bootstrapper 處理）
+build-gui: build-frontend
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 go build -trimpath -tags desktop,production \
+	  -ldflags "$(LDFLAGS) -H windowsgui" -o dist/wsld-gui.exe ./cmd/wsld-gui
+
+# Playwright UI 測試：以 wsld-gui-testhost（fake backend）驅動同一套前端
+test-ui: build-frontend
+	cd frontend && npm test
 
 test-scripts: lint-scripts test-scripts-bash test-scripts-ps
 

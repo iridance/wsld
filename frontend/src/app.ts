@@ -296,7 +296,7 @@ export class App {
           el("td", { text: c.Image }),
           el("td", {}, el("span", { class: `state ${c.State}`, "data-testid": `state-${n}`, text: c.State })),
           el("td", { text: c.Status }),
-          el("td", { text: ports(c) }),
+          el("td", { "data-testid": `ports-${n}`, text: ports(c) }),
           el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn),
         ),
       );
@@ -412,9 +412,13 @@ function name(c: Container): string {
   return (c.Names?.[0] ?? c.Id.slice(0, 12)).replace(/^\//, "");
 }
 
+/** 已發佈埠；dual-stack（0.0.0.0 與 ::）會各回一筆，去重後依對外埠排序。 */
 function ports(c: Container): string {
+  const seen = new Set<string>();
   return (c.Ports ?? [])
     .filter((p) => p.PublicPort)
+    .sort((a, b) => a.PublicPort - b.PublicPort)
     .map((p) => `${p.PublicPort}→${p.PrivatePort}/${p.Type}`)
+    .filter((s) => !seen.has(s) && seen.add(s))
     .join(", ");
 }
