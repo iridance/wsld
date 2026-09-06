@@ -33,6 +33,10 @@ test("compose containers are grouped under a project header with service names a
   await expect(group(page, "shop").getByTestId("group-stop")).toBeVisible();
   await expect(group(page, "shop").getByTestId("group-stop").locator("svg.ico")).toHaveAttribute("data-icon", "stop");
   await expect(group(page, "shop").getByTestId("group-start").locator("svg.ico")).toHaveAttribute("data-icon", "play");
+  await expect(group(page, "shop").getByTestId("group-info").locator("svg.ico")).toHaveAttribute("data-icon", "info");
+  await expect(group(page, "shop").getByTestId("group-start")).toHaveText("");
+  await expect(group(page, "shop").getByTestId("group-stop")).toHaveText("");
+  expect(await group(page, "shop").getByTestId("group-start").evaluate((e) => getComputedStyle(e).borderStyle)).toBe("none");
 
   // 組內以 service 名顯示，完整容器名保留在 data-name／title
   const api = row(page, "shop-api-1");

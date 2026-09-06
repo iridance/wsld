@@ -10,7 +10,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 |---|---|
 | CLI | `wsld start`（喚醒 distro → 確認 systemd → `systemctl start docker` → 等 `_ping`；實測約 3 秒） |
 | GUI | 開 `wsld-gui.exe`，按「啟動引擎」；或 Tray 選單「啟動引擎」 |
-| 登入自啟 | 設定 → 勾「登入時啟動 Tray」（HKCU Run 值 `wsld`，預設關）。Tray 起來後仍需按一次「啟動引擎」，v1 不會自動拉起 dockerd |
+| 登入自啟 | 設定 → 勾「登入時啟動 Tray」（HKCU Run 值 `wsld`，預設關）。Tray 起來後仍需按一次「啟動引擎」，預設不會自動拉起 dockerd |
 
 `wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。
 
@@ -68,21 +68,20 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 ## Machines：管理多個 WSL 發行版
 
-- GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤 `wsld` 為 `config.toml` 目前管理的 distro，`default` 為 WSL 預設。
-- ⓘ 顯示該 distro 的 `/etc/wsl.conf`（以 root 執行 `cat`），並判定 `[boot] systemd=true`；沒有檔案時顯示「(no /etc/wsl.conf)」。
+- GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
+- **0.5**：可「設為目前」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
 - 「新增發行版」執行 `wsl --install -d <name> --no-launch`。安裝完成後：
   1. `wsl -d <name>` 進入一次，依提示建立預設使用者；
-  2. 若要改由 wsld 管理該 distro，執行 `wsld init`（會在其中安裝 Docker 並改寫 `config.toml` 的 distro）。
+  2. 設為目前後執行 `wsld init`（或等效）以安裝 Docker 並寫入該 machine 的 endpoint。
 
-## 已知限制（v1.0）
+## 已知限制（現行／0.5 目標）
 
-- **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64。
-- **單一 distro**：一個 config 對應一個 distro；多 distro 為 Phase 5。
-- **rootful dockerd**：容器以 root 執行 dockerd（bootstrap 有把使用者加入 `docker` 群組）。rootless 不在 v1。
-- **無 npiperelay**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
+- **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64（arm64 延後）。
+- **多 distro（0.5 目標）**：多 profile、單一 active；每 managed machine 自有 API 埠。基底階段仍為單一 distro config，實作前請見 Roadmap Phase 5。
+- **rootful dockerd**：容器以 root 執行 dockerd（bootstrap 有把使用者加入 `docker` 群組）。rootless 不在範圍。
+- **無 npiperelay（延後）**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
 - **GUI**：
-  - 淺色主題；Tray 選單語系啟動時決定。
+  - 0.5 目標：Theme Light／Dark／System；Settings 在側欄；header 無 tcp 路徑。
   - 「登入時啟動 Tray」只起 Tray，不自動啟動引擎。
-  - 執行檔未含版本資源／圖示（`.syso`）。
-- **自動更新**：無；以發布頁下載新版覆蓋。
+- **自動更新（延後）**：無；以發布頁下載新版覆蓋。
 - **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。

@@ -43,6 +43,7 @@ func newEnv(t *testing.T, token string) *env {
 		LoadConfig:     func() (config.Config, error) { return config.Load(e.cfgP) },
 		SaveConfig:     func(c config.Config) error { return config.Save(e.cfgP, c) },
 		OnWindowAction: func(a string) { e.window = append(e.window, a) },
+		OnDistroAction: func(a string) error { e.window = append(e.window, a); return nil },
 	}
 	e.s = s
 	e.srv = httptest.NewServer(s.Handler())
@@ -403,6 +404,21 @@ func TestWindowActions(t *testing.T) {
 	}
 	if strings.Join(e.window, ",") != "hide,show,quit" {
 		t.Fatalf("window = %v", e.window)
+	}
+}
+
+func TestDistroActions(t *testing.T) {
+	e := newEnv(t, "")
+	for _, a := range []string{"open-folder", "open-terminal"} {
+		if resp, _ := e.req(t, "POST", "/api/distro/"+a, ""); resp.StatusCode != 200 {
+			t.Fatal(a, resp.StatusCode)
+		}
+	}
+	if resp, _ := e.req(t, "POST", "/api/distro/explode", ""); resp.StatusCode != 400 {
+		t.Fatal(resp.StatusCode)
+	}
+	if strings.Join(e.window, ",") != "open-folder,open-terminal" {
+		t.Fatalf("actions = %v", e.window)
 	}
 }
 

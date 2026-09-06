@@ -1,7 +1,7 @@
 # wsl-docker 產品規格（SPEC）
 
-版本：0.4  
-狀態：**v1.0 已實作並通過 §6 驗收**（2026-09-06，Ubuntu-26.04 實機）  
+版本：0.5  
+狀態：**0.5 功能定義開放中**（Phase 0–4 基底已於 2026-09-06 通過 §6 驗收；Phase 5 見 Roadmap）  
 最後更新：2026-09-06
 
 ## 1. 問題與目標
@@ -19,26 +19,29 @@
 | 角色 | 責任 |
 |------|------|
 | WSL Ubuntu | 「machine」：原始碼、git、shell；同機執行 **rootful dockerd** |
-| `wsld`（CLI） | 建立／啟動 WSL、ensure dockerd、腳本化管理 |
+| `wsld`（CLI） | 建立／啟動 WSL、ensure dockerd、腳本化管理；可切換 active machine |
 | `wsld-gui`（GUI） | Tray + 主視窗；與 CLI **共用** Go `internal` core |
 
-### 1.3 第一版（v1.0）必須有
+### 1.3 基底（Phase 1–4，已落地）
 
-- **Phase 1–4 全部完成**（含打磨；見 Roadmap）
-- Windows **GUI**（Wails v2）：Tray + 主視窗（列表、Start／Stop、Logs、**Exec 終端**、一鍵 ensure）——**非 WinUI**
+- Windows **GUI**（Wails v2）：Tray + 主視窗——**非 WinUI**
 - Windows **CLI** `wsld` + 獨立 **`wsld-gui.exe`**
-- WSL bootstrap：Docker CE（rootful）+ Compose plugin + API `127.0.0.1:23750`（可自動換埠）
+- WSL bootstrap：Docker CE（rootful）+ Compose plugin + API `127.0.0.1:23750+`（可自動換埠）
 - TDD；UI 變更以 **Playwright** 驗證
 - 授權：**MIT**；正式散佈目標：**windows/amd64**
 
-### 1.4 第二版（v2.0）目標
+### 1.3a 產品 0.5（Phase 5，定義中）
+
+見 [ROADMAP.md](ROADMAP.md) Phase 5：多 distro（單一 active）、Machines／Containers 補完、Settings 側欄＋theme、Info summary、UI 打磨。
+
+### 1.4 之後（v2.0）目標
 
 - **WinUI 3** UI（Roadmap Phase 6）
-- 功能至少對齊 v1 GUI；與同一引擎／CLI 行為一致
+- 功能至少對齊當時 GUI；與同一引擎／CLI 行為一致
 
-### 1.5 非目標（v1.0）
+### 1.5 非目標（0.5）
 
-- WinUI、arm64 正式支援、開 WSL 通用終端按鈕（僅容器 Exec）
+- WinUI、arm64 正式支援、npiperelay、自動更新、專用隔離 distro 旗標
 - Kubernetes、Compose 視覺 IDE
 - 以 `C:\` 為一等公民專案路徑
 - SSH／暴露 `0.0.0.0` 上的 Docker API
@@ -66,7 +69,8 @@
 | 語系 | 跟隨 Windows；中文→繁中，其餘英；缺譯用英 |
 | 架構 | windows/amd64 only |
 | 授權 | MIT |
-| v1.0 範圍 | Phase 1+2+3+**4** |
+| 基底範圍 | Phase 1+2+3+4（已落地） |
+| 0.5 範圍 | Phase 5（多 distro＋GUI 補完；見 Roadmap） |
 
 ## 3. 使用者工作流
 
@@ -112,6 +116,7 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 - 偵測已安裝 Ubuntu 系列並沿用；否則 `wsl --install` 官方 Ubuntu
 - `wsl.conf`：`systemd=true`
 - `loginctl enable-linger`：啟用（doctor 會查）
+- **0.5**：可管理多個 distro profile，同一時間一個 active（見 Roadmap Phase 5）
 
 ## 5. 元件規格
 
@@ -132,15 +137,20 @@ wsl-docker/
 
 ### 5.2 Config（`%APPDATA%\wsl-docker\config.toml`）
 
+基底（扁平，仍可讀；0.5 載入時自動遷移）：
+
 ```toml
 distro = "Ubuntu-26.04"
 user = "irice"
 api_endpoint = "tcp://127.0.0.1:23750"
-# exec_shell = ""          # 空則 bash→sh
+# exec_shell = ""
 # refresh_interval_sec = 3
 # tray_autostart = false
 # api_timeout_sec = 10
+# lang = "en"
 ```
+
+0.5 目標形狀（示意）：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 machine（各含 `distro`／`user`／`api_endpoint`）。詳見 Roadmap Phase 5。
 
 ### 5.3 Bootstrap
 
@@ -159,9 +169,10 @@ api_endpoint = "tcp://127.0.0.1:23750"
 
 | 命令 | 行為 |
 |------|------|
-| `init` | distro 策略、bootstrap、寫 config（含選到的 API port） |
-| `start` | 喚醒 distro、ensure docker、探測 API |
-| `status` | WSL／docker／API 狀態 |
+| `init` | distro 策略、bootstrap、寫／更新該 machine profile（含 API port）並可設 active |
+| `start` | 喚醒 active distro、ensure docker、探測 API |
+| `use` | 切換 active machine（0.5；與 GUI「設為目前」同寫 config） |
+| `status` | WSL／docker／API 狀態（對準 active） |
 | `ps` | 容器列表 |
 | `logs <id>` | 預設尾部 100 行；`--follow` 可選 |
 | `start-ct`／`stop-ct` | 啟停容器 |
@@ -183,17 +194,18 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | 區域 | 功能 |
 |------|------|
 | Tray | 狀態、Ensure／Start、開主視窗、退出；登入自啟預設關 |
-| 版面 | 上：header（distro、連線、endpoint、刷新間隔、啟動引擎、設定）；左：side nav（大型 icon + 文字）；下：footer（版本、語言） |
-| Containers | 固定顯示全部容器（含已停止）；刷新（前景 3s；失焦／Tray 暫停）；Start／Stop／Logs／Terminal 純圖示操作；compose 分組；欄寬可拖曳 |
-| Images | 列表（repo:tag、ID、大小、建立、使用中）、移除、清除未使用（= `image prune -a`）；使用中不強制刪 |
-| Volumes | 列表、移除、清除未使用（= `volume prune -a`）；使用中不強制刪 |
+| 版面 | 上：header（active distro＋有 border 的 folder／terminal、連線徽章、啟動引擎；**無** Settings、**無** tcp 路徑）；左：side nav（Containers…Machines＋**Settings**）；右：Info drawer；下：footer（版本、語言） |
+| Containers | 固定顯示全部；刷新可設定；Start／Stop／Logs／Terminal／Info／**Remove**；右側 Info＝summary（Name／ID／Image／State／Status／Created／Started／Command／Ports／Networks／Mounts／Labels／Restart）；compose 分組；欄寬可拖曳 |
+| Images | 列表、移除、清除未使用；使用中不強制刪 |
+| Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 唯讀列表 |
-| Machines | 本機 WSL 發行版（狀態、版本、wsld／default 角色）、查看 wsl.conf 與 systemd、以 `wsl --install --no-launch` 新增 |
+| Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增發行版 |
+| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System） |
 | Logs | 預設 100 行；Live 預設關 |
-| Terminal | 選中容器 Exec；bash→sh；config 可覆寫 |
-| 破壞性操作 | 一律確認對話框；Docker 409 原樣呈現，不自動 force |
+| Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |
+| 破壞性操作 | 一律確認；unregister 需輸入名稱；Remove 容器可含 running（會停止） |
 | 語系 | 預設英；右下角可切繁中並寫入 config |
-
+| 多 distro | 多 profile、單一 active；`wsld use`／Machines 切換作用於全部功能 |
 詳細互動與 test id 寫入 `docs/GUI.md`（Phase 3）。
 
 ### 5.6 doctor（標準組）
@@ -215,7 +227,9 @@ api_endpoint = "tcp://127.0.0.1:23750"
 - UI：Playwright（每次 UI 改動）
 - 指令見 `docs/TESTING.md`
 
-## 6. 驗收標準（v1.0）
+## 6. 驗收標準（基底／曾稱 v1.0）
+
+Phase 0–4 已於 2026-09-06 通過下列項目（Ubuntu-26.04 實機）。**0.5 另以 Roadmap Phase 5 完成定義為準**。
 
 1. 無 Docker Desktop 亦可：`init` → ensure → CLI／GUI 列表。  
 2. GUI：冷開 → Start → 列表；Start／Stop；Logs；**Exec 終端可用**。  
@@ -228,7 +242,8 @@ api_endpoint = "tcp://127.0.0.1:23750"
 9. Phase 4 打磨項完成（錯誤文案、重開機文件、已知限制、Desktop 建議）。  
 10. MIT `LICENSE`；散佈 amd64。
 
-## 7. 仍開放（非 v1 阻擋）
+## 7. 仍開放／延後
 
+- 0.5（Phase 5）定義／實作中：多 distro、Settings 側欄、Info／Remove／Machines 動作等（見 Roadmap）
 - v2 WinUI 與 Go core 整合方式、WinAppDriver／UIA（Phase 6 前）
-- arm64、專用隔離 distro 旗標、npiperelay（Phase 5+）
+- 延後：arm64、專用隔離 distro 旗標、npiperelay、自動更新

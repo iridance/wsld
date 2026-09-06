@@ -70,6 +70,8 @@ type Server struct {
 	Assets http.Handler
 	// OnWindowAction 讓 Wails 端處理 show/hide/quit（測試主機記錄即可）。
 	OnWindowAction func(action string)
+	// OnDistroAction 開啟 distro 資料夾／終端（測試主機記錄即可）；回傳錯誤會轉成 500。
+	OnDistroAction func(action string) error
 	// OnLangChange 於設定頁切換語系後呼叫（Tray 選單文字需重建）。
 	OnLangChange func(l i18n.Lang)
 
@@ -112,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
+	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
 	if s.Assets != nil {
 		mux.Handle("/", s.Assets)
 	}
@@ -535,6 +538,29 @@ func (s *Server) handleWindow(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.OnWindowAction != nil {
 		s.OnWindowAction(action)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": action})
+}
+
+func (s *Server) handleDistro(w http.ResponseWriter, r *http.Request) {
+	action := r.PathValue("action")
+	switch action {
+	case "open-folder", "open-terminal":
+	default:
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("unknown distro action"))
+		return
+	}
+	if s.cfg().Distro == "" {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("distro is not configured"))
+		return
+	}
+	if s.OnDistroAction == nil {
+		writeErr(w, http.StatusNotImplemented, "error", errors.New("distro actions unavailable"))
+		return
+	}
+	if err := s.OnDistroAction(action); err != nil {
+		writeErr(w, http.StatusInternalServerError, "error", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": action})
 }

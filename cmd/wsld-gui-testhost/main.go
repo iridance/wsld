@@ -62,6 +62,12 @@ func main() {
 			windowActions = append(windowActions, a)
 			winMu.Unlock()
 		},
+		OnDistroAction: func(a string) error {
+			winMu.Lock()
+			windowActions = append(windowActions, a)
+			winMu.Unlock()
+			return nil
+		},
 	}
 
 	mux := http.NewServeMux()

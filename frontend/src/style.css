@@ -17,7 +17,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); }
 /* flex 欄位：banner 隱藏（display:none）時不會像 grid 那樣讓 footer 掉到 1fr 行 */
 #app { display: flex; flex-direction: column; height: 100vh; }
-#app > .body { flex: 1; min-height: 0; display: flex; }
+#app > .body { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
 #app > .body > main { flex: 1; min-width: 0; }
 
 header {
@@ -26,6 +26,8 @@ header {
 }
 header h1 { font-size: 16px; margin: 0; }
 header .meta { font-size: 12px; color: var(--muted); }
+header .distro-actions { display: inline-flex; align-items: center; gap: 2px; }
+header .distro-actions h1 { margin-right: 4px; }
 .spacer { flex: 1; }
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; color: #fff; background: var(--muted); }
 .badge.ok { background: var(--ok); }
@@ -119,6 +121,34 @@ tr[data-pending] { opacity: 0.75; }
 .panel[hidden] { display: none; }
 pre.logs { margin: 0; padding: 8px 12px; overflow: auto; font: 12px/1.5 Consolas, "Cascadia Mono", monospace; background: #0f172a; color: #e2e8f0; }
 .xterm-host { padding: 4px; background: #1e1e1e; overflow: hidden; }
+
+/* 右側 Info drawer：從右緣滑入（覆蓋 main） */
+aside.info-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 340px; max-width: 100%;
+  display: flex; flex-direction: column; min-height: 0; z-index: 5;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -6px 0 18px rgba(15, 23, 42, 0.06);
+  animation: info-slide-in .18s ease-out;
+}
+aside.info-drawer[hidden] { display: none; }
+@keyframes info-slide-in {
+  from { transform: translateX(100%); opacity: .6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.info-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border); flex: none;
+}
+.info-head strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-body { padding: 12px; overflow: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.info-field { display: grid; gap: 2px; }
+.info-field dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+.info-field dd { margin: 0; font-size: 13px; word-break: break-all; white-space: pre-wrap; }
+.info-service {
+  display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border);
+}
+.info-service-name { font-weight: 600; font-size: 13px; }
+.info-body > .muted, .info-service .muted { color: var(--muted); font-size: 12px; }
 
 footer {
   display: flex; align-items: center; gap: 18px; padding: 6px 14px; font-size: 12px; color: var(--muted);

@@ -16,7 +16,7 @@ async function colWidth(page: Page, col: string): Promise<number> {
 test("column widths do not change when content changes", async ({ page, request }) => {
   await page.setViewportSize({ width: 1100, height: 640 });
   await open(page);
-  const before = { name: await colWidth(page, "name"), image: await colWidth(page, "image"), status: await colWidth(page, "status") };
+  const before = { name: await colWidth(page, "name"), image: await colWidth(page, "image"), state: await colWidth(page, "state") };
 
   // 塞一個超長名稱／映像的容器，等它出現在列表
   const longName = "a-very-very-very-very-long-container-name-that-would-widen-the-column";
@@ -26,7 +26,7 @@ test("column widths do not change when content changes", async ({ page, request 
 
   expect(await colWidth(page, "name")).toBeCloseTo(before.name, 0);
   expect(await colWidth(page, "image")).toBeCloseTo(before.image, 0);
-  expect(await colWidth(page, "status")).toBeCloseTo(before.status, 0);
+  expect(await colWidth(page, "state")).toBeCloseTo(before.state, 0);
 
   // 內容以省略號截斷而不是撐開欄位
   const cell = page.locator(`[data-testid="container-row"][data-name="${longName}"] [data-testid="ct-name"]`);

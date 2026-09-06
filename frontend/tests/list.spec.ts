@@ -5,13 +5,13 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("header carries distro, connection badge, endpoint and refresh interval; footer carries version and language", async ({ page }) => {
+test("header carries distro, connection badge and endpoint; footer carries version and language", async ({ page }) => {
   await open(page);
   const header = page.getByTestId("header");
   await expect(header.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
   await expect(header.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
   await expect(header.getByTestId("status-endpoint")).toHaveText("tcp://127.0.0.1:23750");
-  await expect(header.getByTestId("status-refresh")).toHaveText("↻ 3s");
+  await expect(page.getByTestId("status-refresh")).toHaveCount(0);
   const footer = page.getByTestId("status-bar");
   await expect(footer.getByTestId("status-version")).toHaveText("vtesthost");
   await expect(footer.getByTestId("lang-select")).toBeVisible();
@@ -41,7 +41,6 @@ test("lists running and stopped containers together", async ({ page }) => {
   await expect(row(page, "web")).toBeVisible();
   await expect(row(page, "web")).toHaveAttribute("data-state", "running");
   await expect(row(page, "web")).toContainText("nginx:1.27");
-  await expect(row(page, "web").getByTestId("ports-web")).toHaveText("8080→80/tcp"); // IPv4/IPv6 去重
   await expect(row(page, "db")).toBeVisible();
   await expect(row(page, "db")).toHaveAttribute("data-state", "exited");
 });
@@ -119,26 +118,24 @@ async function lifecycleBroken(request: Parameters<typeof engine>[0]) {
 
 test("refresh pauses on blur and resumes on focus", async ({ page }) => {
   await open(page);
-  await expect(page.getByTestId("status-refresh")).toHaveAttribute("data-paused", "false");
+  const st = () => page.evaluate(() => (window as unknown as { __wsld: { state(): { paused: boolean; refreshCount: number } } }).__wsld.state());
+  await expect.poll(async () => (await st()).paused).toBe(false);
 
   await page.evaluate(() => {
     Object.defineProperty(document, "hasFocus", { value: () => false, configurable: true });
     window.dispatchEvent(new Event("blur"));
   });
-  await expect(page.getByTestId("status-refresh")).toHaveAttribute("data-paused", "true");
-  await expect(page.getByTestId("status-refresh")).toHaveText("Refresh paused");
-  const count = Number(await page.getByTestId("status-refresh").getAttribute("data-count"));
+  await expect.poll(async () => (await st()).paused).toBe(true);
+  const count = (await st()).refreshCount;
   await page.waitForTimeout(3500);
-  expect(Number(await page.getByTestId("status-refresh").getAttribute("data-count"))).toBe(count);
+  expect((await st()).refreshCount).toBe(count);
 
   await page.evaluate(() => {
     Object.defineProperty(document, "hasFocus", { value: () => true, configurable: true });
     window.dispatchEvent(new Event("focus"));
   });
-  await expect(page.getByTestId("status-refresh")).toHaveAttribute("data-paused", "false");
-  await expect
-    .poll(async () => Number(await page.getByTestId("status-refresh").getAttribute("data-count")))
-    .toBeGreaterThan(count);
+  await expect.poll(async () => (await st()).paused).toBe(false);
+  await expect.poll(async () => (await st()).refreshCount).toBeGreaterThan(count);
 });
 
 test("defaults to English; the status-bar language switch changes labels and persists", async ({ page }) => {
@@ -167,10 +164,13 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
   const expected: Record<string, string> = {
     "btn-start-engine": "power",
     "btn-settings": "settings",
+    "btn-open-folder": "folder",
+    "btn-open-terminal": "terminal",
     "btn-start-web": "play",
     "btn-stop-web": "stop",
     "btn-logs-web": "logs",
     "btn-term-web": "terminal",
+    "btn-info-web": "info",
   };
   for (const [tid, icon] of Object.entries(expected)) {
     const b = page.getByTestId(tid);
@@ -180,7 +180,13 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
     await expect(b.locator("svg.ico")).toHaveAttribute("aria-hidden", "true");
   }
   // 列操作：只有圖示，沒有文字與邊框；名稱交給 aria-label／title
-  for (const [tid, label] of [["btn-start-web", "Start"], ["btn-stop-web", "Stop"], ["btn-logs-web", "Logs"], ["btn-term-web", "Terminal"]]) {
+  for (const [tid, label] of [
+    ["btn-start-web", "Start"],
+    ["btn-stop-web", "Stop"],
+    ["btn-logs-web", "Logs"],
+    ["btn-term-web", "Terminal"],
+    ["btn-info-web", "Info"],
+  ]) {
     const b = page.getByTestId(tid);
     await expect(b).toHaveText("");
     await expect(b).toHaveAttribute("aria-label", label);

@@ -29,6 +29,7 @@ import (
 	"github.com/irice/wsl-docker/internal/dockerapi"
 	"github.com/irice/wsl-docker/internal/doctor"
 	"github.com/irice/wsl-docker/internal/gui"
+	"github.com/irice/wsl-docker/internal/host"
 	"github.com/irice/wsl-docker/internal/i18n"
 	"github.com/irice/wsl-docker/internal/lifecycle"
 	"github.com/irice/wsl-docker/internal/wsl"
@@ -82,6 +83,7 @@ func main() {
 		WSL:            wsl.ExecRunner{},
 		Processes:      doctor.WindowsProcesses,
 		OnWindowAction: app.onWindowAction,
+		OnDistroAction: app.onDistroAction,
 		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
 	}
 	base, stop, err := srv.ListenLoopback()
@@ -162,6 +164,21 @@ func (a *guiApp) onWindowAction(action string) {
 		wruntime.WindowShow(a.ctx)
 	case "quit":
 		a.quit()
+	}
+}
+
+func (a *guiApp) onDistroAction(action string) error {
+	cfg, err := a.srv.LoadConfig()
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "open-folder":
+		return host.OpenFolder(cfg.Distro)
+	case "open-terminal":
+		return host.OpenTerminal(cfg.Distro)
+	default:
+		return fmt.Errorf("unknown distro action %q", action)
 	}
 }
 

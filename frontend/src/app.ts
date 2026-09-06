@@ -15,6 +15,9 @@ import { openTerminal, type TerminalSession } from "./terminal";
 import { icon, type IconName } from "./icons";
 
 type Panel = { kind: "logs"; id: string; name: string; live: boolean; ws?: WebSocket } | { kind: "term"; id: string; name: string; session?: TerminalSession };
+type InfoDrawer =
+  | { kind: "container"; id: string; name: string }
+  | { kind: "compose"; project: string };
 
 /** 側欄視圖。 */
 export type View = "containers" | "images" | "volumes" | "networks" | "machines";
@@ -41,6 +44,7 @@ interface State {
   paused: boolean;
   refreshCount: number;
   panel?: Panel;
+  info?: InfoDrawer;
   /** 進行中的容器動作（id → 動作），用於即時回饋；docker stop 可能等 10s 寬限期 */
   pending: Record<string, "starting" | "stopping">;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
@@ -178,6 +182,7 @@ export class App {
   private setView(v: View): void {
     if (v === this.st.view) return;
     this.closePanel();
+    this.closeInfo();
     this.st.view = v;
     saveJSON(LS_VIEW, v);
     this.renderNav();
@@ -326,6 +331,22 @@ export class App {
     this.renderPanel();
   }
 
+  private openContainerInfo(c: Container): void {
+    this.st.info = { kind: "container", id: c.Id, name: name(c) };
+    this.renderInfoDrawer();
+  }
+
+  private openComposeInfo(project: string): void {
+    this.st.info = { kind: "compose", project };
+    this.renderInfoDrawer();
+  }
+
+  private closeInfo(): void {
+    if (!this.st.info) return;
+    this.st.info = undefined;
+    this.renderInfoDrawer();
+  }
+
   private async saveSettings(s: Settings): Promise<boolean> {
     try {
       const saved = await api.putSettings(s);
@@ -349,7 +370,11 @@ export class App {
       el("header", { "data-testid": "header" }),
       el("div", { class: "banner", "data-testid": "error-banner", role: "alert", hidden: "" }),
       el("div", { class: "notice", "data-testid": "notice", role: "status", hidden: "" }),
-      el("div", { class: "body" }, el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }), el("main")),
+      el("div", { class: "body" },
+        el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }),
+        el("main"),
+        el("aside", { class: "info-drawer", "data-testid": "info-drawer", hidden: "" }),
+      ),
       el("footer", { "data-testid": "status-bar" }),
       this.buildSettingsDialog(),
       this.buildConfirmDialog(),
@@ -366,6 +391,7 @@ export class App {
     this.renderBanner();
     this.renderNotice();
     this.renderViewBody();
+    this.renderInfoDrawer();
     this.renderFooter();
   }
 
@@ -382,23 +408,38 @@ export class App {
     const settingsBtn = btn({ "data-testid": "btn-settings" }, "settings", t("gui.settings"));
     settingsBtn.onclick = () => this.openSettings();
 
-    // 標題列左側：連線中的 WSL distro（尚無 config 時退回 app 名稱），其後是連線狀態、端點、刷新間隔
     const distro = this.st.status?.Distro || this.st.meta.distro;
+    const hasDistro = !!distro;
+    const folderBtn = iconBtn({ "data-testid": "btn-open-folder" }, "folder", t("gui.open_folder"));
+    folderBtn.disabled = !hasDistro;
+    folderBtn.onclick = () => void this.distroAction("open-folder");
+    const termBtn = iconBtn({ "data-testid": "btn-open-terminal" }, "terminal", t("gui.open_terminal"));
+    termBtn.disabled = !hasDistro;
+    termBtn.onclick = () => void this.distroAction("open-terminal");
+
     h.replaceChildren(
-      el("h1", { "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
+      el("div", { class: "distro-actions", "data-testid": "distro-actions" },
+        el("h1", { "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
+        folderBtn,
+        termBtn,
+      ),
       el("span", { class: `badge ${badgeCls}`, "data-testid": "status-connection", "data-state": this.st.starting ? "starting" : ready ? "connected" : "disconnected", text: badgeTxt }),
       el("span", { class: "meta", "data-testid": "status-endpoint", text: this.st.meta.api_endpoint }),
-      el("span", {
-        class: "meta",
-        "data-testid": "status-refresh",
-        "data-paused": String(this.st.paused),
-        "data-count": String(this.st.refreshCount),
-        text: this.st.paused ? t("gui.status.paused") : `↻ ${this.st.meta.config.refresh_interval_sec}s`,
-      }),
       el("span", { class: "spacer" }),
       startBtn,
       settingsBtn,
     );
+  }
+
+  private async distroAction(action: "open-folder" | "open-terminal"): Promise<void> {
+    try {
+      await api.distroAction(action);
+      this.st.lastError = undefined;
+      this.renderBanner();
+    } catch (e) {
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.renderBanner();
+    }
   }
 
   private renderBanner(): void {
@@ -595,6 +636,7 @@ export class App {
     if (!list) return;
     if (this.st.containers.length === 0) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty") }));
+      this.renderInfoDrawer();
       return;
     }
     const { table, tbody } = this.table("containers", COLS);
@@ -610,6 +652,7 @@ export class App {
       }
     }
     list.replaceChildren(table);
+    this.renderInfoDrawer();
   }
 
   private groupRow(g: Group, expanded: boolean): HTMLTableRowElement {
@@ -620,16 +663,18 @@ export class App {
     toggle.onclick = () => this.toggleGroup(g.project);
     const actions: HTMLElement[] = [];
     if (g.project) {
-      // 只有 compose 專案才有整組 Start／Stop；未分組只是雜項集合
-      const startBtn = btn({ class: "small", "data-testid": "group-start" }, "play", t("gui.start"));
+      // 只有 compose 專案才有整組 Start／Stop／Info；未分組只是雜項集合
+      const startBtn = iconBtn({ "data-testid": "group-start" }, "play", t("gui.start"));
       startBtn.disabled = anyPending || running === g.items.length;
       startBtn.onclick = () =>
         void this.actMany(g.items.filter((c) => c.State !== "running").map((c) => c.Id), "starting", (id) => api.startContainer(id));
-      const stopBtn = btn({ class: "small", "data-testid": "group-stop" }, "stop", t("gui.stop"));
+      const stopBtn = iconBtn({ "data-testid": "group-stop" }, "stop", t("gui.stop"));
       stopBtn.disabled = anyPending || running === 0;
       stopBtn.onclick = () =>
         void this.actMany(g.items.filter((c) => c.State === "running").map((c) => c.Id), "stopping", (id) => api.stopContainer(id));
-      actions.push(startBtn, stopBtn);
+      const infoBtn = iconBtn({ "data-testid": "group-info" }, "info", t("gui.info"));
+      infoBtn.onclick = () => this.openComposeInfo(g.project);
+      actions.push(startBtn, stopBtn, infoBtn);
     }
 
     const cell = el(
@@ -663,6 +708,8 @@ export class App {
     const termBtn = iconBtn({ "data-testid": `btn-term-${n}` }, "terminal", t("gui.terminal"));
     termBtn.disabled = !running;
     termBtn.onclick = () => this.openTerminal(c);
+    const infoBtn = iconBtn({ "data-testid": `btn-info-${n}` }, "info", t("gui.info"));
+    infoBtn.onclick = () => this.openContainerInfo(c);
 
     const rowAttrs: Record<string, string> = { "data-testid": "container-row", "data-name": n, "data-state": c.State, "data-project": project };
     if (pending) rowAttrs["data-pending"] = pending;
@@ -673,9 +720,7 @@ export class App {
       el("td", { "data-testid": "ct-name", class: project ? "indent" : "", text: display, title: `${n}\n${c.Id}` }),
       el("td", { text: c.Image, title: c.Image }),
       el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
-      el("td", { text: c.Status, title: c.Status }),
-      el("td", { "data-testid": `ports-${n}`, text: ports(c), title: ports(c) }),
-      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn),
+      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, infoBtn),
     );
   }
 
@@ -718,6 +763,81 @@ export class App {
     }
     kids.push(close);
     head.replaceChildren(...kids);
+  }
+
+  private renderInfoDrawer(): void {
+    const aside = this.root.querySelector<HTMLElement>('[data-testid="info-drawer"]');
+    if (!aside) return;
+    const info = this.st.info;
+    if (!info) {
+      aside.hidden = true;
+      aside.removeAttribute("data-kind");
+      aside.removeAttribute("data-name");
+      aside.removeAttribute("data-project");
+      aside.replaceChildren();
+      return;
+    }
+    aside.hidden = false;
+    aside.setAttribute("data-kind", info.kind);
+    if (info.kind === "container") {
+      aside.setAttribute("data-name", info.name);
+      aside.removeAttribute("data-project");
+      const c = this.st.containers.find((x) => x.Id === info.id);
+      const head = el("div", { class: "info-head" },
+        el("strong", { "data-testid": "info-title", text: info.name }),
+        el("span", { class: "spacer" }),
+        (() => {
+          const close = iconBtn({ "data-testid": "btn-info-close" }, "close", t("gui.close"));
+          close.onclick = () => this.closeInfo();
+          return close;
+        })(),
+      );
+      const body = el("div", { class: "info-body" });
+      if (c) {
+        body.append(
+          infoField(t("gui.col.image"), c.Image),
+          infoField(t("gui.col.state"), c.State),
+          infoField(t("gui.col.status"), c.Status, "info-status"),
+          infoField(t("gui.col.ports"), ports(c) || "—", "info-ports"),
+          infoField(t("gui.col.id"), c.Id),
+        );
+      } else {
+        body.append(el("p", { class: "muted", text: t("gui.empty") }));
+      }
+      aside.replaceChildren(head, body);
+      return;
+    }
+    aside.setAttribute("data-project", info.project);
+    aside.removeAttribute("data-name");
+    const items = this.st.containers.filter((c) => c.Labels?.[LABEL_PROJECT] === info.project);
+    const running = items.filter((c) => c.State === "running").length;
+    const head = el("div", { class: "info-head" },
+      el("strong", { "data-testid": "info-title", text: info.project }),
+      el("span", { class: "spacer" }),
+      (() => {
+        const close = iconBtn({ "data-testid": "btn-info-close" }, "close", t("gui.close"));
+        close.onclick = () => this.closeInfo();
+        return close;
+      })(),
+    );
+    const body = el("div", { class: "info-body" },
+      el("div", { class: "info-field" },
+        el("dt", { text: t("gui.col.state") }),
+        el("dd", { "data-testid": "info-count", text: `${running}/${items.length}` }),
+      ),
+    );
+    for (const c of items) {
+      const svc = c.Labels?.[LABEL_SERVICE] || name(c);
+      body.append(
+        el("div", { class: "info-service" },
+          el("div", { class: "info-service-name", text: svc }),
+          el("div", { class: `state ${c.State}`, text: c.State }),
+          el("div", { class: "muted", text: c.Status }),
+          el("div", { class: "muted", text: ports(c) || "—" }),
+        ),
+      );
+    }
+    aside.replaceChildren(head, body);
   }
 
   // ---- Images -----------------------------------------------------------------
@@ -1060,6 +1180,12 @@ function name(c: Container): string {
   return (c.Names?.[0] ?? c.Id.slice(0, 12)).replace(/^\//, "");
 }
 
+function infoField(label: string, value: string, testId?: string): HTMLElement {
+  const ddAttrs: Record<string, string> = { text: value, title: value };
+  if (testId) ddAttrs["data-testid"] = testId;
+  return el("div", { class: "info-field" }, el("dt", { text: label }), el("dd", ddAttrs));
+}
+
 // ---- 欄位與分組 -----------------------------------------------------------
 
 interface Col {
@@ -1072,12 +1198,10 @@ interface Col {
 
 const COLS: Col[] = [
   // 總和 < 預設視窗（1000px − 側欄 96px），避免一開就出現水平捲軸
-  { key: "name", label: "gui.col.name", def: 150, min: 80, resizable: true },
-  { key: "image", label: "gui.col.image", def: 170, min: 80, resizable: true },
-  { key: "state", label: "gui.col.state", def: 85, min: 70, resizable: true },
-  { key: "status", label: "gui.col.status", def: 140, min: 80, resizable: true },
-  { key: "ports", label: "gui.col.ports", def: 130, min: 80, resizable: true },
-  { key: "actions", label: "gui.col.actions", def: 140, min: 130, resizable: false },
+  { key: "name", label: "gui.col.name", def: 220, min: 80, resizable: true },
+  { key: "image", label: "gui.col.image", def: 260, min: 80, resizable: true },
+  { key: "state", label: "gui.col.state", def: 100, min: 70, resizable: true },
+  { key: "actions", label: "gui.col.actions", def: 170, min: 150, resizable: false },
 ];
 
 const IMAGE_COLS: Col[] = [

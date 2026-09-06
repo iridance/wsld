@@ -1,21 +1,21 @@
 # wsl-docker Roadmap
 
-版本：0.4  
-對應規格：[SPEC.md](SPEC.md)（**v1.0 決策已鎖定**）
+版本：0.5  
+對應規格：[SPEC.md](SPEC.md)（**0.5 功能定義開放中**；Phase 0–4 基底已落地）
 
 ## 總覽
 
 ```text
-Phase 0  規格／倉庫骨架 + v1 決策鎖定     ✅
+Phase 0  規格／倉庫骨架 + 早期決策鎖定     ✅
 Phase 1  Bootstrap 腳本可手動跑通         ✅
 Phase 2  共用核心 + wsld CLI              ✅
-Phase 3  GUI v1（Wails + Playwright）     ✅
-Phase 4  打磨（v1.0 必要）                ✅  → v1.0
-Phase 5  （可選）npiperelay、自動更新、多 distro
-Phase 6  WinUI 3 GUI                       ← v2.0
+Phase 3  GUI 基底（Wails + Playwright）   ✅
+Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
+Phase 5  0.5 主線：多 distro＋GUI 補完    ← 定義中／實作中
+Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
-v1.0 = Phase 1 + 2 + 3 + 4 完成並通過 SPEC §6
-v2.0 = Phase 6
+0.5 = Phase 5 完成定義全過（見下方）；不綁死語意化版號字串至實作波再定
+之後 v2.0 = Phase 6
 ```
 
 ---
@@ -23,9 +23,9 @@ v2.0 = Phase 6
 ## Phase 0 — 規格與倉庫
 
 - [x] 倉庫結構、README、SPEC、ROADMAP、ARCHITECTURE、config.example
-- [x] GUI 納入 v1.0；WinUI 列 v2.0
+- [x] GUI 納入主線；WinUI 列 Phase 6
 - [x] TDD + UI 測試 rule
-- [x] grill-me 關閉 v1 開放問題並回寫 SPEC §2
+- [x] grill-me 關閉早期開放問題並回寫 SPEC §2
 
 **退出條件**：可開始 Phase 1。
 
@@ -66,25 +66,23 @@ v2.0 = Phase 6
 
 ---
 
-## Phase 3 — GUI v1（Wails + Playwright）
+## Phase 3 — GUI 基底（Wails + Playwright）
 
 ### 交付
 
 - `wsld-gui.exe`（Wails v2）：Tray、列表、Start／Stop、Logs（100／Live）、**Exec 終端**、狀態列
-- 刷新：前景 3s；Tray／失焦暫停
-- v1.0 後續擴充（已完成）：側欄五視圖（Containers／Images／Volumes／Networks／Machines）、header 整併狀態、footer 版本＋語言、純圖示操作鈕、移除「顯示已停止」與手動刷新
-- 語系：跟 OS（zh→繁中）
-- `docs/GUI.md`；Playwright 關鍵路徑；`docs/TESTING.md` UI 指令
-- 與 `internal` 共用，禁止雙重邏輯
+- 刷新：前景間隔可設定；Tray／失焦暫停
+- 側欄多視圖（Containers／Images／Volumes／Networks／Machines）、header／footer、純圖示列操作、compose 分組
+- `docs/GUI.md`；Playwright；與 `internal` 共用，禁止雙重邏輯
 
 ### 完成定義
 
-- [x] SPEC §5.5／§6 GUI 相關項（Wails v2 + systray；`internal/gui` HTTP/WS 橋接；實機驗證見 docs/GUI.md）
-- [x] UI 測試一鍵可跑（`make test-ui`：Playwright 42 案 + `go test ./internal/gui`）
+- [x] Wails v2 + systray；`internal/gui` HTTP/WS 橋接；實機驗證見 docs/GUI.md
+- [x] UI 測試一鍵可跑（`make test-ui` + `go test ./internal/gui`）
 
 ---
 
-## Phase 4 — 打磨（**v1.0 必要**）
+## Phase 4 — 打磨（基底）
 
 ### 交付
 
@@ -96,21 +94,74 @@ v2.0 = Phase 6
 
 ### 完成定義
 
-- [x] SPEC §6 全過 → **v1.0**（2026-09-06）
-  - §6.1–3 CLI／GUI 同引擎、GUI 冷開→Start→列表／Logs／Exec：實機 + Playwright
-  - §6.4 `docker run -v "$PWD:/app"` 於 WSL `$HOME`：實測 OK
-  - §6.5 `systemctl stop docker` 後 `wsld start` 3 秒恢復（等同重開機路徑）
-  - §6.6–7 doctor 誤綁／Desktop、埠衝突換埠：Go 單測 + bats
-  - §6.8 `make test`；§6.9 docs/OPERATIONS.md；§6.10 LICENSE（MIT）
+- [x] SPEC §6 基底驗收（2026-09-06）：CLI／GUI 同引擎、冷開→Start→列表／Logs／Exec、`$HOME` bind mount、`wsld start` 恢復、doctor／換埠、`make test`、OPERATIONS、MIT
+
+> 註：當時曾標為「v1.0」；**0.5 起改為功能定義開放中**，以 Phase 5 完成定義為下一里程碑，不再宣稱產品已鎖死 v1.0。
 
 ---
 
-## Phase 5 — 可選（v1 後）
+## Phase 5 — 0.5 主線（功能定義開放中）
 
-- npiperelay、多 distro、自動更新等
-- ~~Compose 專案視圖~~ → 已提前於 v1.0 實作（列表分組、整組 Start／Stop）
+**目標**：多 distro（Machines 切換作用於全部功能）＋ GUI／設定／Info 補完與打磨；TCP 引擎模型不變。
 
-## Phase 6 — WinUI（v2.0）
+### 交付
+
+#### 多 distro
+
+- Config：多 machine profile＋單一 `active`；舊扁平 `config.toml` **自動遷移**
+- 全局設定：`lang`、`tray_autostart`、`refresh_interval_sec`、`exec_shell`
+- 每 machine：`distro`、`user`、`api_endpoint`（各自埠，避免並行 dockerd 搶埠）
+- GUI：Machines「設為目前」；CLI：`wsld use <distro>`（同寫 config）
+- 「設為目前」即寫**占位 profile**；未 init 可 active → 全功能未就緒並引導 init／Start；`init` 補齊 endpoint／user／port
+- 切換 active：不停舊引擎；硬切 Logs／Terminal／Info／快取／pending
+- 取消管理：一律先停該 distro docker → 刪 profile（不刪 WSL）
+- Unregister 發行版：GUI＋CLI；輸入 distro 名稱雙重確認
+
+#### Machines／Containers UI
+
+- Machines actions：設為目前、Open folder、Terminal（**底部 panel**、該 distro WSL shell、cwd＝user home）、取消管理、unregister、Info（右側 drawer）、Add distro
+- Machines Info（右側，對齊 Containers）：基本欄、`.wslconfig` 的 memory／processors、`/etc/wsl.conf`、該 machine 的 **API endpoint（tcp）**、CPU／記憶體用量摘要（非 process 表）；取代 ⓘ dialog
+- Containers：Remove（running 可刪，確認會停止）；Info summary：Name、ID、Image、State、Status、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels（可摺疊）、Restart policy
+
+#### Settings／header
+
+- Side nav 新增 **Settings**（承載 refresh、exec_shell、tray_autostart、**Theme：Light／Dark／System**）
+- 移除 header Settings 鈕與 header 上的 tcp 路徑
+- Header 保留：distro 名、Open folder／Open terminal（**有 border**）、連線徽章、Start engine
+
+#### UI 打磨
+
+- 各表 actions 列與其他欄列高／格線對齊
+- Side nav 按鈕上下間距＝左右間距
+
+#### 文件／測試
+
+- 回寫 SPEC／OPERATIONS／GUI／README；Go 單測＋Playwright＋實機驗收條列
+
+### 完成定義
+
+- [ ] 多 profile＋active；遷移舊 config；每 machine 自有埠
+- [ ] GUI「設為目前」與 `wsld use` 同步；切換硬切面板／快取；未 init active 顯示未就緒
+- [ ] 取消管理（停 docker＋刪 profile）；unregister（打名稱確認）
+- [ ] Machines：folder／terminal（home）／右側 Info（含 `.wslconfig` memory／processors、wsl.conf、tcp、用量摘要）
+- [ ] Containers：Remove（含 running）；Info summary 欄位齊全（必要時 inspect）
+- [ ] Settings 側欄＋theme；header 無 Settings／無 tcp；header icon 有 border
+- [ ] 列高／格線與 side nav 間距打磨
+- [ ] 相關 Go 測試＋Playwright 通過；實機抽樣驗收（切換 distro、unregister 確認、Remove running）
+
+**退出條件**：上列完成定義全勾；產品敘事可標 0.5 已交付（語意化版號字串於實作波決定）。
+
+### 延後（不進 0.5 完成定義）
+
+- npiperelay（Windows named pipe ↔ 引擎）
+- 自動更新（`wsld`／`wsld-gui` 本體）
+- arm64 正式支援
+- 專用隔離 distro 旗標
+- ~~Compose 專案視圖~~ → 已於基底階段實作（列表分組、整組操作）
+
+---
+
+## Phase 6 — WinUI（之後 v2.0）
 
 - 見 SPEC §1.4；另訂 `docs/GUI-WINUI.md`
 
@@ -119,9 +170,9 @@ v2.0 = Phase 6
 ## 優先序
 
 1. 碼在 WSL、引擎同 distro（rootful）  
-2. 本機 TCP（23750+）  
-3. v1.0 = Phase 1–4；TDD + Playwright  
-4. v2.0 = WinUI  
+2. 本機 TCP（23750+，每 managed machine 一埠）  
+3. 0.5 = Phase 5；TDD + Playwright  
+4. 之後 v2.0 = WinUI  
 5. 只綁 127.0.0.1  
 6. GUI／CLI 共用 core  
 
@@ -129,7 +180,7 @@ v2.0 = Phase 6
 
 | Phase | 版本角色 |
 |-------|----------|
-| 0 | 前置（已鎖定決策） |
-| 1–4 | **v1.0 必要** |
-| 5 | 之後可選 |
-| 6 | **v2.0** |
+| 0 | 前置 |
+| 1–4 | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放） |
+| 5 | **0.5 主線** |
+| 6 | 之後 **v2.0** |

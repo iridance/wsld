@@ -187,6 +187,7 @@ export const api = {
   getSettings: () => call<Settings>("GET", "/api/settings"),
   putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
+  distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   logsStreamUrl: (id: string, tail = 100) =>
     wsUrl(`/api/containers/${encodeURIComponent(id)}/logs/stream`, { tail }),
   execUrl: (id: string, cols: number, rows: number) =>
