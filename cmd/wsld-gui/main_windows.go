@@ -48,6 +48,20 @@ func main() {
 			startHidden = true
 		}
 	}
+
+	si, primary, err := acquireSingleInstance()
+	if err != nil {
+		log.Fatalf("single instance: %v", err)
+	}
+	if !primary {
+		// 已有實例：一般啟動則喚醒主視窗；--tray 靜默退出（不重複 systray）
+		if !startHidden {
+			notifyExistingInstance()
+		}
+		os.Exit(0)
+	}
+	defer si.Release()
+
 	_ = config.MigrateLegacyAppDir()
 	cfgPath := config.DefaultPath()
 	cfg, cfgErr := config.Load(cfgPath)
@@ -61,8 +75,15 @@ func main() {
 	if l, ok := i18n.Parse(os.Getenv(i18n.EnvOverride)); ok {
 		i18n.Set(l)
 	}
-	engine := dockerapi.New(cfg.APIEndpoint, time.Duration(cfg.APITimeoutSec)*time.Second)
-	mgr := &lifecycle.Manager{WSL: wsl.ExecRunner{}, Cfg: cfg, API: engine, Bundle: scripts.BootstrapBundle()}
+	engine := dockerClient(cfg)
+	newMgr := func(c config.Config) *lifecycle.Manager {
+		eng := dockerClient(c)
+		return &lifecycle.Manager{
+			WSL: wsl.ExecRunner{}, Cfg: c, API: eng, Bundle: scripts.BootstrapBundle(),
+			NewAPI: func(nc config.Config) lifecycle.Pinger { return dockerClient(nc) },
+		}
+	}
+	mgr := newMgr(cfg)
 	var life gui.Lifecycle = mgr
 	if cfgErr != nil {
 		life = gui.ConfigMissingLifecycle{Path: cfgPath}
@@ -72,7 +93,7 @@ func main() {
 	exe, _ = filepath.Abs(exe)
 	auto := gui.PlatformAutostart("wsld", fmt.Sprintf(`"%s" --tray`, exe))
 
-	app := &guiApp{}
+	app := &guiApp{si: si}
 	srv := &gui.Server{
 		Engine:         engine,
 		Life:           life,
@@ -87,12 +108,8 @@ func main() {
 		OnDistroAction: app.onDistroAction,
 		Shell:          gui.HostDistroShell{},
 		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
-		NewEngine: func(c config.Config) gui.Engine {
-			if c.APIEndpoint == "" {
-				return dockerapi.New(config.EndpointForPort(config.DefaultPort), time.Duration(c.APITimeoutSec)*time.Second)
-			}
-			return dockerapi.New(c.APIEndpoint, time.Duration(c.APITimeoutSec)*time.Second)
-		},
+		NewEngine: func(c config.Config) gui.Engine { return dockerClient(c) },
+		NewLifecycle: func(c config.Config) gui.Lifecycle { return newMgr(c) },
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {
@@ -141,6 +158,7 @@ type guiApp struct {
 	base   string
 	token  string
 	engine *dockerapi.Client
+	si     *singleInstance
 
 	trayStatus *systray.MenuItem
 	trayOpen   *systray.MenuItem
@@ -152,6 +170,12 @@ type guiApp struct {
 
 func (a *guiApp) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.si != nil {
+		a.si.WatchShow(ctx, func() {
+			wruntime.WindowShow(ctx)
+			wruntime.WindowUnminimise(ctx)
+		})
+	}
 	go a.runTray()
 }
 
@@ -292,4 +316,19 @@ func (a *guiApp) relabelTray() {
 	if a.lastState != "" {
 		a.setTray(a.lastState)
 	}
+}
+
+// dockerClient 依 config 建立 Docker client。
+// api_endpoint 為空（占位／未 init）時不得退回預設 23750，否則會誤連其他 distro 的引擎。
+func dockerClient(c config.Config) *dockerapi.Client {
+	ep := c.APIEndpoint
+	if ep == "" {
+		// 無效 scheme → Ping／List 皆失敗，UI 顯示未就緒而非舊列表
+		ep = "tcp://127.0.0.1:0"
+	}
+	to := time.Duration(c.APITimeoutSec) * time.Second
+	if to <= 0 {
+		to = time.Duration(config.DefaultAPITimeoutSec) * time.Second
+	}
+	return dockerapi.New(ep, to)
 }

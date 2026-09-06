@@ -16,9 +16,11 @@ wsld_parse_args() {
   WSLD_INSTALL_COMPOSE=1
   WSLD_DRY_RUN=0
   WSLD_HELP=0
+  WSLD_BUSY_PORTS=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) shift; WSLD_PORT="${1:?--port needs a value}" ;;
+      --busy-ports) shift; WSLD_BUSY_PORTS="${1:?--busy-ports needs a value}" ;;
       --user) shift; WSLD_USER="${1:?--user needs a value}" ;;
       --no-compose) WSLD_INSTALL_COMPOSE=0 ;;
       --dry-run) WSLD_DRY_RUN=1 ;;
@@ -31,13 +33,13 @@ wsld_parse_args() {
 }
 
 wsld_usage() {
-  cat <<'EOF'
-用法: 02-bootstrap-docker.sh [--port N] [--user NAME] [--no-compose] [--dry-run]
-  --port N       Docker API 起始埠（只綁 127.0.0.1；占用時自動遞增），預設 23750
-  --user NAME    要加入 docker 群組並啟用 linger 的使用者，預設目前使用者
-  --no-compose   不安裝 docker-compose-plugin
-  --dry-run      只印出將執行的動作
-EOF
+  printf '%s\n' \
+    '用法: 02-bootstrap-docker.sh [--port N] [--busy-ports CSV] [--user NAME] [--no-compose] [--dry-run]' \
+    '  --port N         Docker API 起始埠（只綁 127.0.0.1；占用時自動遞增），預設 23750' \
+    '  --busy-ports CSV 額外視為占用的埠（例如其他 machine 已登記的 api_endpoint）' \
+    '  --user NAME      要加入 docker 群組並啟用 linger 的使用者，預設目前使用者' \
+    '  --no-compose     不安裝 docker-compose-plugin' \
+    '  --dry-run        只印出將執行的動作'
 }
 
 # --- 環境偵測 -------------------------------------------------------------
@@ -85,8 +87,21 @@ wsld_docker_engine_installed() {
 
 # --- 埠選擇 ----------------------------------------------------------------
 
-# 可被測試覆寫。回傳 0 = 埠已被占用。
-wsld_port_in_use() {
+# $1 = port。WSLD_BUSY_PORTS（逗號分隔）內的埠視為占用。
+wsld_port_reserved() {
+  local port="$1" csv="${WSLD_BUSY_PORTS:-}" item
+  [ -n "$csv" ] || return 1
+  IFS=',' read -r -a _wsld_busy <<< "$csv"
+  for item in "${_wsld_busy[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [ "$item" = "$port" ] && return 0
+  done
+  return 1
+}
+
+# Linux／WSL 內 ss／netstat。可被測試覆寫。回傳 0 = 占用。
+wsld_linux_port_in_use() {
   local port="$1"
   if command -v ss >/dev/null 2>&1; then
     ss -Hltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}\$"
@@ -95,6 +110,64 @@ wsld_port_in_use() {
   else
     return 1
   fi
+}
+
+# 解析 Windows netstat.exe -ano 輸出；$1 = 全文, $2 = port。
+# stdout = 佔用該埠 LISTENING 的 PID（可能多行）；exit 0 = 至少一個。
+wsld_parse_windows_netstat_listening() {
+  local text="$1" port="$2"
+  printf '%s\n' "$text" | tr -d '\r' | awk -v p=":$port" '
+    BEGIN { found=0 }
+    $1 == "TCP" && ($4 == "LISTENING" || $4 == "LISTEN") {
+      n = split($2, a, ":")
+      if (n >= 2 && (":" a[n]) == p) { print $5; found=1 }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+# Windows 主機上「非 WSL 轉發」的佔用（Cursor／其他 App）。可被測試覆寫。
+# wslrelay／wsl／wslservice 視為本產品的 localhost 轉發，不算衝突。
+wsld_windows_port_in_use() {
+  local port="$1" out pids pid name
+  command -v netstat.exe >/dev/null 2>&1 || return 1
+  out="$(netstat.exe -ano 2>/dev/null)" || return 1
+  pids="$(wsld_parse_windows_netstat_listening "$out" "$port")" || return 1
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    case "$pid" in
+      *[!0-9]*) continue ;;
+    esac
+    name="$(wsld_windows_process_name "$pid")"
+    case "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" in
+      wslrelay|wsl|wslservice|wsld|wsld-gui) ;;
+      '') return 0 ;; # 有 LISTEN 但查不到行程名 → 寧可視為占用
+      *) return 0 ;;
+    esac
+  done <<< "$pids"
+  return 1
+}
+
+# $1 = PID。stdout = 行程名（無副檔名）。可被測試覆寫。
+wsld_windows_process_name() {
+  local pid="$1" line
+  command -v tasklist.exe >/dev/null 2>&1 || return 0
+  line="$(tasklist.exe /FI "PID eq ${pid}" /FO CSV /NH 2>/dev/null | tr -d '\r' | head -1)" || return 0
+  # "Cursor.exe","14676","..." 
+  line="${line#\"}"
+  line="${line%%\"*}"
+  line="${line%.exe}"
+  line="${line%.EXE}"
+  printf '%s' "$line"
+}
+
+# 可被測試覆寫。回傳 0 = 埠已被占用（Linux／Windows／busy 清單任一）。
+wsld_port_in_use() {
+  local port="$1"
+  wsld_port_reserved "$port" && return 0
+  wsld_linux_port_in_use "$port" && return 0
+  wsld_windows_port_in_use "$port" && return 0
+  return 1
 }
 
 # $1 = 起始埠, $2 = 最大嘗試次數。stdout = 選到的埠。
@@ -119,13 +192,12 @@ wsld_pick_free_port() {
 # --- 設定檔渲染 ----------------------------------------------------------
 
 # $1 = port
+# 注意：不可用 cat <<EOF——bundle 以 `bash -s`（stdin=腳本）執行時 heredoc 會吞掉後續腳本。
 wsld_render_daemon_json() {
   local port="$1"
-  cat <<EOF
-{
-  "hosts": ["unix:///var/run/docker.sock", "tcp://127.0.0.1:${port}"]
-}
-EOF
+  printf '%s\n' '{'
+  printf '  "hosts": ["unix:///var/run/docker.sock", "tcp://127.0.0.1:%s"]\n' "$port"
+  printf '%s\n' '}'
 }
 
 # $1 = JSON 字串。拒絕任何非 loopback 的 tcp host。
@@ -147,11 +219,10 @@ wsld_validate_loopback_hosts() {
 
 # systemd drop-in：清掉 -H fd://，改由 daemon.json 決定 hosts。
 wsld_render_systemd_override() {
-  cat <<'EOF'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock
-EOF
+  printf '%s\n' \
+    '[Service]' \
+    'ExecStart=' \
+    'ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock'
 }
 
 # --- wsl.conf ------------------------------------------------------------

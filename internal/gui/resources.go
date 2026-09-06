@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/dockerapi"
@@ -191,10 +192,12 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	mem, procs := readWSLConfigLimits()
 	mc.Memory, mc.Processors = mem, procs
-	// 用量摘要：Fake／無系統資料時給可測的固定值；真實環境可後續接 WMI。
-	mc.CPUPercent = 12.5
-	mc.MemoryUsedMB = 2048
-	mc.MemoryTotalMB = 8192
+	if strings.EqualFold(d.State, "Running") {
+		cpu, used, total := wsl.SampleDistroUsage(r.Context(), s.WSL, d.Name)
+		mc.CPUPercent = cpu
+		mc.MemoryUsedMB = int64(used)
+		mc.MemoryTotalMB = int64(total)
+	}
 	writeJSON(w, http.StatusOK, mc)
 }
 
@@ -296,10 +299,42 @@ func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.BindActive(cfg)
+
 	m, _ := cfg.ActiveMachine()
+	needBringUp := !m.Ready()
+	if !needBringUp && s.engine() != nil {
+		if err := s.engine().Ping(r.Context()); err != nil {
+			needBringUp = true
+		}
+	}
+	if needBringUp {
+		// 首次設為目前，或 endpoint／API 不通：Init（重選可用埠）+ Start。
+		s.startMu.Lock()
+		if s.starting {
+			s.startMu.Unlock()
+			writeJSON(w, http.StatusAccepted, map[string]any{"active": cfg.Active, "ready": false, "starting": true})
+			return
+		}
+		s.starting = true
+		s.startMu.Unlock()
+		defer func() {
+			s.startMu.Lock()
+			s.starting = false
+			s.startMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		if _, err := s.bringUpActive(ctx); err != nil {
+			writeEngineErr(w, err)
+			return
+		}
+		cfg = s.cfg()
+		m, _ = cfg.ActiveMachine()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"active": cfg.Active,
-		"ready":  m.Ready(),
+		"active":       cfg.Active,
+		"ready":        m.Ready(),
+		"api_endpoint": m.APIEndpoint,
 	})
 }
 

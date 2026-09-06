@@ -45,7 +45,7 @@
 - **Header**：active distro 名稱（無 config 時顯示 wsld）＋ **有 border** 的 Open folder／Open terminal、連線徽章、啟動引擎。**不顯示** API endpoint（tcp）與 Settings（分別在 Machines Info／側欄 Settings）。
 - **Side nav**：Containers／Images／Volumes／Networks／Machines／**Settings**；`aria-current="page"`；存 localStorage。上下間距對齊左右間距。切換視圖關閉 Logs／Terminal／Info。
 - **Info drawer（右）**：Containers／Compose／Machines 詳情（見下表）。
-- **Footer**：左版本（`make build-*` 注入，對齊 git tag／預設 **0.5.2** → 顯示 `v0.5.2`）、右語言下拉（無邊框）。
+- **Footer**：左版本（`make build-*` 注入，對齊 git tag／預設 **0.5.3** → 顯示 `v0.5.3`）、右語言下拉（無邊框）。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
 
 ## 功能對照（SPEC §5.5／Roadmap 0.5）
@@ -96,11 +96,13 @@
 |---|---|
 | `--tray` | 隱藏啟動，只顯示系統匣圖示（登入自啟採用此參數） |
 
+單例：`wsld-gui` 以命名 Mutex 保證只跑一個程序。再次啟動（非 `--tray`）會喚醒既有主視窗並立刻退出，不會再出現第二個視窗／systray。
+
 ## 建置
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.2 → 左下角 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.3 → 左下角 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -152,13 +154,13 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 
 - Theme：Light／Dark／System（`data-theme`／`prefers-color-scheme`）。
 - Images 的「使用中」欄依 Docker `/images/json` 的 `Containers`；舊版 daemon 可能回 -1，顯示為「–」。
-- Machines「新增發行版」只執行 `wsl --install --no-launch`：首次進入 distro 建立使用者、以及 Docker bootstrap（`wsld init`）仍需使用者操作；以「設為目前」＋ `wsld init` 納管。
+- Machines「新增發行版」只執行 `wsl --install --no-launch`：首次進入 distro 建立使用者後，以「設為目前」納管（同一流程自動 init + start）。
 - Networks 為唯讀；建立／刪除網路請用 `docker network`。
 - npiperelay／自動更新／arm64／**首次 Setup 一鍵**：Roadmap Extra（不綁 0.5）。
 
 ## 0.5 實機抽樣驗收
 
-1. 多 distro：`wsld use`／GUI「設為目前」切換；不停舊引擎；Logs／Terminal／Info 硬切；未 init 顯示未就緒，**Start engine 自動 init 後連線**。
+1. 多 distro：`wsld use`／GUI「設為目前」切換；不停舊引擎；Logs／Terminal／Info 硬切；**首次設為目前自動 init + start 後連線**。
 2. Unregister：需輸入發行版名稱確認；profile 刪除。
 3. Containers：Remove running（確認後刪除）；Info summary 欄位齊全。
 4. Settings 側欄 Theme；header 無 Settings／tcp；folder／terminal 有 border。

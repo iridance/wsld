@@ -7,6 +7,7 @@ import (
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 func TestImagesListRemovePrune(t *testing.T) {
@@ -116,6 +117,7 @@ func TestMachinesWithoutWSL(t *testing.T) {
 }
 
 func TestMachinesListConfigOnlineInstall(t *testing.T) {
+	defer wsl.BypassSampleSleepForTest()()
 	e := newEnv(t, "")
 	w := NewFakeWSL()
 	e.s.WSL = w
@@ -145,10 +147,16 @@ func TestMachinesListConfigOnlineInstall(t *testing.T) {
 	if cfg.Name != "Ubuntu-26.04" || !cfg.Systemd || cfg.WSLConf == "" {
 		t.Fatalf("config = %+v", cfg)
 	}
+	if cfg.CPUPercent < 79 || cfg.CPUPercent > 81 || cfg.MemoryUsedMB != 2048 || cfg.MemoryTotalMB != 8192 {
+		t.Fatalf("usage = cpu=%v mem=%d/%d", cfg.CPUPercent, cfg.MemoryUsedMB, cfg.MemoryTotalMB)
+	}
 	resp, b = e.req(t, http.MethodGet, "/api/machines/docker-desktop/config", "")
 	_ = json.Unmarshal(b, &cfg)
 	if resp.StatusCode != 200 || cfg.Systemd || cfg.WSLConf != "" {
 		t.Fatalf("distro without wsl.conf = %d %+v", resp.StatusCode, cfg)
+	}
+	if cfg.CPUPercent != 0 || cfg.MemoryUsedMB != 0 || cfg.MemoryTotalMB != 0 {
+		t.Fatalf("stopped usage should be 0: %+v", cfg)
 	}
 	resp, _ = e.req(t, http.MethodGet, "/api/machines/nope/config", "")
 	if resp.StatusCode != http.StatusNotFound {
@@ -220,16 +228,19 @@ func TestMachineUseUnmanageUnregister(t *testing.T) {
 		t.Fatalf("active = %q", c.Active)
 	}
 	m, ok := c.FindMachine("docker-desktop")
-	if !ok || m.Ready() {
-		t.Fatalf("want placeholder, got %+v", m)
+	if !ok || !m.Ready() {
+		t.Fatalf("first use should init+start, got ok=%v m=%+v", ok, m)
 	}
 	if e.life.Distro != "docker-desktop" {
 		t.Fatalf("lifecycle not rebound: %q", e.life.Distro)
 	}
+	if e.life.Starts() < 1 {
+		t.Fatal("expected Start during first use")
+	}
 	_, b = e.req(t, http.MethodGet, "/api/meta", "")
 	var meta Meta
 	_ = json.Unmarshal(b, &meta)
-	if meta.Distro != "docker-desktop" || meta.ActiveReady {
+	if meta.Distro != "docker-desktop" || !meta.ActiveReady {
 		t.Fatalf("meta = %+v", meta)
 	}
 

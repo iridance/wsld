@@ -380,6 +380,42 @@ func (c Config) APIPort() (int, error) {
 	return port, nil
 }
 
+// BusyAPIPorts 回傳 machines 已登記的 API 埠；skipDistro 非空時略過該 profile（重 init 可沿用自己的埠）。
+func (c Config) BusyAPIPorts(skipDistro string) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, m := range c.Machines {
+		if skipDistro != "" && strings.EqualFold(m.Distro, skipDistro) {
+			continue
+		}
+		if m.APIEndpoint == "" {
+			continue
+		}
+		tmp := Config{APIEndpoint: m.APIEndpoint}
+		p, err := tmp.APIPort()
+		if err != nil || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// NextAPIPort 從 DefaultPort 起找第一個未被其他 machine 登記的埠。
+func (c Config) NextAPIPort(skipDistro string) int {
+	used := map[int]bool{}
+	for _, p := range c.BusyAPIPorts(skipDistro) {
+		used[p] = true
+	}
+	for p := DefaultPort; p < DefaultPort+100; p++ {
+		if !used[p] {
+			return p
+		}
+	}
+	return DefaultPort
+}
+
 // HTTPBaseURL 把 tcp:// endpoint 轉為 http:// base。
 func (c Config) HTTPBaseURL() string {
 	host, port, err := splitEndpoint(c.APIEndpoint)

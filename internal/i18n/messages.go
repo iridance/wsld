@@ -11,7 +11,7 @@ Usage: wsld <command> [options]
 Commands:
   init       Pick/install Ubuntu, bootstrap Docker, write config
   start      Wake distro, ensure docker.service, wait for API
-  use        Set active machine (creates placeholder profile if needed)
+  use        Set active machine (first time runs init + start)
   unmanage   Stop docker for a machine and remove its profile (keeps WSL)
   unregister Unregister a WSL distro (requires --confirm <name>)
   status     Show WSL / docker / API status (--json)
@@ -32,7 +32,7 @@ Config: %s`,
 命令：
   init       選擇／安裝 Ubuntu、bootstrap Docker、寫入 config
   start      喚醒 distro、確保 docker.service、等待 API
-  use        設為目前 machine（尚無 profile 則寫入占位）
+  use        設為目前 machine（首次會自動 init + start）
   unmanage   停止該 machine 的 docker 並刪除 profile（保留 WSL）
   unregister 解除註冊 WSL 發行版（需 --confirm <名稱>）
   status     顯示 WSL／docker／API 狀態（--json）
@@ -70,8 +70,8 @@ Config: %s`,
 	"cli.machine_missing": {EN: "machine %q is not managed", ZhTW: "尚未管理 machine %q"},
 	"cli.no_active":       {EN: "no active machine — run `wsld use <distro>` or `wsld init`", ZhTW: "尚無 active machine — 請執行 wsld use <distro> 或 wsld init"},
 	"cli.active_not_ready": {
-		EN:   "active machine %q is not initialized — run `wsld init --distro %s`",
-		ZhTW: "目前 machine %q 尚未 init — 請執行 wsld init --distro %s",
+		EN:   "active machine %q is not initialized — set it as current again (wsld use %s) or run wsld start",
+		ZhTW: "目前 machine %q 尚未 init — 請再設為目前（wsld use %s）或執行 wsld start",
 	},
 	"cli.no_containers":     {EN: "no containers", ZhTW: "沒有容器"},
 	"cli.container_started": {EN: "started %s", ZhTW: "已啟動 %s"},
@@ -139,6 +139,8 @@ Config: %s`,
 	"lc.wake_failed":          {EN: "cannot wake %q: %v", ZhTW: "無法喚醒 %q：%v"},
 	"lc.systemd_off":          {EN: "systemd is not enabled in %q; ensure /etc/wsl.conf has [boot] systemd=true, run wsl --shutdown and retry", ZhTW: "%q 內 systemd 未啟用；請確認 /etc/wsl.conf 有 [boot] systemd=true，並執行 wsl --shutdown 後重試"},
 	"lc.docker_start_failed":  {EN: "systemctl start docker failed: %v %s", ZhTW: "systemctl start docker 失敗：%v %s"},
+	"lc.docker_missing":       {EN: "docker.service not installed in %q; run wsld init", ZhTW: "%q 尚未安裝 docker.service；請執行 wsld init"},
+	"lc.start_bootstrap":      {EN: "docker.service missing in %s; running bootstrap …\n", ZhTW: "%s 缺少 docker.service，執行 bootstrap …\n"},
 	"lc.api_no_response":      {EN: "%s not responding: %v (check daemon.json hosts and run wsld doctor)", ZhTW: "%s 無回應：%v（檢查 daemon.json hosts 與 wsld doctor）"},
 	"lc.init_distro_missing":  {EN: "distro %q does not exist (wsl -l -v)", ZhTW: "指定的發行版 %q 不存在（wsl -l -v）"},
 	"lc.init_distro_wsl1":     {EN: "%q is WSL%d; WSL2 required", ZhTW: "%q 是 WSL%d，需要 WSL2"},
@@ -224,6 +226,8 @@ Config: %s`,
 	"gui.settings.theme.system": {EN: "System", ZhTW: "跟隨系統"},
 	"gui.machines.wslconfig":    {EN: ".wslconfig", ZhTW: ".wslconfig"},
 	"gui.machines.usage":        {EN: "Usage", ZhTW: "用量"},
+	"gui.machines.cpu":          {EN: "CPU", ZhTW: "CPU"},
+	"gui.machines.mem":          {EN: "Memory", ZhTW: "記憶體"},
 	"gui.machines.endpoint":     {EN: "API endpoint", ZhTW: "API 端點"},
 	"gui.machines.user":         {EN: "User", ZhTW: "使用者"},
 	"gui.col.id":                {EN: "ID", ZhTW: "ID"},
@@ -251,7 +255,7 @@ Config: %s`,
 	"gui.machines.name":         {EN: "Custom name", ZhTW: "自訂名稱"},
 	"gui.machines.install":      {EN: "Install", ZhTW: "安裝"},
 	"gui.machines.installing":   {EN: "Installing…", ZhTW: "安裝中…"},
-	"gui.machines.installed":    {EN: "%s installed. Launch it once (wsl -d %s) to create its default user, then set it as current and Start engine.", ZhTW: "%s 已安裝。請先執行一次 wsl -d %s 建立預設使用者，再設為目前並按 Start engine。"},
+	"gui.machines.installed":    {EN: "%s installed. Launch it once (wsl -d %s) to create its default user, then set it as current (init + start run automatically).", ZhTW: "%s 已安裝。請先執行一次 wsl -d %s 建立預設使用者，再設為目前（會自動 init + start）。"},
 	"gui.machines.loading":      {EN: "Loading available distributions…", ZhTW: "載入可安裝的發行版…"},
 	"gui.machines.config":       {EN: "Settings", ZhTW: "設定"},
 	"gui.machines.systemd_on":   {EN: "systemd enabled", ZhTW: "systemd 已啟用"},
@@ -272,8 +276,8 @@ Config: %s`,
 	"gui.machines.folder":   {EN: "Open folder", ZhTW: "開啟資料夾"},
 	"gui.machines.terminal": {EN: "Open terminal", ZhTW: "開啟終端"},
 	"gui.machines.not_ready": {
-		EN:   "Active machine is not initialized — run wsld init for this distro, then Start.",
-		ZhTW: "目前 machine 尚未 init — 請對此發行版執行 wsld init，再按 Start。",
+		EN:   "Active machine is not ready yet — set it as current again to finish init, or click Start engine.",
+		ZhTW: "目前 machine 尚未就緒 — 請再設為目前以完成 init，或按 Start engine。",
 	},
 	"gui.machines.info": {EN: "Info", ZhTW: "資訊"},
 	"gui.close":         {EN: "Close", ZhTW: "關閉"},

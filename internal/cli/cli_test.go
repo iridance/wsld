@@ -122,7 +122,7 @@ func newHarness(t *testing.T, withConfig bool) *harness {
 		"-d Ubuntu-26.04 -- cat /etc/docker/daemon.json":                        `{"hosts":["unix:///var/run/docker.sock","tcp://127.0.0.1:23750"]}`,
 		"-d Ubuntu-26.04 -- loginctl show-user irice --property=Linger --value": "yes\n",
 		"-d Ubuntu-26.04 -- id -un":                                             "irice\n",
-		"-d Ubuntu-26.04 -u root -- bash -s -- --user irice --port 23750":       "WSLD_API_PORT=23750\n",
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750":       "WSLD_API_PORT=23750\n",
 	}, errs: map[string]error{}}
 	cfgPath := filepath.Join(h.cfgDir, "config.toml")
 	if withConfig {
@@ -205,7 +205,7 @@ func TestInitWritesConfig(t *testing.T) {
 
 func TestInitPortChangeIsPersisted(t *testing.T) {
 	h := newHarness(t, false)
-	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -s -- --user irice --port 23750"] = "WSLD_API_PORT=23751\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750"] = "WSLD_API_PORT=23751\n"
 	if code := h.run("init"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
@@ -218,7 +218,7 @@ func TestInitPortChangeIsPersisted(t *testing.T) {
 func TestInitFlags(t *testing.T) {
 	h := newHarness(t, false)
 	h.wsl.resp["-d Ubuntu-26.04 -u root -- id -u bob"] = "1000\n"
-	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -s -- --user bob --port 24000 --no-compose"] = "WSLD_API_PORT=24000\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000 --no-compose"] = "WSLD_API_PORT=24000\n"
 	if code := h.run("init", "--user", "bob", "--port", "24000", "--no-compose"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
@@ -407,23 +407,27 @@ func TestLangOverrideZh(t *testing.T) {
 	}
 }
 
-func TestUseSwitchesActiveAndWritesPlaceholder(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("use", "Ubuntu-Extra"); code != 0 {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
+func TestUseFirstTimeInitsAndStarts(t *testing.T) {
+	h := newHarness(t, false)
+	if code := h.run("use", "Ubuntu-26.04"); code != 0 {
+		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
 	}
 	c, err := config.Load(h.app.ConfigPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Active != "Ubuntu-Extra" || c.Distro != "Ubuntu-Extra" {
-		t.Fatalf("active = %+v", c)
+	if c.Active != "Ubuntu-26.04" || c.User != "irice" || c.APIEndpoint == "" {
+		t.Fatalf("cfg = %+v", c)
 	}
-	m, ok := c.FindMachine("Ubuntu-Extra")
-	if !ok || m.Ready() {
-		t.Fatalf("want placeholder machine, got ok=%v m=%+v", ok, m)
+	m, ok := c.FindMachine("Ubuntu-26.04")
+	if !ok || !m.Ready() {
+		t.Fatalf("want ready machine, got ok=%v m=%+v", ok, m)
 	}
-	if !strings.Contains(h.out.String(), "Ubuntu-Extra") {
+	joined := strings.Join(h.wsl.calls, "\n")
+	if !strings.Contains(joined, "wsld-bootstrap") {
+		t.Fatalf("expected bootstrap on first use, calls:\n%s", joined)
+	}
+	if !strings.Contains(h.out.String(), "engine ready") && !strings.Contains(h.out.String(), "READY") {
 		t.Fatalf("out=%q", h.out.String())
 	}
 }
@@ -504,14 +508,35 @@ func TestUnregisterRemovesDistroAndProfile(t *testing.T) {
 	}
 }
 
-func TestStartNotReadyWhenActivePlaceholder(t *testing.T) {
+func TestUseFailsWhenDistroMissing(t *testing.T) {
 	h := newHarness(t, true)
-	if code := h.run("use", "Ghost"); code != 0 {
-		t.Fatal(code)
+	if code := h.run("use", "Ghost"); code != 3 {
+		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
 	}
-	h.out.Reset()
-	h.errb.Reset()
-	if code := h.run("start"); code != 3 || !strings.Contains(h.errb.String(), "wsld init") {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	if !strings.Contains(h.errb.String(), "Ghost") && !strings.Contains(h.out.String()+h.errb.String(), "does not exist") {
+		// Init returns init_distro_missing
+		if !strings.Contains(h.errb.String(), "does not exist") && !strings.Contains(h.errb.String(), "not found") && !strings.Contains(h.errb.String(), "不存在") {
+			t.Fatalf("err=%q", h.errb.String())
+		}
+	}
+}
+
+func TestStartAutoInitsPlaceholder(t *testing.T) {
+	h := newHarness(t, true)
+	c := config.Default()
+	c.EnsureActive(config.Machine{Distro: "Ubuntu-26.04"}) // placeholder
+	if err := config.Save(h.app.ConfigPath, c); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("start"); code != 0 {
+		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
+	}
+	c, err := config.Load(h.app.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := c.FindMachine("Ubuntu-26.04")
+	if !ok || !m.Ready() {
+		t.Fatalf("want ready after start, got %+v", m)
 	}
 }

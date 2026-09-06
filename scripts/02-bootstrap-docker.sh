@@ -23,7 +23,8 @@ run() {
   if [ "$WSLD_DRY_RUN" = "1" ]; then
     printf '[dry-run] %s\n' "$*"
   else
-    "$@"
+    # bash -s（stdin=腳本）時，systemctl／部分工具會讀 stdin 吞掉後續腳本
+    "$@" </dev/null
   fi
 }
 
@@ -145,15 +146,20 @@ if [ -r /etc/docker/daemon.json ]; then
   CURRENT_PORT="$(grep -oE 'tcp://127\.0\.0\.1:[0-9]+' /etc/docker/daemon.json | head -1 | sed 's/.*://')" || true
 fi
 
-if [ -n "$CURRENT_PORT" ] && [ "$CURRENT_PORT" = "$WSLD_PORT" ]; then
-  PORT="$CURRENT_PORT"
-  log "沿用既有 daemon.json 埠 $PORT"
-elif [ -n "$CURRENT_PORT" ] && systemctl is-active --quiet docker 2>/dev/null; then
+if [ -n "$CURRENT_PORT" ] && systemctl is-active --quiet docker </dev/null 2>/dev/null && ! wsld_windows_port_in_use "$CURRENT_PORT"; then
   PORT="$CURRENT_PORT"
   log "dockerd 已在埠 $PORT 監聽，沿用"
 else
-  PORT="$(wsld_pick_free_port "$WSLD_PORT")" || die "找不到可用埠（起始 $WSLD_PORT）" 4
-  [ "$PORT" = "$WSLD_PORT" ] || warn "埠 $WSLD_PORT 已被占用，改用 $PORT"
+  start="$WSLD_PORT"
+  if [ -n "$CURRENT_PORT" ] && ! wsld_port_in_use "$CURRENT_PORT"; then
+    start="$CURRENT_PORT"
+  fi
+  PORT="$(wsld_pick_free_port "$start")" || die "找不到可用埠（起始 $start）" 4
+  if [ -n "$CURRENT_PORT" ] && [ "$PORT" != "$CURRENT_PORT" ]; then
+    warn "既有埠 $CURRENT_PORT 不可用，改用 $PORT"
+  elif [ "$PORT" != "$WSLD_PORT" ]; then
+    warn "埠 $WSLD_PORT 已被占用，改用 $PORT"
+  fi
 fi
 
 DAEMON_JSON="$(wsld_render_daemon_json "$PORT")"

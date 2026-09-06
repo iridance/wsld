@@ -151,6 +151,7 @@ func TestStartWakesStartsDockerAndWaitsForPing(t *testing.T) {
 		"-d Ubuntu-26.04 -- true":                           {{}},
 		"-d Ubuntu-26.04 -- systemctl is-system-running":    {{out: "running\n"}},
 		"-d Ubuntu-26.04 -- systemctl is-active docker":     {{out: "inactive\n", err: &wsl.ExitError{Code: 3}}, {out: "active\n"}},
+		"-d Ubuntu-26.04 -- systemctl cat docker.service":   {{out: "# /lib/systemd/system/docker.service\n"}},
 		"-d Ubuntu-26.04 -u root -- systemctl start docker": {{}},
 	}}
 	p := &fakePinger{errs: []error{dockerapi.ErrUnreachable, dockerapi.ErrUnreachable, nil}}
@@ -203,13 +204,75 @@ func TestStartFailsAPIWhenPingNeverSucceeds(t *testing.T) {
 	}
 }
 
+func TestStartBootstrapsWhenDockerUnitMissing(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose": {{out: utf16(listUbuntuRunning)}},
+		"-d Ubuntu-26.04 -- true": {{}},
+		"-d Ubuntu-26.04 -- systemctl is-system-running": {{out: "running\n"}},
+		"-d Ubuntu-26.04 -- systemctl is-active docker": {
+			{out: "inactive\n", err: &wsl.ExitError{Code: 3}},
+			{out: "active\n"},
+		},
+		"-d Ubuntu-26.04 -- systemctl cat docker.service": {
+			{out: "", err: &wsl.ExitError{Code: 1}},
+		},
+		"-d Ubuntu-26.04 -u root -- id -u irice": {{out: "1000\n"}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {
+			{out: "WSLD_API_PORT=23750\n"},
+		},
+	}}
+	p := &fakePinger{}
+	m := newMgr(fr, p)
+	m.Bundle = []byte("BUNDLE")
+	m.PingAttempts = 3
+	st, err := m.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fr.called("-u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750") {
+		t.Fatalf("expected bootstrap; calls=%v", fr.calls)
+	}
+	if !st.APIReachable {
+		t.Fatalf("status=%+v", st)
+	}
+}
+
+func TestStartDoesNotBootstrapWhenUnitPresentButInactive(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose": {{out: utf16(listUbuntuRunning)}},
+		"-d Ubuntu-26.04 -- true": {{}},
+		"-d Ubuntu-26.04 -- systemctl is-system-running": {{out: "running\n"}},
+		"-d Ubuntu-26.04 -- systemctl is-active docker": {
+			{out: "inactive\n", err: &wsl.ExitError{Code: 3}},
+			{out: "active\n"},
+		},
+		"-d Ubuntu-26.04 -- systemctl cat docker.service": {
+			{out: "# /lib/systemd/system/docker.service\n"},
+		},
+		"-d Ubuntu-26.04 -u root -- systemctl start docker": {{}},
+	}}
+	st, err := newMgr(fr, &fakePinger{}).Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.called("wsld-bootstrap") {
+		t.Fatal("should not bootstrap when unit exists")
+	}
+	if !fr.called("-u root -- systemctl start docker") {
+		t.Fatal("should systemctl start docker")
+	}
+	if !st.APIReachable {
+		t.Fatalf("status=%+v", st)
+	}
+}
+
 // ---- Init -------------------------------------------------------------------
 
 func TestInitPicksUbuntuDetectsUserRunsBundleAndParsesPort(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":          {{out: utf16(listUbuntuRunning)}},
 		"-d Ubuntu-26.04 -- id -un": {{out: "irice\n"}},
-		"-d Ubuntu-26.04 -u root -- bash -s -- --user irice --port 23750": {{out: "[wsld] ...\nWSLD_API_PORT=23751\nWSLD_API_ENDPOINT=tcp://127.0.0.1:23751\n"}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "[wsld] ...\nWSLD_API_PORT=23751\nWSLD_API_ENDPOINT=tcp://127.0.0.1:23751\n"}},
 	}}
 	var out bytes.Buffer
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("BUNDLE"), Output: &out, Sleep: func(time.Duration) {}}
@@ -229,11 +292,33 @@ func TestInitPicksUbuntuDetectsUserRunsBundleAndParsesPort(t *testing.T) {
 	}
 }
 
+func TestInitPassesBusyPortsFromOtherMachines(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  Debian1 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
+		"-d Debian1 -- id -un": {{out: "bob\n"}},
+		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23751 --busy-ports 23750": {{out: "WSLD_API_PORT=23752\n"}},
+	}}
+	cfg := config.Default()
+	cfg.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: config.EndpointForPort(23750)})
+	_ = cfg.SetActive("Ubuntu-26.04")
+	m := &Manager{WSL: fr, Cfg: cfg, API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
+	got, err := m.Init(context.Background(), InitOptions{Distro: "Debian1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIEndpoint != "tcp://127.0.0.1:23752" || got.Distro != "Debian1" {
+		t.Fatalf("cfg = %+v", got)
+	}
+	if !fr.called("--busy-ports 23750") {
+		t.Fatalf("expected --busy-ports; calls=%v", fr.calls)
+	}
+}
+
 func TestInitHonoursExplicitDistroUserPort(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  Ubuntu-22.04 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
 		"-d Ubuntu-22.04 -u root -- id -u bob": {{out: "1000\n"}},
-		"-d Ubuntu-22.04 -u root -- bash -s -- --user bob --port 24000": {{out: "WSLD_API_PORT=24000\n"}},
+		"-d Ubuntu-22.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000": {{out: "WSLD_API_PORT=24000\n"}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	cfg, err := m.Init(context.Background(), InitOptions{Distro: "Ubuntu-22.04", User: "bob", Port: 24000})
@@ -257,7 +342,7 @@ func TestInitCreatesUserWhenDefaultIsRoot(t *testing.T) {
 		"-d Debian1 -u root -- useradd -m -s /bin/bash irice": {{}},
 		"-d Debian1 -u root -- usermod -aG sudo irice":         {{}},
 		"-d Debian1 -u root -- usermod -aG wheel irice":        {{err: errors.New("no wheel")}},
-		"-d Debian1 -u root -- bash -s -- --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
+		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
 	}}
 	var out bytes.Buffer
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Output: &out, Sleep: func(time.Duration) {}}
@@ -306,7 +391,7 @@ func TestInitBootstrapExit3MapsToNotReady(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":          {{out: utf16(listUbuntuRunning)}},
 		"-d Ubuntu-26.04 -- id -un": {{out: "irice\n"}},
-		"-d Ubuntu-26.04 -u root -- bash -s -- --user irice --port 23750": {{out: "[wsld] WARN: systemd...", err: &wsl.ExitError{Code: 3}}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "[wsld] WARN: systemd...", err: &wsl.ExitError{Code: 3}}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	_, err := m.Init(context.Background(), InitOptions{})

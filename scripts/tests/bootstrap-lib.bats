@@ -39,6 +39,77 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
+@test "port_reserved honours WSLD_BUSY_PORTS csv" {
+  WSLD_BUSY_PORTS="23750,23751"
+  run wsld_port_reserved 23750
+  [ "$status" -eq 0 ]
+  run wsld_port_reserved 23751
+  [ "$status" -eq 0 ]
+  run wsld_port_reserved 23752
+  [ "$status" -ne 0 ]
+}
+
+@test "port_in_use treats reserved ports as busy even if ss is free" {
+  WSLD_BUSY_PORTS="23751"
+  wsld_linux_port_in_use() { return 1; }
+  wsld_windows_port_in_use() { return 1; }
+  run wsld_port_in_use 23751
+  [ "$status" -eq 0 ]
+  run wsld_port_in_use 23750
+  [ "$status" -ne 0 ]
+}
+
+@test "port_in_use detects windows listener via wsld_windows_port_in_use" {
+  WSLD_BUSY_PORTS=""
+  wsld_linux_port_in_use() { return 1; }
+  wsld_windows_port_in_use() { [ "$1" = "23751" ]; }
+  run wsld_port_in_use 23751
+  [ "$status" -eq 0 ]
+  run wsld_port_in_use 23750
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_windows_netstat_listening matches local listen lines" {
+  sample=$'  TCP    127.0.0.1:23751        0.0.0.0:0              LISTENING       14676\r\n  TCP    0.0.0.0:445            0.0.0.0:0              LISTENING       4\r\n  TCP    127.0.0.1:23750        127.0.0.1:9            ESTABLISHED     1\r\n'
+  run wsld_parse_windows_netstat_listening "$sample" 23751
+  [ "$status" -eq 0 ]
+  [ "$output" = "14676" ]
+  run wsld_parse_windows_netstat_listening "$sample" 23750
+  [ "$status" -ne 0 ]
+  run wsld_parse_windows_netstat_listening "$sample" 445
+  [ "$status" -eq 0 ]
+  [ "$output" = "4" ]
+}
+
+@test "windows_port_in_use ignores wslrelay but flags foreign apps" {
+  wsld_parse_windows_netstat_listening() {
+    case "$2" in
+      23750) echo 14848; return 0 ;;
+      23751) echo 14676; return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  wsld_windows_process_name() {
+    case "$1" in
+      14848) echo wslrelay ;;
+      14676) echo Cursor ;;
+      *) echo unknown ;;
+    esac
+  }
+  # bypass real netstat.exe
+  netstat.exe() { echo dummy; }
+  command() { [ "$1" = "-v" ] && [ "$2" = "netstat.exe" ]; }
+  run wsld_windows_port_in_use 23750
+  [ "$status" -ne 0 ]
+  run wsld_windows_port_in_use 23751
+  [ "$status" -eq 0 ]
+}
+
+@test "parse_args honours --busy-ports" {
+  wsld_parse_args --busy-ports 23750,23751
+  [ "$WSLD_BUSY_PORTS" = "23750,23751" ]
+}
+
 # ---------- daemon.json ----------
 
 @test "render_daemon_json binds unix socket and loopback tcp only" {
@@ -47,6 +118,21 @@ teardown() {
   [[ "$output" == *'"unix:///var/run/docker.sock"'* ]]
   [[ "$output" == *'"tcp://127.0.0.1:23750"'* ]]
   [[ "$output" != *'0.0.0.0'* ]]
+}
+
+@test "render helpers are safe under bash -s (no heredoc swallowing stdin)" {
+  lib="$BATS_TEST_DIRNAME/../lib/bootstrap-lib.sh"
+  run bash -s -- "$lib" <<'SCRIPT'
+set -euo pipefail
+. "$1"
+wsld_render_daemon_json 23750
+wsld_render_systemd_override
+echo MARKER_AFTER_RENDER
+SCRIPT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tcp://127.0.0.1:23750"'* ]]
+  [[ "$output" == *"ExecStart=/usr/bin/dockerd"* ]]
+  [[ "$output" == *MARKER_AFTER_RENDER* ]]
 }
 
 @test "validate_loopback_hosts accepts loopback-only config" {

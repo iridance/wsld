@@ -177,19 +177,16 @@ func TestEngineStartNotReadyMapsTo503(t *testing.T) {
 func TestEngineStartAutoInitsPlaceholderActive(t *testing.T) {
 	e := newEnv(t, "")
 	e.s.WSL = NewFakeWSL()
-	// 切到未 init 的 distro（占位 profile）
-	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
-	if resp.StatusCode != 200 {
-		t.Fatalf("use = %d %s", resp.StatusCode, b)
-	}
+	// 手動寫占位 profile（不經 use，驗證 Start 仍會 Init）
 	c, _ := e.s.LoadConfig()
-	m, _ := c.FindMachine("docker-desktop")
-	if m.Ready() {
-		t.Fatal("expected placeholder")
+	c.EnsureActive(config.Machine{Distro: "docker-desktop"})
+	if err := e.s.SaveConfig(c); err != nil {
+		t.Fatal(err)
 	}
+	e.s.BindActive(c)
 	e.engine.SetDown(true)
 
-	resp, b = e.req(t, "POST", "/api/engine/start", "")
+	resp, b := e.req(t, "POST", "/api/engine/start", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("start should auto-init: %d %s", resp.StatusCode, b)
 	}
@@ -215,6 +212,131 @@ func TestEngineStartAutoInitsPlaceholderActive(t *testing.T) {
 	}
 	if _, ok := c.FindMachine("Ubuntu-26.04"); !ok {
 		t.Fatal("original machine should remain")
+	}
+}
+
+func TestBindActivePromotesConfigMissingLifecycle(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	e.s.Life = ConfigMissingLifecycle{Path: e.cfgP}
+	e.s.NewLifecycle = func(cfg config.Config) Lifecycle {
+		return &FakeLifecycle{Engine: e.engine, Distro: cfg.Distro, Endpoint: cfg.APIEndpoint}
+	}
+	e.engine.SetDown(true)
+
+	// 模擬「無 config 開 GUI → 設為目前」：寫入占位後應升級 Life 並 Init+Start
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("use = %d %s", resp.StatusCode, b)
+	}
+	if _, ok := e.s.Life.(ConfigMissingLifecycle); ok {
+		t.Fatal("Life should be promoted off ConfigMissingLifecycle")
+	}
+	c, _ := e.s.LoadConfig()
+	m, ok := c.FindMachine("docker-desktop")
+	if !ok || !m.Ready() {
+		t.Fatalf("first use should init, got %+v", m)
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
+	var st StatusResponse
+	_ = json.Unmarshal(b, &st)
+	if !st.Ready {
+		t.Fatalf("engine should be up: %+v", st)
+	}
+}
+
+func TestEngineStartFromConfigMissingAfterUse(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	e.s.Life = ConfigMissingLifecycle{Path: e.cfgP}
+	fl := &FakeLifecycle{Engine: e.engine, Distro: "", Endpoint: ""}
+	e.s.NewLifecycle = func(cfg config.Config) Lifecycle {
+		fl.Distro = cfg.Distro
+		fl.Endpoint = cfg.APIEndpoint
+		return fl
+	}
+	// 只寫占位、不經 use 的 bringUp（模擬舊 use 行為後按 Start）
+	c := config.Default()
+	c.EnsureActive(config.Machine{Distro: "docker-desktop"})
+	if err := e.s.SaveConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	e.s.BindActive(c)
+	e.engine.SetDown(true)
+
+	resp, b := e.req(t, "POST", "/api/engine/start", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("start = %d %s", resp.StatusCode, b)
+	}
+	c, _ = e.s.LoadConfig()
+	m, _ := c.FindMachine("docker-desktop")
+	if !m.Ready() {
+		t.Fatalf("start should init placeholder: %+v", m)
+	}
+}
+
+func TestMachineUseFirstTimeInitsAndStarts(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	e.engine.SetDown(true)
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("use = %d %s", resp.StatusCode, b)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(b, &body)
+	if body["ready"] != true {
+		t.Fatalf("use response = %s", b)
+	}
+	if ep, _ := body["api_endpoint"].(string); ep == "" {
+		t.Fatalf("use should return api_endpoint: %s", b)
+	}
+	c, _ := e.s.LoadConfig()
+	m, ok := c.FindMachine("docker-desktop")
+	if !ok || !m.Ready() {
+		t.Fatalf("first use should init: %+v", m)
+	}
+	if e.life.Starts() < 1 {
+		t.Fatal("expected Start during use")
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
+	var st StatusResponse
+	_ = json.Unmarshal(b, &st)
+	if !st.Ready {
+		t.Fatalf("engine should be up after use: %+v", st)
+	}
+}
+
+func TestMachineUseReInitsWhenAPIUnreachable(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	// 先 use 成 Ready
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("first use = %d %s", resp.StatusCode, b)
+	}
+	c, _ := e.s.LoadConfig()
+	m, _ := c.FindMachine("docker-desktop")
+	oldEP := m.APIEndpoint
+	if oldEP == "" {
+		t.Fatal("expected endpoint after first use")
+	}
+	// 模擬 endpoint 失效
+	e.engine.SetDown(true)
+	resp, b = e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("re-use = %d %s", resp.StatusCode, b)
+	}
+	c, _ = e.s.LoadConfig()
+	m, _ = c.FindMachine("docker-desktop")
+	if !m.Ready() || m.APIEndpoint == "" {
+		t.Fatalf("re-use should restore ready endpoint: %+v", m)
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
+	var st StatusResponse
+	_ = json.Unmarshal(b, &st)
+	if !st.Ready {
+		t.Fatalf("engine should be up after re-use: %+v", st)
 	}
 }
 

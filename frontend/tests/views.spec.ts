@@ -142,8 +142,44 @@ test("Machines: lists local WSL distros with state, version and role badges", as
   await expect(dd.getByTestId("machine-flag-active")).toHaveCount(0);
 });
 
-test("Machines: Info opens a right-side drawer with wsl.conf and usage", async ({ page }) => {
+test("Machines: Info opens a right-side drawer with wsl.conf and usage bars", async ({ page, request }) => {
+  await request.put("/api/settings", {
+    data: {
+      refresh_interval_sec: 1,
+      exec_shell: "",
+      tray_autostart: false,
+      lang: "en",
+      theme: "system",
+    },
+  });
   await go(page, "machines");
+  let configCalls = 0;
+  await page.route("**/api/machines/Ubuntu-26.04/config", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    configCalls++;
+    if (configCalls === 1) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        name: "Ubuntu-26.04",
+        wsl_conf: "[boot]\nsystemd=true\n\n[user]\ndefault=irice\n",
+        systemd: true,
+        managed: true,
+        ready: true,
+        cpu_percent: 42.5,
+        memory_used_mb: 4096,
+        memory_total_mb: 8192,
+      }),
+    });
+  });
+
   await page.getByTestId("btn-machine-config-Ubuntu-26.04").click();
   const drawer = page.getByTestId("info-drawer");
   await expect(drawer).toBeVisible();
@@ -151,12 +187,26 @@ test("Machines: Info opens a right-side drawer with wsl.conf and usage", async (
   await expect(page.getByTestId("info-title")).toHaveText("Ubuntu-26.04");
   await expect(page.getByTestId("machine-config-systemd")).toContainText("systemd");
   await expect(page.getByTestId("machine-config-conf")).toContainText("[boot]");
-  await expect(page.getByTestId("info-usage")).toContainText("CPU");
+  const cpuBar = page.getByTestId("info-cpu-bar");
+  const memBar = page.getByTestId("info-mem-bar");
+  await expect(cpuBar).toBeVisible();
+  await expect(memBar).toBeVisible();
+  await expect(cpuBar.locator(".usage-value")).toContainText("%");
+  await expect(memBar.locator(".usage-value")).toContainText("MB");
+  await expect(cpuBar).toHaveAttribute("data-pct", "80");
+  await expect(memBar).toHaveAttribute("data-pct", "25");
+
+  await expect(cpuBar).toHaveAttribute("data-pct", "42.5", { timeout: 5000 });
+  await expect(cpuBar.locator(".usage-value")).toHaveText("42.5%");
+  await expect(memBar.locator(".usage-value")).toContainText("4096/8192");
+  await expect(memBar).toHaveAttribute("data-pct", "50");
+
   await page.getByTestId("btn-info-close").click();
   await expect(drawer).toBeHidden();
 
   await page.getByTestId("btn-machine-config-docker-desktop").click();
   await expect(page.getByTestId("machine-config-conf")).toContainText("(no /etc/wsl.conf)");
+  await expect(page.getByTestId("info-cpu-bar")).toHaveAttribute("data-pct", "0");
 });
 
 test("Machines: Add distro lists online distributions and installs the chosen one", async ({ page, request }) => {
@@ -179,7 +229,7 @@ test("Machines: Add distro lists online distributions and installs the chosen on
   await expect(dlg).toBeHidden();
   await expect(page.getByTestId("notice")).toContainText("Debian1 installed");
   await expect(page.getByTestId("notice")).toContainText("wsl -d Debian1");
-  await expect(page.getByTestId("notice")).toContainText("Start engine");
+  await expect(page.getByTestId("notice")).toContainText("set it as current");
   await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]')).toBeVisible();
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
 });
@@ -390,7 +440,7 @@ test("Machines: Set as current shows header Loading/Switching until complete", a
   await expect(page.getByTestId("notice")).toContainText("docker-desktop");
 });
 
-test("Machines: Set as current switches active and hard-cuts panels", async ({ page }) => {
+test("Machines: Set as current switches active, hard-cuts panels, and finishes init", async ({ page }) => {
   await open(page);
   // open a panel first
   await page.getByTestId("btn-logs-web").click();
@@ -401,16 +451,15 @@ test("Machines: Set as current switches active and hard-cuts panels", async ({ p
   await expect(page.getByTestId("notice")).toContainText("docker-desktop");
   await expect(page.getByTestId("panel")).toBeHidden();
   await expect(page.getByTestId("header-distro")).toHaveText("docker-desktop");
-  await expect(page.getByTestId("error-banner")).toContainText("not initialized");
+  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 15_000 });
+  await expect(page.getByTestId("error-banner")).toBeHidden();
+  await expect(page.getByTestId("btn-start-engine")).toBeDisabled();
 });
 
-test("Machines: Start engine after switching distro auto-inits and clears not-ready banner", async ({ page }) => {
+test("Machines: Set as current on uninitialized distro auto inits and starts", async ({ page }) => {
   await open(page);
   await page.getByTestId("nav-machines").click();
   await page.getByTestId("btn-machine-use-docker-desktop").click();
-  await expect(page.getByTestId("error-banner")).toHaveAttribute("data-kind", "not-ready");
-  await expect(page.getByTestId("btn-start-engine")).toBeEnabled();
-  await page.getByTestId("btn-start-engine").click();
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 15_000 });
   await expect(page.getByTestId("error-banner")).toBeHidden();
   await expect(page.getByTestId("header-distro")).toHaveText("docker-desktop");

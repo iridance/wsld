@@ -178,7 +178,10 @@ func (a *App) loadConfig() (config.Config, error) {
 }
 
 func (a *App) manager(cfg config.Config, api API) *lifecycle.Manager {
-	return &lifecycle.Manager{WSL: a.WSL, Cfg: cfg, API: api, Bundle: a.Bundle, Output: a.Stdout, PingInterval: a.PingInterval}
+	return &lifecycle.Manager{
+		WSL: a.WSL, Cfg: cfg, API: api, Bundle: a.Bundle, Output: a.Stdout, PingInterval: a.PingInterval,
+		NewAPI: func(c config.Config) lifecycle.Pinger { return a.apiFor(c) },
+	}
 }
 
 func (a *App) apiFor(cfg config.Config) API {
@@ -237,11 +240,10 @@ func (a *App) cmdStart(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.requireActiveReady(cfg); err != nil {
+	if _, err := a.requireActive(cfg); err != nil {
 		return err
 	}
-	m := a.manager(cfg, a.apiFor(cfg))
-	st, err := m.Start(ctx)
+	st, cfg, err := a.bringUp(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -524,17 +526,61 @@ func (a *App) cmdDoctor(ctx context.Context, args []string) error {
 }
 
 func (a *App) requireActiveReady(cfg config.Config) error {
-	m, ok := cfg.ActiveMachine()
-	if !ok {
-		return fail(ExitNotReady, errors.New(i18n.T("cli.no_active")))
+	m, err := a.requireActive(cfg)
+	if err != nil {
+		return err
 	}
 	if !m.Ready() {
-		return fail(ExitNotReady, errors.New(i18n.T("cli.active_not_ready", m.Distro)))
+		return fail(ExitNotReady, errors.New(i18n.T("cli.active_not_ready", m.Distro, m.Distro)))
 	}
 	return nil
 }
 
-func (a *App) cmdUse(_ context.Context, args []string) error {
+func (a *App) requireActive(cfg config.Config) (config.Machine, error) {
+	m, ok := cfg.ActiveMachine()
+	if !ok {
+		return config.Machine{}, fail(ExitNotReady, errors.New(i18n.T("cli.no_active")))
+	}
+	return m, nil
+}
+
+// bringUp：必要時 Init（含 API 不通時重選埠），再 Start；成功後寫回設定。
+func (a *App) bringUp(ctx context.Context, cfg config.Config) (lifecycle.Status, config.Config, error) {
+	m := a.manager(cfg, a.apiFor(cfg))
+	am, ok := cfg.ActiveMachine()
+	if !ok {
+		return lifecycle.Status{}, cfg, fail(ExitNotReady, errors.New(i18n.T("cli.no_active")))
+	}
+	needInit := !am.Ready()
+	if !needInit && m.API != nil {
+		if err := m.API.Ping(ctx); err != nil {
+			needInit = true
+		}
+	}
+	if needInit {
+		fmt.Fprint(a.Stdout, i18n.T("lc.start_bootstrap", am.Distro))
+		newCfg, err := m.Init(ctx, lifecycle.InitOptions{Distro: am.Distro})
+		if err != nil {
+			return lifecycle.Status{}, cfg, err
+		}
+		cfg = newCfg
+		m.Cfg = cfg
+		if m.NewAPI != nil {
+			m.API = m.NewAPI(cfg)
+		}
+	}
+	st, err := m.Start(ctx)
+	if err != nil {
+		return st, cfg, err
+	}
+	cfg = m.Cfg
+	if err := config.Save(a.ConfigPath, cfg); err != nil {
+		return st, cfg, fail(ExitError, err)
+	}
+	return st, cfg, nil
+}
+
+func (a *App) cmdUse(ctx context.Context, args []string) error {
 	fs := a.newFlags("use")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -563,9 +609,25 @@ func (a *App) cmdUse(_ context.Context, args []string) error {
 		return err
 	}
 	fmt.Fprintln(a.Stdout, i18n.T("cli.use_done", cfg.Active))
-	if m, ok := cfg.ActiveMachine(); ok && !m.Ready() {
-		fmt.Fprintln(a.Stdout, i18n.T("cli.active_not_ready", m.Distro))
+	am, _ := cfg.ActiveMachine()
+	needBringUp := !am.Ready()
+	if !needBringUp {
+		if api := a.apiFor(cfg); api != nil {
+			if err := api.Ping(ctx); err != nil {
+				needBringUp = true
+			}
+		}
 	}
+	if !needBringUp {
+		return nil
+	}
+	// 未 Ready，或 endpoint／API 不通：Init（重選可用埠）+ Start。
+	st, cfg, err := a.bringUp(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	a.printStatus(st)
+	fmt.Fprintln(a.Stdout, i18n.T("cli.start_done", cfg.APIEndpoint))
 	return nil
 }
 

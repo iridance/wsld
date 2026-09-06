@@ -36,6 +36,8 @@ type Manager struct {
 	API    Pinger
 	Bundle []byte    // scripts.BootstrapBundle()
 	Output io.Writer // init 時串流 bootstrap 輸出；nil 則丟棄
+	// NewAPI 在 Start 自動 bootstrap 後重綁 Pinger（埠可能變更）；可選。
+	NewAPI func(cfg config.Config) Pinger
 
 	PingAttempts int                 // 預設 20
 	PingInterval time.Duration       // 預設 500ms
@@ -120,7 +122,13 @@ func (m *Manager) dockerActive(ctx context.Context) bool {
 	return strings.TrimSpace(string(out)) == "active"
 }
 
-// Start：喚醒 distro → 確認 systemd → 啟動 docker.service（root）→ 等 API。
+// DockerUnitPresent 判斷 distro 是否已安裝 docker.service（未安裝時 Start 會自動 bootstrap）。
+func (m *Manager) DockerUnitPresent(ctx context.Context) bool {
+	_, _, err := wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "", nil, "systemctl", "cat", "docker.service")
+	return err == nil
+}
+
+// Start：喚醒 distro → 確認 systemd → 啟動 docker.service（缺 unit 則自動 Init）→ 等 API。
 func (m *Manager) Start(ctx context.Context) (Status, error) {
 	list, err := wsl.ListDistros(ctx, m.WSL)
 	if err != nil {
@@ -140,7 +148,20 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.systemd_off", m.Cfg.Distro))
 	}
 	if !m.dockerActive(ctx) {
-		if _, stderr, err := wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "root", nil, "systemctl", "start", "docker"); err != nil {
+		if !m.DockerUnitPresent(ctx) {
+			if len(m.Bundle) == 0 {
+				return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.docker_missing", m.Cfg.Distro))
+			}
+			m.print(i18n.T("lc.start_bootstrap", m.Cfg.Distro))
+			newCfg, err := m.Init(ctx, InitOptions{Distro: m.Cfg.Distro, User: m.Cfg.User})
+			if err != nil {
+				return m.Status(ctx), err
+			}
+			m.Cfg = newCfg
+			if m.NewAPI != nil {
+				m.API = m.NewAPI(newCfg)
+			}
+		} else if _, stderr, err := wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "root", nil, "systemctl", "start", "docker"); err != nil {
 			return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.docker_start_failed", err, strings.TrimSpace(string(stderr))))
 		}
 		// 等待 active
@@ -250,19 +271,39 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 
 	port := opts.Port
 	if port == 0 {
-		if p, err := cfg.APIPort(); err == nil {
-			port = p
-		} else {
-			port = config.DefaultPort
+		// 重 init：優先沿用本 distro 既有埠；新 machine：避開其他 profile 已登記埠。
+		if m, ok := cfg.FindMachine(d.Name); ok && m.APIEndpoint != "" {
+			tmp := config.Config{APIEndpoint: m.APIEndpoint}
+			if p, err := tmp.APIPort(); err == nil {
+				port = p
+			}
+		}
+		if port == 0 {
+			port = cfg.NextAPIPort(d.Name)
 		}
 	}
+	busy := cfg.BusyAPIPorts(d.Name)
 
-	args := []string{"bash", "-s", "--", "--user", user, "--port", strconv.Itoa(port)}
+	bootArgs := []string{"--user", user, "--port", strconv.Itoa(port)}
+	if len(busy) > 0 {
+		parts := make([]string, len(busy))
+		for i, p := range busy {
+			parts[i] = strconv.Itoa(p)
+		}
+		bootArgs = append(bootArgs, "--busy-ports", strings.Join(parts, ","))
+	}
 	if opts.NoCompose {
-		args = append(args, "--no-compose")
+		bootArgs = append(bootArgs, "--no-compose")
 	}
 	m.print(i18n.T("lc.init_running", d.Name))
-	out, stderr, err := wsl.RunIn(ctx, m.WSL, d.Name, "root", bytes.NewReader(m.Bundle), args...)
+	// 先把 bundle 寫入 distro 暫存再執行，避免 `bash -s`+stdin 被 systemctl 等指令吞掉腳本。
+	var b strings.Builder
+	b.WriteString("cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh")
+	for _, a := range bootArgs {
+		b.WriteByte(' ')
+		b.WriteString(shellQuote(a))
+	}
+	out, stderr, err := wsl.RunIn(ctx, m.WSL, d.Name, "root", bytes.NewReader(m.Bundle), "bash", "-c", b.String())
 	m.write(out)
 	m.write(stderr)
 	if err != nil {
@@ -300,4 +341,18 @@ func (m *Manager) write(b []byte) {
 	if m.Output != nil && len(b) > 0 {
 		_, _ = m.Output.Write(b)
 	}
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '-' || r == '_' || r == '.' || r == '/' || r == ':'
+		if !ok {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
 }

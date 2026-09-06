@@ -79,6 +79,8 @@ type Server struct {
 	OnLangChange func(l i18n.Lang)
 	// NewEngine 於切換 active 時建立新 Docker client（nil＝測試用 FakeEngine 不換）。
 	NewEngine func(cfg config.Config) Engine
+	// NewLifecycle 於 config 從無到有時，把 ConfigMissingLifecycle 升級成真正的 Lifecycle。
+	NewLifecycle func(cfg config.Config) Lifecycle
 	// OnActiveChange 於 active 變更後額外通知（例如 Tray 重繪）。
 	OnActiveChange func(cfg config.Config)
 
@@ -225,6 +227,9 @@ func (s *Server) BindActive(cfg config.Config) {
 	if s.NewEngine != nil {
 		s.Engine = s.NewEngine(cfg)
 	}
+	if _, ok := s.Life.(ConfigMissingLifecycle); ok && s.NewLifecycle != nil {
+		s.Life = s.NewLifecycle(cfg)
+	}
 	if fl, ok := s.Life.(*FakeLifecycle); ok {
 		fl.mu.Lock()
 		fl.Distro = cfg.Distro
@@ -349,12 +354,7 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	// 切換到尚未 init 的 distro 後按 Start：先自動 bootstrap／寫入 profile，再 ensure 引擎。
-	if err := s.ensureActiveInitialized(ctx); err != nil {
-		writeEngineErr(w, err)
-		return
-	}
-	st, err := s.life().Start(ctx)
+	st, err := s.bringUpActive(ctx)
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -362,15 +362,46 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready()})
 }
 
-// ensureActiveInitialized：active 為占位（未 Ready）時執行 Init／補齊設定並重綁引擎。
+// bringUpActive：必要時 Init／補齊 profile，再 Start 引擎並寫回設定。
+func (s *Server) bringUpActive(ctx context.Context) (lifecycle.Status, error) {
+	if err := s.ensureActiveInitialized(ctx); err != nil {
+		return lifecycle.Status{}, err
+	}
+	st, err := s.life().Start(ctx)
+	if err != nil {
+		return st, err
+	}
+	if mgr, ok := s.life().(*lifecycle.Manager); ok {
+		if s.SaveConfig != nil {
+			if err := s.SaveConfig(mgr.Cfg); err != nil {
+				return st, err
+			}
+		}
+		s.BindActive(mgr.Cfg)
+	}
+	return st, nil
+}
+
+// ensureActiveInitialized：補齊 active profile（Init），並在 API 不通時重選可用 endpoint。
 func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 	cfg := s.cfg()
 	am, ok := cfg.ActiveMachine()
 	if !ok {
 		return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.no_active"))
 	}
-	if am.Ready() {
+	needInit := !am.Ready()
+	if !needInit && s.engine() != nil {
+		// 已有 endpoint 但打不通（埠被佔／連錯引擎）→ 重跑 Init 選可用埠
+		if err := s.engine().Ping(ctx); err != nil {
+			needInit = true
+		}
+	}
+	if !needInit {
 		return nil
+	}
+	// 無 config 開 GUI 時 Life 可能仍是 ConfigMissingLifecycle；先升級再 Init。
+	if _, ok := s.life().(ConfigMissingLifecycle); ok {
+		s.BindActive(cfg)
 	}
 	if fl, ok := s.life().(*FakeLifecycle); ok {
 		ep := nextMachineEndpoint(cfg)
@@ -382,7 +413,7 @@ func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 			return err
 		}
 		s.BindActive(cfg)
-		_ = fl // BindActive 已更新 Distro／Endpoint
+		_ = fl
 		return nil
 	}
 	if mgr, ok := s.life().(*lifecycle.Manager); ok {
@@ -404,19 +435,7 @@ func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 }
 // nextMachineEndpoint 選一個尚未被其他 machine 占用的 loopback 埠（測試／占位補齊用）。
 func nextMachineEndpoint(cfg config.Config) string {
-	used := map[int]bool{}
-	for _, m := range cfg.Machines {
-		tmp := config.Config{APIEndpoint: m.APIEndpoint}
-		if p, err := tmp.APIPort(); err == nil {
-			used[p] = true
-		}
-	}
-	for p := config.DefaultPort; p < config.DefaultPort+100; p++ {
-		if !used[p] {
-			return config.EndpointForPort(p)
-		}
-	}
-	return config.EndpointForPort(config.DefaultPort)
+	return config.EndpointForPort(cfg.NextAPIPort(""))
 }
 
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {

@@ -31,9 +31,14 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 ## 埠
 
-- 預設 `23750`；`wsld init` 若發現被占用會自動往上找（bats 覆蓋），並寫回 `config.toml` 的 `api_endpoint`。
+- 預設 `23750`；`wsld init` 選埠時會避開：
+  1. 其他 machine 已寫入 `config.toml` 的埠（`--busy-ports`）
+  2. WSL／Linux 內正在 LISTEN 的埠（`ss`／`netstat`）
+  3. **Windows 主機**上被非 WSL 行程佔用的埠（`netstat.exe`＋行程名；`wslrelay`／`wsl` 視為本產品轉發，不算衝突——用來避開 Cursor 等佔埠導致 GUI 連錯引擎）
+- 自動往上找後寫回 `config.toml` 的 `api_endpoint`。
 - API **只綁 127.0.0.1**。`doctor` 的「API 只綁 loopback」會抓到 `0.0.0.0` 誤綁；「Docker API _ping」會抓到「埠有人聽但不是 Docker」。
 - 手動改埠：改 `/etc/docker/daemon.json` 的 `hosts` 與 `config.toml` 的 `api_endpoint` 兩處，然後 `systemctl restart docker`。
+- 若某 machine 已佔到衝突埠：對該 distro 再跑一次 `wsld init -d <name>`（或 GUI 重新設為目前）會改選空閒埠。
 
 ## 容器「停止」要等 10 秒？
 
@@ -72,7 +77,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 - **0.5**：可「設為目前」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
 - 「新增發行版」執行 `wsl --install -d <name> --no-launch`。安裝完成後：
   1. `wsl -d <name>` 進入一次，依提示建立預設使用者；
-  2. 設為目前後按 **Start engine**（會自動 bootstrap／寫入該 machine 的 user＋endpoint）或手動執行 `wsld init`。
+  2. 設為目前（會自動 bootstrap／寫入該 machine 的 user＋endpoint 並啟動引擎）。
 
 ## 已知限制
 

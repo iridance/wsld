@@ -11,7 +11,7 @@ import (
 	"github.com/iridance/wsld/internal/wsl"
 )
 
-// FakeWSL 模擬 wsl.exe：支援 --list --verbose／--list --online／--install／cat /etc/wsl.conf。
+// FakeWSL 模擬 wsl.exe：支援 --list --verbose／--list --online／--install／cat /etc/wsl.conf／/proc。
 // 供 gui 測試與 wsld-gui-testhost 的 Machines 視圖使用。
 type FakeWSL struct {
 	mu          sync.Mutex
@@ -20,6 +20,7 @@ type FakeWSL struct {
 	online      []wsl.OnlineDistro
 	installed   []string
 	FailInstall bool
+	procStatN   map[string]int // distro → /proc/stat 讀取次數（交替兩組假資料）
 }
 
 // NewFakeWSL 建立含 Ubuntu-26.04（Running、預設、systemd）與 docker-desktop（Stopped）的假環境。
@@ -47,6 +48,7 @@ func (f *FakeWSL) Reset() {
 	}
 	f.installed = nil
 	f.FailInstall = false
+	f.procStatN = map[string]int{}
 }
 
 // Installed 回傳已呼叫 --install 的名稱。
@@ -142,6 +144,18 @@ func (f *FakeWSL) Run(_ context.Context, _ io.Reader, args ...string) ([]byte, [
 				return nil, []byte("cat: /etc/wsl.conf: No such file or directory"), &wsl.ExitError{Code: 1}
 			}
 			return []byte(conf), nil, nil
+		}
+		if strings.HasSuffix(joined, "-- cat /proc/stat") {
+			n := f.procStatN[name]
+			f.procStatN[name] = n + 1
+			// 奇偶交替：idleΔ/totalΔ → ~80% 與 ~20%，便於測試非寫死常數
+			if n%2 == 0 {
+				return []byte("cpu  100 0 50 850 0 0 0 0 0 0\n"), nil, nil
+			}
+			return []byte("cpu  160 0 70 870 0 0 0 0 0 0\n"), nil, nil
+		}
+		if strings.HasSuffix(joined, "-- cat /proc/meminfo") {
+			return []byte("MemTotal:       8388608 kB\nMemAvailable:   6291456 kB\n"), nil, nil
 		}
 		// systemctl stop docker 等 best-effort 命令
 		return nil, nil, nil

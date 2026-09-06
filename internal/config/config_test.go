@@ -287,6 +287,26 @@ func TestAPIPortAndHTTPBase(t *testing.T) {
 	}
 }
 
+func TestBusyAndNextAPIPortSkipsOtherMachines(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: EndpointForPort(DefaultPort)})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: EndpointForPort(DefaultPort + 1)})
+	busy := c.BusyAPIPorts("C")
+	if len(busy) != 2 || busy[0] != DefaultPort || busy[1] != DefaultPort+1 {
+		t.Fatalf("BusyAPIPorts = %v", busy)
+	}
+	if got := c.NextAPIPort(""); got != DefaultPort+2 {
+		t.Fatalf("NextAPIPort = %d", got)
+	}
+	// 重 init B：略過自己，下一個可從 23751 起（仍被 A 佔 23750）
+	if got := c.NextAPIPort("B"); got != DefaultPort+1 {
+		t.Fatalf("NextAPIPort skip B = %d", got)
+	}
+	if len(c.BusyAPIPorts("B")) != 1 || c.BusyAPIPorts("B")[0] != DefaultPort {
+		t.Fatalf("Busy skip B = %v", c.BusyAPIPorts("B"))
+	}
+}
+
 func TestEndpointForPort(t *testing.T) {
 	if got := EndpointForPort(23755); got != "tcp://127.0.0.1:23755" {
 		t.Fatalf("got %q", got)

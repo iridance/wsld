@@ -84,6 +84,7 @@ export class App {
   private st: State;
   private timer?: number;
   private noticeTimer?: number;
+  private usageTimer?: number;
   private refreshAbort?: AbortController;
   private refreshGen = 0;
   private root: HTMLElement;
@@ -164,7 +165,11 @@ export class App {
         if (signal.aborted || gen !== this.refreshGen) return;
         this.st.lastError = undefined;
       } else if (!this.st.starting) {
-        // 引擎未就緒：保留列表但標示斷線
+        // 引擎未就緒：清空資源列表，避免仍顯示上一台 machine 的資料
+        this.st.containers = [];
+        this.st.images = [];
+        this.st.volumes = [];
+        this.st.networks = [];
         this.st.lastError = status.APIError || t("gui.error.api");
       }
     } catch (e) {
@@ -390,6 +395,7 @@ export class App {
 
   private closeInfo(): void {
     if (!this.st.info) return;
+    this.stopMachineUsagePoll();
     this.st.info = undefined;
     this.renderInfoDrawer();
   }
@@ -503,21 +509,25 @@ export class App {
 
   private renderBanner(): void {
     const b = this.root.querySelector<HTMLElement>('[data-testid="error-banner"]')!;
+    // 動作錯誤優先（例如 Start 失敗），不要被 not-ready 橫幅蓋掉
+    if (this.st.lastError && !this.st.starting && !this.st.switching) {
+      const prefix = t("gui.error.api");
+      b.textContent = this.st.lastError === prefix || this.st.lastError.startsWith("docker api unreachable")
+        ? `${prefix} — ${this.st.lastError === prefix ? (this.st.status?.APIError ?? prefix) : this.st.lastError}`
+        : this.st.lastError;
+      b.hidden = false;
+      b.dataset.kind = "error";
+      return;
+    }
     if (this.st.meta.active_ready === false && this.st.meta.distro) {
       b.textContent = t("gui.machines.not_ready");
       b.hidden = false;
       b.dataset.kind = "not-ready";
       return;
     }
-    if (this.st.lastError && !this.st.starting && !this.st.switching) {
-      b.textContent = `${t("gui.error.api")} — ${this.st.lastError}`;
-      b.hidden = false;
-      b.dataset.kind = "error";
-    } else {
-      b.hidden = true;
-      b.textContent = "";
-      delete b.dataset.kind;
-    }
+    b.hidden = true;
+    b.textContent = "";
+    delete b.dataset.kind;
   }
 
   private renderNotice(): void {
@@ -940,7 +950,8 @@ export class App {
           infoField(t("gui.machines.user"), d.user || "—"),
           infoField(t("gui.machines.endpoint"), d.api_endpoint || "—", "info-machine-endpoint"),
           infoField(t("gui.machines.wslconfig"), `memory=${d.memory || "—"}; processors=${d.processors || "—"}`, "info-wslconfig"),
-          infoField(t("gui.machines.usage"), `CPU ${d.cpu_percent ?? 0}% · RAM ${d.memory_used_mb ?? 0}/${d.memory_total_mb ?? 0} MB`, "info-usage"),
+          usageMeter(t("gui.machines.cpu"), formatCPU(d.cpu_percent ?? 0), clampPct(d.cpu_percent ?? 0), "info-cpu-bar"),
+          usageMeter(t("gui.machines.mem"), formatMem(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0), memPct(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0), "info-mem-bar"),
           el("div", { class: `tag ${d.systemd ? "ok" : ""}`, "data-testid": "machine-config-systemd", text: d.systemd ? t("gui.machines.systemd_on") : t("gui.machines.systemd_off") }),
           el("pre", { class: "conf", "data-testid": "machine-config-conf", text: d.wsl_conf || t("gui.machines.no_conf") }),
         );
@@ -1205,6 +1216,7 @@ export class App {
 
   private hardCutActive(): void {
     this.closePanel();
+    this.stopMachineUsagePoll();
     this.st.info = undefined;
     this.st.pending = {};
     this.st.containers = [];
@@ -1236,6 +1248,7 @@ export class App {
   }
 
   private async openMachineInfo(name: string): Promise<void> {
+    this.stopMachineUsagePoll();
     this.st.info = { kind: "machine", name };
     this.renderInfoDrawer();
     try {
@@ -1243,10 +1256,62 @@ export class App {
       if (this.st.info?.kind === "machine" && this.st.info.name === name) {
         this.st.info = { kind: "machine", name, detail };
         this.renderInfoDrawer();
+        this.startMachineUsagePoll(name);
       }
     } catch (e) {
       this.st.lastError = e instanceof ApiError ? e.message : String(e);
       this.renderBanner();
+    }
+  }
+
+  private stopMachineUsagePoll(): void {
+    if (this.usageTimer) {
+      window.clearInterval(this.usageTimer);
+      this.usageTimer = undefined;
+    }
+  }
+
+  private startMachineUsagePoll(name: string): void {
+    this.stopMachineUsagePoll();
+    const sec = Math.max(1, this.st.meta.config.refresh_interval_sec || 3);
+    this.usageTimer = window.setInterval(() => {
+      if (this.st.info?.kind !== "machine" || this.st.info.name !== name) {
+        this.stopMachineUsagePoll();
+        return;
+      }
+      void this.pollMachineUsage(name);
+    }, sec * 1000);
+  }
+
+  private async pollMachineUsage(name: string): Promise<void> {
+    try {
+      const detail = await api.machineConfig(name);
+      if (this.st.info?.kind !== "machine" || this.st.info.name !== name) return;
+      this.st.info = { ...this.st.info, detail };
+      this.updateMachineUsageBars(detail);
+    } catch {
+      // 輪詢失敗不打斷 Info；下次再試
+    }
+  }
+
+  private updateMachineUsageBars(d: import("./api").MachineConfig): void {
+    const cpu = this.root.querySelector<HTMLElement>('[data-testid="info-cpu-bar"]');
+    const mem = this.root.querySelector<HTMLElement>('[data-testid="info-mem-bar"]');
+    if (cpu) {
+      const fill = cpu.querySelector<HTMLElement>(".usage-fill");
+      const label = cpu.querySelector<HTMLElement>(".usage-value");
+      const pct = clampPct(d.cpu_percent ?? 0);
+      if (fill) fill.style.width = `${pct}%`;
+      if (label) label.textContent = formatCPU(d.cpu_percent ?? 0);
+      cpu.setAttribute("data-pct", String(pct));
+    }
+    if (mem) {
+      const fill = mem.querySelector<HTMLElement>(".usage-fill");
+      const label = mem.querySelector<HTMLElement>(".usage-value");
+      const pct = memPct(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0);
+      if (fill) fill.style.width = `${pct}%`;
+      if (label) label.textContent = formatMem(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0);
+      mem.setAttribute("data-pct", String(pct));
     }
   }
 
@@ -1496,6 +1561,38 @@ function infoField(label: string, value: string, testId?: string): HTMLElement {
   const ddAttrs: Record<string, string> = { text: value, title: value };
   if (testId) ddAttrs["data-testid"] = testId;
   return el("div", { class: "info-field" }, el("dt", { text: label }), el("dd", ddAttrs));
+}
+
+function clampPct(n: number): number {
+  if (!Number.isFinite(n) || n < 0) return 0;
+  if (n > 100) return 100;
+  return Math.round(n * 10) / 10;
+}
+
+function memPct(used: number, total: number): number {
+  if (!total || total <= 0) return 0;
+  return clampPct((used / total) * 100);
+}
+
+function formatCPU(pct: number): string {
+  const v = clampPct(pct);
+  return `${Number.isInteger(v) ? v : v.toFixed(1)}%`;
+}
+
+function formatMem(used: number, total: number): string {
+  const pct = memPct(used, total);
+  return `${used}/${total} MB (${Number.isInteger(pct) ? pct : pct.toFixed(1)}%)`;
+}
+
+function usageMeter(label: string, valueText: string, pct: number, testId: string): HTMLElement {
+  const fill = el("div", { class: "usage-fill" });
+  fill.style.width = `${pct}%`;
+  const track = el("div", { class: "usage-track" }, fill);
+  const head = el("div", { class: "usage-head" },
+    el("span", { class: "usage-label", text: label }),
+    el("span", { class: "usage-value", text: valueText }),
+  );
+  return el("div", { class: "usage-meter", "data-testid": testId, "data-pct": String(pct) }, head, track);
 }
 
 // ---- 欄位與分組 -----------------------------------------------------------

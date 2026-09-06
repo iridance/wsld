@@ -18,6 +18,7 @@ import (
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 func main() {
@@ -40,6 +41,7 @@ func main() {
 	life := &gui.FakeLifecycle{Engine: engine, Distro: "Ubuntu-26.04", Endpoint: "tcp://127.0.0.1:23750"}
 	auto := &gui.FakeAutostart{}
 	fwsl := gui.NewFakeWSL()
+	defer wsl.BypassSampleSleepForTest()()
 	reset := func() {
 		c := config.Default()
 		c.Distro, c.User = "Ubuntu-26.04", "irice"

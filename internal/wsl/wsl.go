@@ -60,6 +60,10 @@ func (r ExecRunner) Run(ctx context.Context, stdin io.Reader, args ...string) ([
 		path = "wsl.exe"
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
+	// 避免從另一個 distro 的 UNC 路徑啟動時出現 “Failed to translate” 並搞亂 stdin 腳本。
+	if dir := safeWSLWorkDir(); dir != "" {
+		cmd.Dir = dir
+	}
 	procutil.HideConsole(cmd) // GUI（無主控台）呼叫時不可閃出黑視窗
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
