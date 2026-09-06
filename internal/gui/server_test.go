@@ -45,6 +45,7 @@ func newEnv(t *testing.T, token string) *env {
 		SaveConfig:     func(c config.Config) error { return config.Save(e.cfgP, c) },
 		OnWindowAction: func(a string) { e.window = append(e.window, a) },
 		OnDistroAction: func(a string) error { e.window = append(e.window, a); return nil },
+		OnOpenURL:      func(u string) error { e.window = append(e.window, "open-url:"+u); return nil },
 	}
 	e.s = s
 	e.srv = httptest.NewServer(s.Handler())
@@ -639,6 +640,20 @@ func TestWindowActions(t *testing.T) {
 		t.Fatal(resp.StatusCode)
 	}
 	if strings.Join(e.window, ",") != "hide,show,quit" {
+		t.Fatalf("window = %v", e.window)
+	}
+}
+
+func TestOpenRepo(t *testing.T) {
+	e := newEnv(t, "")
+	resp, b := e.req(t, "POST", "/api/open-repo", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, b)
+	}
+	if !strings.Contains(string(b), RepoURL) {
+		t.Fatalf("body = %s", b)
+	}
+	if strings.Join(e.window, ",") != "open-url:"+RepoURL {
 		t.Fatalf("window = %v", e.window)
 	}
 }

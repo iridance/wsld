@@ -106,6 +106,7 @@ func main() {
 		Processes:      doctor.WindowsProcesses,
 		OnWindowAction: app.onWindowAction,
 		OnDistroAction: app.onDistroAction,
+		OnOpenURL:      app.onOpenURL,
 		Shell:          gui.HostDistroShell{},
 		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
 		NewEngine: func(c config.Config) gui.Engine { return dockerClient(c) },
@@ -212,6 +213,14 @@ func (a *guiApp) onDistroAction(action string) error {
 	default:
 		return fmt.Errorf("unknown distro action %q", action)
 	}
+}
+
+func (a *guiApp) onOpenURL(url string) error {
+	if a.ctx == nil {
+		return fmt.Errorf("app not ready")
+	}
+	wruntime.BrowserOpenURL(a.ctx, url)
+	return nil
 }
 
 func (a *guiApp) quit() {

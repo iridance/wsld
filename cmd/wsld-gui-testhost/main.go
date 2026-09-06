@@ -71,6 +71,12 @@ func main() {
 			winMu.Unlock()
 			return nil
 		},
+		OnOpenURL: func(u string) error {
+			winMu.Lock()
+			windowActions = append(windowActions, "open-url:"+u)
+			winMu.Unlock()
+			return nil
+		},
 	}
 
 	mux := http.NewServeMux()

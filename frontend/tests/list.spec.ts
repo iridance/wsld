@@ -5,7 +5,7 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("header carries distro and connection badge; footer carries version and language", async ({ page }) => {
+test("header carries distro and connection badge; footer carries version, github and language", async ({ page }) => {
   await open(page);
   const header = page.getByTestId("header");
   await expect(header.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
@@ -15,6 +15,9 @@ test("header carries distro and connection badge; footer carries version and lan
   await expect(page.getByTestId("status-refresh")).toHaveCount(0);
   const footer = page.getByTestId("status-bar");
   await expect(footer.getByTestId("status-version")).toHaveText("vtesthost");
+  const gh = footer.getByTestId("status-github");
+  await expect(gh).toHaveAttribute("href", "https://github.com/iridance/wsld");
+  await expect(gh.locator("svg.ico")).toHaveAttribute("data-icon", "github");
   await expect(footer.getByTestId("lang-select")).toBeVisible();
   // 左下角舊資訊已整併到上方
   await expect(page.getByTestId("status-distro")).toHaveCount(0);

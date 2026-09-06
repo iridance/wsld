@@ -593,7 +593,34 @@ export class App {
 
   private renderFooter(): void {
     const f = this.root.querySelector<HTMLElement>('[data-testid="status-bar"]')!;
-    f.replaceChildren(el("span", { "data-testid": "status-version", text: `v${this.st.meta.version}` }), el("span", { class: "spacer" }), this.langSelect());
+    f.replaceChildren(
+      el("span", { "data-testid": "status-version", text: `v${this.st.meta.version}` }),
+      this.githubLink(),
+      el("span", { class: "spacer" }),
+      this.langSelect(),
+    );
+  }
+
+  /** Footer GitHub 圖示：開啟官方 repo（經後端 BrowserOpenURL／系統瀏覽器）。 */
+  private githubLink(): HTMLElement {
+    const a = el("a", {
+      class: "github-link",
+      href: "https://github.com/iridance/wsld",
+      target: "_blank",
+      rel: "noopener noreferrer",
+      "data-testid": "status-github",
+      "aria-label": t("gui.github"),
+      title: t("gui.github"),
+    }) as HTMLAnchorElement;
+    a.append(icon("github"));
+    a.onclick = (e) => {
+      e.preventDefault();
+      void api.openRepo().catch((err) => {
+        this.st.lastError = err instanceof ApiError ? err.message : String(err);
+        this.renderBanner();
+      });
+    };
+    return a;
   }
 
   /** 右下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */

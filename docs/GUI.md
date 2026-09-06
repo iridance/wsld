@@ -38,14 +38,14 @@
 │ Machines │                                    │                    │
 │ Settings │                                    │                    │
 ├──────────┴──────────────────────────────────┴────────────────────┤
-│ footer ─ v… ··········································· English ▾ │
+│ footer ─ v…  ⌂ ········································ English ▾ │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 - **Header**：active distro 名稱（無 config 時顯示 wsld）＋ **有 border** 的 Open folder／Open terminal、連線徽章、啟動引擎。**不顯示** API endpoint（tcp）與 Settings（分別在 Machines Info／側欄 Settings）。
 - **Side nav**：Containers／Images／Volumes／Networks／Machines／**Settings**；`aria-current="page"`；存 localStorage。上下間距對齊左右間距。切換視圖關閉 Logs／Terminal／Info。
 - **Info drawer（右）**：Containers／Compose／Machines 詳情（見下表）。
-- **Footer**：左版本（`make build-*` 注入，對齊 git tag／預設 **0.5.3** → 顯示 `v0.5.3`）、右語言下拉（無邊框）。
+- **Footer**：左版本＋ **GitHub 圖示**（開 `https://github.com/iridance/wsld`）、右語言下拉（無邊框）。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
 
 ## 功能對照（SPEC §5.5／Roadmap 0.5）
@@ -65,7 +65,7 @@
 | Machines | 設為目前、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | 側欄：refresh、exec_shell、tray_autostart、Theme Light／Dark／System | `settings`（搬遷） |
-| i18n | footer 語言下拉 | `list.spec.ts` |
+| i18n | footer 語言下拉＋GitHub 連結 | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 
 ### 破壞性操作的規則
@@ -102,7 +102,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.3 → 左下角 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.4 → 左下角 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 

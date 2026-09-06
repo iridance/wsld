@@ -228,6 +228,7 @@ export const api = {
   putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
+  openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),
   logsStreamUrl: (id: string, tail = 100) =>
     wsUrl(`/api/containers/${encodeURIComponent(id)}/logs/stream`, { tail }),
   execUrl: (id: string, cols: number, rows: number) =>

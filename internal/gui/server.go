@@ -73,6 +73,8 @@ type Server struct {
 	OnWindowAction func(action string)
 	// OnDistroAction 開啟 distro 資料夾／終端（測試主機記錄即可）；回傳錯誤會轉成 500。
 	OnDistroAction func(action string) error
+	// OnOpenURL 以系統瀏覽器開啟 URL（例如 footer GitHub）；nil 則僅回成功（測試主機）。
+	OnOpenURL func(url string) error
 	// Shell 開啟 Machines 列表內嵌 terminal（nil → 501）。
 	Shell DistroShell
 	// OnLangChange 於設定頁切換語系後呼叫（Tray 選單文字需重建）。
@@ -131,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
+	mux.HandleFunc("POST /api/open-repo", s.handleOpenRepo)
 	if s.Assets != nil {
 		mux.Handle("/", s.Assets)
 	}
@@ -874,6 +877,19 @@ func (s *Server) handleDistro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": action})
+}
+
+// RepoURL 是 footer GitHub 連結的固定目標。
+const RepoURL = "https://github.com/iridance/wsld"
+
+func (s *Server) handleOpenRepo(w http.ResponseWriter, r *http.Request) {
+	if s.OnOpenURL != nil {
+		if err := s.OnOpenURL(RepoURL); err != nil {
+			writeErr(w, http.StatusInternalServerError, "error", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": RepoURL})
 }
 
 // ListenLoopback 在 127.0.0.1 隨機埠啟動 server，回傳 base URL 與關閉函式。
