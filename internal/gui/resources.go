@@ -24,6 +24,8 @@ type Resources interface {
 	RemoveVolume(ctx context.Context, name string, force bool) error
 	PruneVolumes(ctx context.Context) (dockerapi.PruneReport, error)
 	ListNetworks(ctx context.Context) ([]dockerapi.Network, error)
+	RemoveNetwork(ctx context.Context, idOrName string) error
+	PruneNetworks(ctx context.Context) (dockerapi.PruneReport, error)
 }
 
 // ---- images -----------------------------------------------------------------
@@ -100,6 +102,23 @@ func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
 		v = []dockerapi.Network{}
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleNetworkRemove(w http.ResponseWriter, r *http.Request) {
+	if err := s.engine().RemoveNetwork(r.Context(), r.PathValue("id")); err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleNetworksPrune(w http.ResponseWriter, r *http.Request) {
+	rep, err := s.engine().PruneNetworks(r.Context())
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // ---- machines（本機 WSL 發行版）--------------------------------------------

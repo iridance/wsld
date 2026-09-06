@@ -170,7 +170,8 @@ export class App {
         this.st.images = [];
         this.st.volumes = [];
         this.st.networks = [];
-        this.st.lastError = status.APIError || t("gui.error.api");
+        // 用 i18n 前綴；細節走 status.APIError（renderBanner 會拼成「前綴 — 細節」）
+        this.st.lastError = t("gui.error.api");
       }
     } catch (e) {
       if (signal.aborted || gen !== this.refreshGen) return;
@@ -446,7 +447,7 @@ export class App {
     this.renderBanner();
     this.renderNotice();
     this.renderViewBody();
-    this.renderInfoDrawer();
+    // Info 抽屜不隨列表輪詢重建；僅 machine 的 CPU／記憶體由 usage poll 就地更新
     this.renderFooter();
   }
 
@@ -749,7 +750,6 @@ export class App {
     if (!list) return;
     if (this.st.containers.length === 0) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty") }));
-      this.renderInfoDrawer();
       return;
     }
     const { table, tbody } = this.table("containers", COLS);
@@ -765,7 +765,6 @@ export class App {
       }
     }
     list.replaceChildren(table);
-    this.renderInfoDrawer();
   }
 
   private groupRow(g: Group, expanded: boolean): HTMLTableRowElement {
@@ -887,6 +886,13 @@ export class App {
     head.replaceChildren(...kids);
   }
 
+  /** 同一 Info 面板被自動刷新重建時，用來還原捲動／摺疊狀態。 */
+  private infoDrawerKey(info: InfoDrawer): string {
+    if (info.kind === "container") return `container:${info.id}`;
+    if (info.kind === "machine") return `machine:${info.name}`;
+    return `compose:${info.project}`;
+  }
+
   private renderInfoDrawer(): void {
     const aside = this.root.querySelector<HTMLElement>('[data-testid="info-drawer"]');
     if (!aside) return;
@@ -896,11 +902,19 @@ export class App {
       aside.removeAttribute("data-kind");
       aside.removeAttribute("data-name");
       aside.removeAttribute("data-project");
+      aside.removeAttribute("data-scroll-key");
       aside.replaceChildren();
       return;
     }
+    const key = this.infoDrawerKey(info);
+    const same = aside.getAttribute("data-scroll-key") === key;
+    const prevBody = aside.querySelector<HTMLElement>(".info-body");
+    const scrollTop = same && prevBody ? prevBody.scrollTop : 0;
+    const labelsOpen = same && !!aside.querySelector<HTMLDetailsElement>('[data-testid="info-labels"]')?.open;
+
     aside.hidden = false;
     aside.setAttribute("data-kind", info.kind);
+    aside.setAttribute("data-scroll-key", key);
     if (info.kind === "container") {
       aside.setAttribute("data-name", info.name);
       aside.removeAttribute("data-project");
@@ -923,8 +937,7 @@ export class App {
           infoField(t("gui.info.name"), d.name || info.name),
           infoField(t("gui.col.id"), d.id, "info-id"),
           infoField(t("gui.col.image"), d.image),
-          infoField(t("gui.col.state"), d.state),
-          infoField(t("gui.col.status"), d.status || c?.Status || "—", "info-status"),
+          infoField(t("gui.col.state"), d.state, "info-state"),
           infoField(t("gui.info.created"), d.created || "—"),
           infoField(t("gui.info.started"), d.started || "—"),
           infoField(t("gui.info.command"), d.command || "—", "info-command"),
@@ -937,6 +950,7 @@ export class App {
         const keys = Object.keys(labels);
         if (keys.length) {
           const det = el("details", { "data-testid": "info-labels" }, el("summary", { text: `${t("gui.info.labels")} (${keys.length})` }));
+          if (labelsOpen) det.open = true;
           const pre = el("pre", { class: "conf" });
           pre.textContent = keys.sort().map((k) => `${k}=${labels[k]}`).join("\n");
           det.append(pre);
@@ -945,8 +959,7 @@ export class App {
       } else if (c) {
         body.append(
           infoField(t("gui.col.image"), c.Image),
-          infoField(t("gui.col.state"), c.State),
-          infoField(t("gui.col.status"), c.Status, "info-status"),
+          infoField(t("gui.col.state"), c.State, "info-state"),
           infoField(t("gui.col.ports"), ports(c) || "—", "info-ports"),
           infoField(t("gui.col.id"), c.Id),
           el("p", { class: "muted", text: "…" }),
@@ -955,6 +968,7 @@ export class App {
         body.append(el("p", { class: "muted", text: t("gui.empty") }));
       }
       aside.replaceChildren(head, body);
+      restoreInfoScroll(body, scrollTop);
       return;
     }
     if (info.kind === "machine") {
@@ -986,6 +1000,7 @@ export class App {
         body.append(el("p", { class: "muted", text: "…" }));
       }
       aside.replaceChildren(head, body);
+      restoreInfoScroll(body, scrollTop);
       return;
     }
     aside.setAttribute("data-project", info.project);
@@ -1019,6 +1034,7 @@ export class App {
       );
     }
     aside.replaceChildren(head, body);
+    restoreInfoScroll(body, scrollTop);
   }
 
   // ---- Images -----------------------------------------------------------------
@@ -1121,7 +1137,15 @@ export class App {
     const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
     if (!list || !bar) return;
     const ready = this.st.status?.ready === true;
-    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.networks")} · ${this.st.networks.length}` }));
+    const prune = btn({ "data-testid": "btn-prune-networks" }, "broom", t("gui.prune"));
+    prune.disabled = !ready || this.st.busy.has("prune-networks");
+    prune.onclick = () =>
+      void this.resourceAction("prune-networks", t("gui.confirm.prune_networks"), async () => {
+        const rep = await api.pruneNetworks();
+        return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
+      });
+    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.networks")} · ${this.st.networks.length}` }), el("span", { class: "spacer" }), prune);
+
     if (!ready || this.st.networks.length === 0) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.networks") }));
       return;
@@ -1129,6 +1153,15 @@ export class App {
     const { table, tbody } = this.table("networks", NETWORK_COLS);
     for (const n of [...this.st.networks].sort((a, b) => a.Name.localeCompare(b.Name))) {
       const builtin = n.Name === "bridge" || n.Name === "host" || n.Name === "none";
+      const rm = iconBtn({ "data-testid": `btn-rm-network-${n.Name}`, class: "danger" }, "trash", t("gui.remove"));
+      rm.disabled = builtin || this.st.busy.has(`network:${n.Name}`);
+      if (!builtin) {
+        rm.onclick = () =>
+          void this.resourceAction(`network:${n.Name}`, fmt(t("gui.confirm.remove"), n.Name), async () => {
+            await api.removeNetwork(n.Name);
+            return fmt(t("gui.removed"), n.Name);
+          });
+      }
       tbody.append(
         el(
           "tr",
@@ -1138,6 +1171,7 @@ export class App {
           el("td", { "data-testid": "network-scope", text: n.Scope }),
           el("td", { "data-testid": "network-id", class: "mono", text: shortID(n.Id), title: n.Id }),
           el("td", { text: fmtISO(n.Created) }),
+          el("td", { class: "actions" }, rm),
         ),
       );
     }
@@ -1314,7 +1348,7 @@ export class App {
     try {
       const detail = await api.machineConfig(name);
       if (this.st.info?.kind !== "machine" || this.st.info.name !== name) return;
-      this.st.info = { ...this.st.info, detail };
+      // 只就地更新 CPU／記憶體兩個元件，不重建整塊 Info
       this.updateMachineUsageBars(detail);
     } catch {
       // 輪詢失敗不打斷 Info；下次再試
@@ -1590,6 +1624,15 @@ function infoField(label: string, value: string, testId?: string): HTMLElement {
   return el("div", { class: "info-field" }, el("dt", { text: label }), el("dd", ddAttrs));
 }
 
+/** 刷新重建 Info body 後還原捲動（同步 + 下一幀，避免 layout 把位置清掉）。 */
+function restoreInfoScroll(body: HTMLElement, scrollTop: number): void {
+  if (scrollTop <= 0) return;
+  body.scrollTop = scrollTop;
+  requestAnimationFrame(() => {
+    body.scrollTop = scrollTop;
+  });
+}
+
 function clampPct(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   if (n > 100) return 100;
@@ -1662,7 +1705,8 @@ const NETWORK_COLS: Col[] = [
   { key: "driver", label: "gui.col.driver", def: 100, min: 60, resizable: true },
   { key: "scope", label: "gui.col.scope", def: 90, min: 60, resizable: true },
   { key: "id", label: "gui.col.id", def: 120, min: 90, resizable: true },
-  { key: "created", label: "gui.col.created", def: 150, min: 90, resizable: false },
+  { key: "created", label: "gui.col.created", def: 150, min: 90, resizable: true },
+  { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
 ];
 
 const MACHINE_COLS: Col[] = [

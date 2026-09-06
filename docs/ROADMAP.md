@@ -1,7 +1,7 @@
 # wsld Roadmap
 
-版本：0.5.4（git tag `v0.5.4`）  
-對應規格：[SPEC.md](SPEC.md)（**0.5.4 已交付**；Phase 0–4 基底已落地）
+版本：0.6.0（git tag `v0.6.0`）  
+對應規格：[SPEC.md](SPEC.md)（**0.6.0 已交付**；Phase 0–4 基底已落地）
 
 ## 總覽
 
@@ -15,7 +15,7 @@ Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.
 Extra    延後能力（含首次 Setup）           ← 有需求再排
 Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
-0.5 = Phase 5 完成定義全過（見下方）；發行版號 **0.5.4**（`v0.5.4`）
+0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨
 之後 v2.0 = Phase 6
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -123,7 +123,7 @@ Extra ≠ 0.5／v2.0 完成條件
 
 - Machines actions：設為目前、Open folder、Terminal（**底部 panel**、該 distro WSL shell、cwd＝user home）、取消管理、unregister、Info（右側 drawer）、Add distro
 - Machines Info（右側，對齊 Containers）：基本欄、`.wslconfig` 的 memory／processors、`/etc/wsl.conf`、該 machine 的 **API endpoint（tcp）**、CPU／記憶體用量摘要（非 process 表）；取代 ⓘ dialog
-- Containers：Remove（running 可刪，確認會停止）；Info summary：Name、ID、Image、State、Status、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels（可摺疊）、Restart policy
+- Containers：Remove（running 可刪，確認會停止）；Info summary：Name、ID、Image、State、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels（可摺疊）、Restart policy
 
 #### Settings／header
 
@@ -151,7 +151,7 @@ Extra ≠ 0.5／v2.0 完成條件
 - [x] 列高／格線與 side nav 間距打磨
 - [x] 相關 Go 測試＋Playwright 通過；實機抽樣驗收（切換 distro、unregister 確認、Remove running）
 
-**退出條件**：上列完成定義全勾；產品敘事標 **0.5.4** 已交付（git tag `v0.5.4`；`make build-win` 注入 GUI／CLI 版號）。
+**退出條件**：上列完成定義全勾；產品敘事標 **0.5.4** 已交付（git tag `v0.5.4`）。後續 **0.6.0**（`v0.6.0`）見發行說明。
 
 > 曾列在 P5「延後」的項目改見下方 **Extra**；Compose 專案視圖已於基底完成，不進 Extra。
 

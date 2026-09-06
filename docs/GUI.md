@@ -57,7 +57,7 @@
 | Side nav | 六視圖（含 Settings）；間距打磨 | `shell.spec.ts` |
 | 按鈕圖示 | 列／compose：無邊框純圖示；**header icon：有 border** | `list`／`groups`／`info` |
 | Containers | Name／Image／State／操作（Start／Stop／Logs／Term／Info／**Remove**）；右側 Info＝summary | `list`／`info` |
-| Info（容器） | Name、ID、Image、State、Status、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels、Restart policy | `info.spec.ts` |
+| Info（容器） | Name、ID、Image、State、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels、Restart policy | `info.spec.ts` |
 | Compose | 分組、折疊、整組 Start／Stop／Info 純圖示 | `groups`／`info` |
 | Start／Stop／Remove | pending 回饋；Remove 可含 running（確認會停） | `list`（Remove 隨 0.5） |
 | Logs／Exec | tail 100；Live；xterm exec | `panels.spec.ts` |
@@ -84,7 +84,7 @@
 | `GET /api/containers?all=1`、`POST …/start|stop`、`DELETE …`（Remove）、`GET …/logs[/stream]`、`GET …/exec` | 容器 |
 | `GET /api/images`、`DELETE /api/images/{ref}[?force=1]`、`POST /api/images/prune` | 映像 |
 | `GET /api/volumes`、`DELETE /api/volumes/{name}[?force=1]`、`POST /api/volumes/prune` | volume |
-| `GET /api/networks` | 網路（唯讀） |
+| `GET /api/networks`、`DELETE /api/networks/{id}`、`POST /api/networks/prune` | 網路（內建 bridge／host／none 不可刪） |
 | `GET /api/machines`、…／config、…／online、install、**use／unmanage／unregister**、用量摘要（0.5） | WSL 發行版與多 distro |
 | `GET|PUT /api/settings`（含 theme）、`GET /api/doctor`、`POST /api/window/{hide|show|quit}` | 設定、診斷、視窗 |
 
@@ -102,7 +102,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.4 → 左下角 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.6.0 → 左下角 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -115,7 +115,7 @@ make test-ui          # 建前端 → Playwright（自動啟動 wsld-gui-testhos
 cd frontend && npx playwright test --ui   # 互動除錯
 ```
 
-Playwright 在 WSL 需要 Chromium 相依套件；本機若無 sudo，可將 `libnss3` `libnspr4` `libasound2t64` 解到 `~/.local/lib/pw` 並以 `LD_LIBRARY_PATH` 帶入（詳見 [TESTING.md](TESTING.md)）。
+Playwright 在 WSL 需要 Chromium 相依套件；`make test-ui` 會透過 `scripts/ensure-playwright-libs.sh` 在無 sudo 時把 `libnss3` 等解到 `~/.local/lib/pw`（詳見 [TESTING.md](TESTING.md)）。有 sudo 也可 `npx playwright install-deps chromium`。
 
 ### 測試主機控制端點（僅 testhost）
 
@@ -155,7 +155,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 - Theme：Light／Dark／System（`data-theme`／`prefers-color-scheme`）。
 - Images 的「使用中」欄依 Docker `/images/json` 的 `Containers`；舊版 daemon 可能回 -1，顯示為「–」。
 - Machines「新增發行版」只執行 `wsl --install --no-launch`：首次進入 distro 建立使用者後，以「設為目前」納管（同一流程自動 init + start）。
-- Networks 為唯讀；建立／刪除網路請用 `docker network`。
+- Networks：列表＋個別 Remove（內建 disabled）＋清除未使用；使用中回 409。
 - npiperelay／自動更新／arm64／**首次 Setup 一鍵**：Roadmap Extra（不綁 0.5）。
 
 ## 0.5 實機抽樣驗收

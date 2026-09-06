@@ -115,16 +115,38 @@ test("Volumes: lists name, driver, mountpoint; remove and prune with confirmatio
 
 // ---- Networks ----------------------------------------------------------------
 
-test("Networks: lists built-in and user networks with driver and scope, no destructive actions", async ({ page, request }) => {
+test("Networks: lists built-in and user networks; prune and remove unused; builtin cannot be removed", async ({ page, request }) => {
   await request.post("/__test/network?name=lab&driver=macvlan");
+  await request.post("/__test/network?name=busy&driver=bridge&in_use=1");
   await go(page, "networks");
-  await expect(page.getByTestId("network-row")).toHaveCount(5);
+  await expect(page.getByTestId("network-row")).toHaveCount(6);
   const lab = page.locator('[data-testid="network-row"][data-name="lab"]');
   await expect(lab.getByTestId("network-driver")).toHaveText("macvlan");
   await expect(lab.getByTestId("network-scope")).toHaveText("local");
   await expect(page.locator('[data-testid="network-row"][data-name="bridge"]')).toHaveAttribute("data-builtin", "true");
   await expect(lab).toHaveAttribute("data-builtin", "false");
-  await expect(page.getByTestId("view-networks").locator("button")).toHaveCount(0);
+
+  await expect(page.getByTestId("btn-rm-network-bridge")).toBeDisabled();
+  await expect(page.getByTestId("btn-rm-network-lab")).toBeEnabled();
+
+  await page.getByTestId("btn-rm-network-busy").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("error-banner")).toBeVisible();
+  await expect(page.locator('[data-testid="network-row"][data-name="busy"]')).toBeVisible();
+
+  await page.getByTestId("btn-rm-network-lab").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("notice")).toContainText("lab");
+  await expect(page.locator('[data-testid="network-row"][data-name="lab"]')).toHaveCount(0);
+
+  await page.getByTestId("btn-prune-networks").click();
+  await expect(page.getByTestId("confirm-text")).toContainText("networks not used");
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("notice")).toContainText("Removed");
+  // shop_default 未使用被清掉；busy 使用中保留；內建保留
+  await expect(page.locator('[data-testid="network-row"][data-name="shop_default"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="network-row"][data-name="busy"]')).toBeVisible();
+  await expect(page.locator('[data-testid="network-row"][data-name="bridge"]')).toBeVisible();
 });
 
 // ---- Machines ----------------------------------------------------------------

@@ -22,7 +22,6 @@ export interface ContainerInfo {
   id: string;
   image: string;
   state: string;
-  status: string;
   created: string;
   started: string;
   command: string;
@@ -208,6 +207,8 @@ export const api = {
   removeVolume: (name: string, force = false) => call<void>("DELETE", `/api/volumes/${encodeURIComponent(name)}${force ? "?force=1" : ""}`),
   pruneVolumes: () => call<PruneReport>("POST", "/api/volumes/prune"),
   networks: (signal?: AbortSignal) => call<Network[]>("GET", "/api/networks", undefined, false, signal),
+  removeNetwork: (idOrName: string) => call<void>("DELETE", `/api/networks/${encodeURIComponent(idOrName)}`),
+  pruneNetworks: () => call<PruneReport>("POST", "/api/networks/prune"),
   machines: (signal?: AbortSignal) => call<MachinesResponse>("GET", "/api/machines", undefined, false, signal),
   machineConfig: (name: string) => call<MachineConfig>("GET", `/api/machines/${encodeURIComponent(name)}/config`),
   machinesOnline: () => call<OnlineDistro[]>("GET", "/api/machines/online"),

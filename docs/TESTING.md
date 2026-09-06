@@ -11,7 +11,7 @@ make test-ui       # 建前端 + Playwright（見 docs/GUI.md）
 
 前置：Go 1.22+（本機用 `~/.local/go`）、bats-core、shellcheck；Pester 用 Windows PowerShell 5.1 內建版本（透過 WSL interop 呼叫 `powershell.exe`）；Node 20+ 與 `npx playwright install chromium`。
 
-Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `libasound2t64`：用 `apt-get download` + `dpkg -x` 解到 `~/.local/lib/pw`，執行時帶 `LD_LIBRARY_PATH=$HOME/.local/lib/pw`。
+Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `libasound2t64`。`make test-ui`／`cd frontend && npm test` 會自動跑 `scripts/ensure-playwright-libs.sh`：以 `apt-get download` + `dpkg-deb -x` 解到 `~/.local/lib/pw` 並設定 `LD_LIBRARY_PATH`。有 sudo 時也可改跑 `npx playwright install-deps chromium`。
 
 ## 層級
 
@@ -45,7 +45,7 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 ## 實機驗收（Windows）
 
 ```bash
-make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.5.4）
+make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.6.0）
 ./dist/wsld.exe init                  # 在 WSL Ubuntu 內安裝 Docker、寫 %APPDATA%\wsld\config.toml
 curl.exe http://127.0.0.1:23750/_ping # OK
 ./dist/wsld.exe status && ./dist/wsld.exe doctor

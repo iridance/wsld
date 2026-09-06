@@ -1,10 +1,10 @@
 {
   "name": "wsld-gui-frontend",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "playwright test",
+    "test": "bash ./npm-test.sh",
     "build": "tsc --noEmit && vite build",
     "dev": "vite"
   },

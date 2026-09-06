@@ -134,3 +134,40 @@ func TestListNetworks(t *testing.T) {
 		t.Fatalf("bridge is builtin, shop_default is not")
 	}
 }
+
+func TestRemoveNetworkAndPrune(t *testing.T) {
+	var calls []string
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		switch {
+		case r.Method == http.MethodDelete && r.URL.Path == "/networks/shop_default":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && r.URL.Path == "/networks/inuse":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"message":"network inuse has active endpoints"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/networks/prune":
+			_, _ = io.WriteString(w, `{"NetworksDeleted":["a","b"],"SpaceReclaimed":0}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	ctx := context.Background()
+	if err := c.RemoveNetwork(ctx, "shop_default"); err != nil {
+		t.Fatal(err)
+	}
+	if calls[0] != "DELETE /networks/shop_default?" {
+		t.Fatalf("calls = %v", calls)
+	}
+	err := c.RemoveNetwork(ctx, "inuse")
+	var ae *APIError
+	if !asAPIError(err, &ae) || ae.Status != http.StatusForbidden {
+		t.Fatalf("in-use network should surface APIError, got %v", err)
+	}
+	rep, err := c.PruneNetworks(ctx)
+	if err != nil || rep.Count != 2 || rep.SpaceReclaimed != 0 {
+		t.Fatalf("prune = %+v %v", rep, err)
+	}
+	if calls[len(calls)-1] != "POST /networks/prune?" {
+		t.Fatalf("prune call = %v", calls[len(calls)-1])
+	}
+}

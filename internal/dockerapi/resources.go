@@ -190,3 +190,30 @@ func (c *Client) ListNetworks(ctx context.Context) ([]Network, error) {
 	}
 	return v, nil
 }
+
+// RemoveNetwork DELETE /networks/{id|name}。內建或使用中回 APIError（常見 403）。
+func (c *Client) RemoveNetwork(ctx context.Context, idOrName string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "/networks/"+url.PathEscape(idOrName), nil, nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// PruneNetworks POST /networks/prune（移除未被容器使用的自訂網路）。
+func (c *Client) PruneNetworks(ctx context.Context) (PruneReport, error) {
+	resp, err := c.doWith(ctx, c.longHC, http.MethodPost, "/networks/prune", nil, nil)
+	if err != nil {
+		return PruneReport{}, err
+	}
+	defer resp.Body.Close()
+	var v struct {
+		NetworksDeleted []string `json:"NetworksDeleted"`
+		SpaceReclaimed  int64    `json:"SpaceReclaimed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return PruneReport{}, fmt.Errorf("decode prune: %w", err)
+	}
+	return PruneReport{Count: len(v.NetworksDeleted), SpaceReclaimed: v.SpaceReclaimed}, nil
+}

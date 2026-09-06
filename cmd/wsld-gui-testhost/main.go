@@ -137,7 +137,7 @@ func main() {
 	})
 	mux.HandleFunc("POST /__test/network", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		engine.AddNetwork(q.Get("name"), q.Get("driver"))
+		engine.AddNetwork(q.Get("name"), q.Get("driver"), q.Get("in_use") == "1")
 		ok(w)
 	})
 	mux.HandleFunc("POST /__test/wsl/fail-install", func(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +150,26 @@ func main() {
 	})
 	mux.HandleFunc("POST /__test/lang/{lang}", func(w http.ResponseWriter, r *http.Request) {
 		i18n.Set(i18n.Lang(r.PathValue("lang")))
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/active-not-ready", func(w http.ResponseWriter, r *http.Request) {
+		c, err := config.Load(*cfgPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		m, okm := c.ActiveMachine()
+		if !okm {
+			http.Error(w, "no active machine", http.StatusBadRequest)
+			return
+		}
+		m.User = ""
+		m.APIEndpoint = ""
+		c.UpsertMachine(m)
+		if err := config.Save(*cfgPath, c); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		ok(w)
 	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {

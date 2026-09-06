@@ -1,0 +1,24 @@
+---
+description: 功能改動或修正完成後必須 build dist 供實機測試
+alwaysApply: true
+---
+
+# 完成後產出 dist
+
+功能有改動、bug 修正、或 UI／CLI 行為變更並通過相關測試後，**必須**再建一次可執行檔放到 `dist/`，方便在 Windows 上實機驗證。
+
+```bash
+make build-win   # → dist/wsld.exe、dist/wsld-gui.exe（含 frontend）
+```
+
+## 何時要做
+
+- ✅ 新功能／行為修正完成，測試已綠
+- ✅ 使用者可感知的 GUI 或 CLI 變更
+- ❌ 純文件、純 rule／設定、未改產物程式碼時可略過
+
+## 順序
+
+1. 相關測試通過（至少受影響的 `go test`／`make test-ui`）
+2. `make build-win`
+3. 在回覆中告知 `dist/` 產物已就緒（含版號若可知）

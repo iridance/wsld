@@ -103,6 +103,47 @@ func TestNetworksList(t *testing.T) {
 	}
 }
 
+func TestNetworksRemovePrune(t *testing.T) {
+	e := newEnv(t, "")
+	// 內建網路不可刪
+	resp, b := e.req(t, http.MethodDelete, "/api/networks/bridge", "")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("builtin delete = %d %s", resp.StatusCode, b)
+	}
+	// 使用中
+	e.engine.AddNetwork("busy", "bridge", true)
+	resp, b = e.req(t, http.MethodDelete, "/api/networks/busy", "")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("in-use delete = %d %s", resp.StatusCode, b)
+	}
+	// 未使用自訂網路
+	resp, b = e.req(t, http.MethodDelete, "/api/networks/shop_default", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete unused = %d %s", resp.StatusCode, b)
+	}
+	e.engine.AddNetwork("scratch", "bridge", false)
+	resp, b = e.req(t, http.MethodPost, "/api/networks/prune", "")
+	var rep dockerapi.PruneReport
+	_ = json.Unmarshal(b, &rep)
+	if resp.StatusCode != 200 || rep.Count != 1 {
+		t.Fatalf("prune = %d %+v %s", resp.StatusCode, rep, b)
+	}
+	_, b = e.req(t, http.MethodGet, "/api/networks", "")
+	var after []dockerapi.Network
+	_ = json.Unmarshal(b, &after)
+	// bridge/host/none + busy（使用中）
+	if len(after) != 4 {
+		t.Fatalf("after prune = %+v", after)
+	}
+	names := map[string]bool{}
+	for _, n := range after {
+		names[n.Name] = true
+	}
+	if !names["busy"] || names["scratch"] || names["shop_default"] {
+		t.Fatalf("after prune names = %v", names)
+	}
+}
+
 func TestMachinesWithoutWSL(t *testing.T) {
 	e := newEnv(t, "")
 	resp, b := e.req(t, http.MethodGet, "/api/machines", "")

@@ -68,8 +68,8 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 - **Images → 清除未使用**等同 `docker image prune -a`：刪掉所有沒有容器（含已停止容器）引用的映像，含有標籤者。
 - **Volumes → 清除未使用**等同 `docker volume prune -a`：連具名 volume 一起刪，只要沒有容器掛載；資料不可復原，確認框會提醒。
-- 單筆移除使用中的映像／volume 會收到 Docker 的 409（顯示在紅色 banner）。GUI 不會自動 `--force`：先停掉並移除相關容器再刪。
-- Networks 在 GUI 為唯讀；`docker network prune` 請在 WSL 內執行。
+- 單筆移除使用中的映像／volume／network 會收到 Docker 的 409（顯示在紅色 banner）。GUI 不會自動 `--force`：先停掉並移除相關容器再刪。
+- **Networks → 清除未使用**等同 `docker network prune`：刪掉未被容器使用的自訂網路；`bridge`／`host`／`none` 不會動。個別 Remove 對內建網路為 disabled。
 
 ## Machines：管理多個 WSL 發行版
 

@@ -68,7 +68,7 @@ test("layout: notice pins above the status bar without shifting the list", async
   expect(listAfter!.height).toBeGreaterThan(350);
 });
 
-test("layout: not-ready banner pins above the status bar without shifting the list", async ({ page }) => {
+test("layout: not-ready banner pins above the status bar without shifting the list", async ({ page, request }) => {
   await page.setViewportSize({ width: 1000, height: 640 });
   await open(page);
   const listBefore = await page.getByTestId("container-list").boundingBox();
@@ -76,8 +76,12 @@ test("layout: not-ready banner pins above the status bar without shifting the li
   expect(listBefore).not.toBeNull();
   expect(footerBefore).not.toBeNull();
 
+  // use 會自動 init；改以測試鉤子把 active profile 標成未就緒
+  expect((await request.post("/__test/active-not-ready")).ok()).toBeTruthy();
+  await page.reload();
+  await expect(page.getByTestId("status-connection")).toBeVisible();
+
   await page.getByTestId("nav-machines").click();
-  await page.getByTestId("btn-machine-use-docker-desktop").click();
   const banner = page.getByTestId("error-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toHaveAttribute("data-kind", "not-ready");

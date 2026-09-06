@@ -2,7 +2,7 @@ SHELL := /bin/bash
 export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 
 # 版號對齊 git tag（v0.5.1 → 注入 main.version → GUI 左下角 v0.5.1）；未在 exact tag 上時預設 0.5.1
-VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' | grep . || echo 0.5.4)
+VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' | grep . || echo 0.6.0)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt icon winres
@@ -42,8 +42,11 @@ winres: icon
 	go run github.com/tc-hib/go-winres@latest make --in cmd/wsld-gui/winres/winres.json --out cmd/wsld-gui/rsrc --arch amd64
 
 # Playwright UI 測試：以 wsld-gui-testhost（fake backend）驅動同一套前端
+# WSL 無 sudo 時 scripts/ensure-playwright-libs.sh 會把 libnss3 等解到 ~/.local/lib/pw
 test-ui: build-frontend
-	cd frontend && npm test
+	@set -euo pipefail; \
+	  . ./scripts/ensure-playwright-libs.sh; \
+	  cd frontend && npm test
 
 test-scripts: lint-scripts test-scripts-bash test-scripts-ps
 

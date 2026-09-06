@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -168,11 +169,15 @@ func (f *FakeEngine) AddImage(tag string, size int64, containers int) {
 	f.images = append(f.images, dockerapi.Image{ID: fmt.Sprintf("sha256:%012x%012x", len(f.images)+1, size), RepoTags: tags, Created: 1754000000, Size: size, Containers: containers})
 }
 
-// AddNetwork 新增使用者網路。
-func (f *FakeEngine) AddNetwork(name, driver string) {
+// AddNetwork 新增使用者網路；inUse 時帶一個假 endpoint（不可刪／prune）。
+func (f *FakeEngine) AddNetwork(name, driver string, inUse bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.networks = append(f.networks, dockerapi.Network{ID: fmt.Sprintf("n%d", len(f.networks)+1), Name: name, Driver: driver, Scope: "local", Created: "2026-09-04T00:00:00Z"})
+	n := dockerapi.Network{ID: fmt.Sprintf("n%d", len(f.networks)+1), Name: name, Driver: driver, Scope: "local", Created: "2026-09-04T00:00:00Z"}
+	if inUse {
+		n.Containers = map[string]json.RawMessage{"c1": json.RawMessage(`{}`)}
+	}
+	f.networks = append(f.networks, n)
 }
 
 func conflict(msg string) error {
@@ -309,6 +314,49 @@ func (f *FakeEngine) ListNetworks(context.Context) ([]dockerapi.Network, error) 
 		return nil, err
 	}
 	return append([]dockerapi.Network{}, f.networks...), nil
+}
+
+// RemoveNetwork 實作 Resources：內建網路與使用中不可刪。
+func (f *FakeEngine) RemoveNetwork(_ context.Context, idOrName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return err
+	}
+	for i, n := range f.networks {
+		if n.Name != idOrName && n.ID != idOrName {
+			continue
+		}
+		if n.Builtin() {
+			return &dockerapi.APIError{Status: 403, Message: "operation not supported for predefined " + n.Name + " network"}
+		}
+		if n.ContainerCount() > 0 {
+			return conflict("network " + n.Name + " has active endpoints")
+		}
+		f.networks = append(f.networks[:i], f.networks[i+1:]...)
+		return nil
+	}
+	return &dockerapi.APIError{Status: 404, Message: "network " + idOrName + " not found"}
+}
+
+// PruneNetworks 實作 Resources：移除未使用的非內建網路。
+func (f *FakeEngine) PruneNetworks(context.Context) (dockerapi.PruneReport, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return dockerapi.PruneReport{}, err
+	}
+	var kept []dockerapi.Network
+	rep := dockerapi.PruneReport{}
+	for _, n := range f.networks {
+		if n.Builtin() || n.ContainerCount() > 0 {
+			kept = append(kept, n)
+			continue
+		}
+		rep.Count++
+	}
+	f.networks = kept
+	return rep, nil
 }
 
 func (f *FakeEngine) idFor(name string) string {

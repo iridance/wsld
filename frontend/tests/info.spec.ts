@@ -5,7 +5,7 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("container Info opens a right-side drawer with status and ports; columns are gone from the row", async ({ page }) => {
+test("container Info opens a right-side drawer with state and ports; columns are gone from the row", async ({ page }) => {
   await open(page);
   await expect(page.locator('th[data-col="status"]')).toHaveCount(0);
   await expect(page.locator('th[data-col="ports"]')).toHaveCount(0);
@@ -19,7 +19,8 @@ test("container Info opens a right-side drawer with status and ports; columns ar
   await expect(drawer).toHaveAttribute("data-kind", "container");
   await expect(drawer).toHaveAttribute("data-name", "web");
   await expect(page.getByTestId("info-title")).toContainText("web");
-  await expect(page.getByTestId("info-status")).toContainText("running");
+  await expect(page.getByTestId("info-state")).toContainText("running");
+  await expect(page.getByTestId("info-status")).toHaveCount(0);
   await expect(page.getByTestId("info-ports")).toContainText("80");
   await expect(page.getByTestId("info-command")).toContainText("nginx");
   await expect(page.getByTestId("info-networks")).toContainText("bridge");
@@ -37,6 +38,30 @@ test("container Info opens a right-side drawer with status and ports; columns ar
 
   await page.getByTestId("btn-info-close").click();
   await expect(drawer).toBeHidden();
+});
+
+test("container Info keeps scroll position across auto refresh", async ({ page }) => {
+  await open(page);
+  await page.addStyleTag({ content: '.info-body { max-height: 120px !important; }' });
+  await page.getByTestId("btn-info-web").click();
+  const body = page.locator('[data-testid="info-drawer"] .info-body');
+  await expect(page.getByTestId("info-state")).toBeVisible();
+  await expect(page.getByTestId("info-mounts")).toBeVisible();
+
+  await expect.poll(async () => body.evaluate((el) => (el as HTMLElement).scrollHeight - (el as HTMLElement).clientHeight)).toBeGreaterThan(40);
+  await body.evaluate((el) => {
+    (el as HTMLElement).dataset.scrollProbe = "1";
+    (el as HTMLElement).scrollTop = 80;
+  });
+  await expect.poll(async () => body.evaluate((el) => (el as HTMLElement).scrollTop)).toBe(80);
+
+  const before = await page.evaluate(() => (window as unknown as { __wsld: { state(): { refreshCount: number } } }).__wsld.state().refreshCount);
+  await page.evaluate(() => (window as unknown as { __wsld: { refresh(): Promise<void> } }).__wsld.refresh());
+  await expect.poll(async () => page.evaluate(() => (window as unknown as { __wsld: { state(): { refreshCount: number } } }).__wsld.state().refreshCount)).toBeGreaterThan(before);
+
+  // 列表輪詢不重建 Info；同一節點仍在且捲動保留
+  await expect(body).toHaveAttribute("data-scroll-probe", "1");
+  await expect.poll(async () => body.evaluate((el) => (el as HTMLElement).scrollTop)).toBe(80);
 });
 
 test("Remove running container asks for confirmation and deletes the row", async ({ page }) => {

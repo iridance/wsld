@@ -120,6 +120,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/volumes/{name}", s.handleVolumeRemove)
 	mux.HandleFunc("POST /api/volumes/prune", s.handleVolumesPrune)
 	mux.HandleFunc("GET /api/networks", s.handleNetworks)
+	mux.HandleFunc("DELETE /api/networks/{id}", s.handleNetworkRemove)
+	mux.HandleFunc("POST /api/networks/prune", s.handleNetworksPrune)
 	mux.HandleFunc("GET /api/machines", s.handleMachines)
 	mux.HandleFunc("GET /api/machines/online", s.handleMachinesOnline)
 	mux.HandleFunc("GET /api/machines/{name}/config", s.handleMachineConfig)
@@ -203,7 +205,7 @@ func writeEngineErr(w http.ResponseWriter, err error) {
 	default:
 		var ae *dockerapi.APIError
 		if errors.As(err, &ae) {
-			if ae.Status == http.StatusConflict {
+			if ae.Status == http.StatusConflict || ae.Status == http.StatusForbidden {
 				writeErr(w, http.StatusConflict, "conflict", err)
 				return
 			}
@@ -489,7 +491,6 @@ type ContainerInfo struct {
 	ID            string            `json:"id"`
 	Image         string            `json:"image"`
 	State         string            `json:"state"`
-	Status        string            `json:"status"`
 	Created       string            `json:"created"`
 	Started       string            `json:"started"`
 	Command       string            `json:"command"`
@@ -543,7 +544,7 @@ func containerInfoFromDetail(d dockerapi.ContainerDetail) ContainerInfo {
 	}
 	return ContainerInfo{
 		Name: name, ID: d.ID, Image: d.Config.Image, State: d.State.Status,
-		Status: d.State.Status, Created: d.Created, Started: d.State.StartedAt,
+		Created: d.Created, Started: d.State.StartedAt,
 		Command: cmd, Ports: ports, Networks: nets, Mounts: mounts,
 		Labels: d.Config.Labels, RestartPolicy: rp,
 	}

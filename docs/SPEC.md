@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.5.4（git tag `v0.5.4`）  
-狀態：**0.5.4 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.6.0（git tag `v0.6.0`）  
+狀態：**0.6.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-09-06
 
 ## 1. 問題與目標
@@ -201,10 +201,10 @@ api_endpoint = "tcp://127.0.0.1:23750"
 |------|------|
 | Tray | 狀態、Ensure／Start、開主視窗、退出；登入自啟預設關 |
 | 版面 | 上：header（active distro＋有 border 的 folder／terminal、連線徽章、啟動引擎；**無** Settings、**無** tcp 路徑）；左：side nav（Containers…Machines＋**Settings**）；右：Info drawer；下：footer（版本、語言） |
-| Containers | 固定顯示全部；刷新可設定；Start／Stop／Logs／Terminal／Info／**Remove**；右側 Info＝summary（Name／ID／Image／State／Status／Created／Started／Command／Ports／Networks／Mounts／Labels／Restart）；compose 分組；欄寬可拖曳 |
+| Containers | 固定顯示全部；刷新可設定；Start／Stop／Logs／Terminal／Info／**Remove**；右側 Info＝summary（Name／ID／Image／State／Created／Started／Command／Ports／Networks／Mounts／Labels／Restart）；compose 分組；欄寬可拖曳 |
 | Images | 列表、移除、清除未使用；使用中不強制刪 |
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
-| Networks | 唯讀列表 |
+| Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
 | Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增發行版 |
 | Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System） |
 | Logs | 預設 100 行；Live 預設關 |
