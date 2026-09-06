@@ -415,14 +415,16 @@ export class App {
     this.root.innerHTML = "";
     this.root.append(
       el("header", { "data-testid": "header" }),
-      el("div", { class: "banner", "data-testid": "error-banner", role: "alert", hidden: "" }),
       el("div", { class: "body" },
         el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }),
         el("main"),
         el("aside", { class: "info-drawer", "data-testid": "info-drawer", hidden: "" }),
       ),
       el("div", { class: "dock", "data-testid": "dock" },
-        el("div", { class: "notice", "data-testid": "notice", role: "status", hidden: "" }),
+        el("div", { class: "toasts", "data-testid": "toasts" },
+          el("div", { class: "banner", "data-testid": "error-banner", role: "alert", hidden: "" }),
+          el("div", { class: "notice", "data-testid": "notice", role: "status", hidden: "" }),
+        ),
         el("footer", { "data-testid": "status-bar" }),
       ),
       this.buildConfirmDialog(),

@@ -65,6 +65,36 @@ test("layout: notice pins above the status bar without shifting the list", async
   expect(listAfter!.height).toBeGreaterThan(350);
 });
 
+test("layout: not-ready banner pins above the status bar without shifting the list", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 640 });
+  await open(page);
+  const listBefore = await page.getByTestId("container-list").boundingBox();
+  const footerBefore = await page.getByTestId("status-bar").boundingBox();
+  expect(listBefore).not.toBeNull();
+  expect(footerBefore).not.toBeNull();
+
+  await page.getByTestId("nav-machines").click();
+  await page.getByTestId("btn-machine-use-docker-desktop").click();
+  const banner = page.getByTestId("error-banner");
+  await expect(banner).toBeVisible();
+  await expect(banner).toHaveAttribute("data-kind", "not-ready");
+
+  const listAfter = await page.getByTestId("machines-list").boundingBox();
+  const footerAfter = await page.getByTestId("status-bar").boundingBox();
+  const toastsBox = await page.getByTestId("toasts").boundingBox();
+  const bannerBox = await banner.boundingBox();
+  expect(listAfter).not.toBeNull();
+  expect(footerAfter).not.toBeNull();
+  expect(toastsBox).not.toBeNull();
+  expect(bannerBox).not.toBeNull();
+  // footer 不動；toasts（banner ± 成功 notice）整疊貼在 status bar 上方
+  expect(Math.round(footerAfter!.y)).toBe(Math.round(footerBefore!.y));
+  expect(Math.round(toastsBox!.y + toastsBox!.height)).toBe(Math.round(footerAfter!.y));
+  expect(bannerBox!.y).toBeGreaterThan(footerAfter!.y - 120);
+  // 列表高度不被 banner 擠壓（與切換前接近）
+  expect(Math.abs(listAfter!.height - listBefore!.height)).toBeLessThan(80);
+});
+
 test("lists running and stopped containers together", async ({ page }) => {
   await open(page);
   await expect(row(page, "web")).toBeVisible();
