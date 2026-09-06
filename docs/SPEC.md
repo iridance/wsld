@@ -41,7 +41,7 @@
 
 ### 1.5 非目標（0.5）
 
-- WinUI（Phase 6）；arm64／npiperelay／自動更新／專用隔離 distro 旗標（Roadmap Extra）
+- WinUI（Phase 6）；Setup 一鍵、arm64／npiperelay／自動更新／專用隔離 distro 旗標（Roadmap Extra）
 - Kubernetes、Compose 視覺 IDE
 - 以 `C:\` 為一等公民專案路徑
 - SSH／暴露 `0.0.0.0` 上的 Docker API
@@ -82,10 +82,14 @@
 
 ### 3.2 首次安裝
 
-1. Admin：`01-enable-wsl.ps1`（若需要）
+現行（手動）：
+
+1. Admin：`01-enable-wsl.ps1`（若需要；可能重開機）
 2. `wsld init` → bootstrap + 寫 config
 3. 開 `wsld-gui` → Start → 列表／操作
 4. `wsld doctor` 輔助診斷
+
+**Extra — Setup 應用**（見 Roadmap Extra）：一鍵啟用 WSL（UAC）→ 需重開則寫待續 → **重開後自動跳出**接續 `init`（可選 start／開主視窗）。腳本路徑保留給進階使用者。
 
 ### 3.3 重開機後
 
@@ -246,4 +250,4 @@ Phase 0–4 已於 2026-09-06 通過下列項目（Ubuntu-26.04 實機）。**0.
 
 - 0.5（Phase 5）定義／實作中：多 distro、Settings 側欄、Info／Remove／Machines 動作等（見 Roadmap）
 - v2 WinUI 與 Go core 整合方式、WinAppDriver／UIA（Phase 6 前）
-- Extra（見 Roadmap）：arm64、專用隔離 distro 旗標、npiperelay、自動更新
+- Extra（見 Roadmap）：**Setup 應用**（一鍵啟用 WSL → 重開接續 init）、arm64、專用隔離 distro 旗標、npiperelay、自動更新

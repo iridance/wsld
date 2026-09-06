@@ -12,7 +12,7 @@ Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
 Phase 5  0.5 主線：多 distro＋GUI 補完    ← 定義中／實作中
-Extra    延後能力（不綁 0.5／v2.0）         ← 有需求再排
+Extra    延後能力（含首次 Setup）           ← 有需求再排
 Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
 0.5 = Phase 5 完成定義全過（見下方）；不綁死語意化版號字串至實作波再定
@@ -157,9 +157,34 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ---
 
-## Extra — 延後能力（不限版本）
+## Extra — 延後能力（不綁版本）
 
-### 候選
+不進 0.5／v2.0 完成定義；有明確需求再排期。下列可分開交付。
+
+### Setup 應用（首次一鍵）
+
+**目標**：還沒開過 WSL 的使用者，用一鍵走完「啟用 WSL →（必要時）重開機 → 自動接續 `init`」，不必自己找 `01-enable-wsl.ps1`。
+
+#### 交付
+
+- 獨立 setup 入口（例如 `wsld-setup.exe`，或 `wsld-gui`／`wsld` 首次偵測到未就緒時進入的 wizard）
+- **一鍵啟用 WSL**：等同 `01-enable-wsl.ps1`（Optional Feature、`wsl --update`、預設 WSL2；需 **UAC 提權**）
+- 若需重開機：寫「待續」狀態（例如 RunOnce／登入自啟／本地 pending flag），**重開機後自動跳出** setup，接著跑下一步
+- 重開後步驟：確認 `wsl.exe` 可用 →（必要時）`wsl --install` Ubuntu → 引導首次進 distro 建使用者（若尚未建立）→ 呼叫既有 **`wsld init`**（bootstrap + 寫 config）→ 可選直接 `start`／開主視窗
+- 冪等：WSL／distro／config 已就緒則跳過對應步驟；失敗給明確下一步（對齊 doctor 文案）
+- 文件：README／OPERATIONS 標「建議用 Setup」；保留腳本給進階／CI
+
+#### 完成定義
+
+- [ ] 無 WSL 功能：一鍵 → UAC → 啟用 → 提示重開；重開後 **自動再開 setup** 且狀態接得上
+- [ ] 重開後可一路到 `init` 成功（有 config、API 可 ping）；不需使用者再手動跑 `01-enable-wsl.ps1`
+- [ ] 已裝好 WSL／已 init：再開 setup 不重複破壞性動作
+- [ ] 首次 distro 建使用者若必須互動：UI 明確引導，不假裝全自動略過
+- [ ] 相關測試（至少核心狀態機／pending flag；UI 能測的用 Playwright 或同等）
+
+**退出條件**：上列完成定義全勾；**不**阻擋 Phase 5／6。
+
+### 其他候選
 
 - [ ] npiperelay（Windows named pipe ↔ 引擎）
 - [ ] 自動更新（`wsld`／`wsld-gui` 本體）
@@ -182,19 +207,19 @@ Extra ≠ 0.5／v2.0 完成條件
 2. 本機 TCP（23750+，每 managed machine 一埠）
 3. 0.5 = Phase 5；TDD + Playwright
 4. 之後 v2.0 = WinUI
-5. Extra 有需求再排（不擋主線）
+5. Extra 有需求再排（不擋主線；含 Setup／npiperelay 等）
 6. 只綁 127.0.0.1
 7. GUI／CLI 共用 core
 
 ## 里程碑
 
 
-| Phase | 版本角色                             |
-| ----- | -------------------------------- |
-| 0     | 前置                               |
-| 1–4   | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放）     |
-| 5     | **0.5 主線**                       |
-| Extra | 延後能力（npiperelay／自動更新／arm64／隔離旗標） |
-| 6     | 之後 **v2.0**                      |
+| Phase | 版本角色 |
+| ----- | -------- |
+| 0     | 前置 |
+| 1–4   | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放） |
+| 5     | **0.5 主線** |
+| Extra | Setup 一鍵、npiperelay、自動更新、arm64、隔離旗標 |
+| 6     | 之後 **v2.0** |
 
 
