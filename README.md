@@ -1,121 +1,105 @@
 # wsld — WSL with Docker
 
-`wsld`（全名 **Windows Subsystem for Linux with Docker**；倉庫名 `wsl-docker`）是 Windows 上的輕量 Docker 控制面：把 **WSL2 Ubuntu** 當成開發 machine（原始碼在 Linux FS），同機跑 **rootful dockerd**，再用 `wsld` **CLI +** `wsld-gui`**（Wails）** 做就緒與容器管理。類似 macOS 上 OrbStack 的體驗，但不需要 Docker Desktop。
+在 Windows 上跑 Docker，但不靠 Docker Desktop。
 
-- **0.5**（本階段，定義中）= Roadmap Phase 5：多 distro、Machines／Containers 補完、Settings 側欄＋theme、Info summary、UI 打磨；決策見 [docs/SPEC.md](docs/SPEC.md)、[docs/ROADMAP.md](docs/ROADMAP.md)
-- Phase 0–4 基底已落地；**之後 v2.0** = WinUI 3（Phase 6）
+把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-## 架構一覽
+目前在做 **0.5**（多 distro、Machines／Containers／Settings 等，細節還在定）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底已可用；之後 v2.0 會換成 WinUI。
 
 ```text
-Windows                                 WSL2 Ubuntu
-┌─────────────────────────────┐         ┌──────────────────────────┐
-│  wsld-gui.exe (Wails)       │         │  $HOME repos             │
-│  wsld.exe (CLI)             │  TCP    │  dockerd (rootful)       │
-│  shared internal/           │────────►│  127.0.0.1:23750+        │
-└─────────────────────────────┘         │  + docker.sock           │
-                                        └──────────────────────────┘
+Windows                         WSL2
+┌─────────────────────┐         ┌──────────────────┐
+│  wsld-gui / wsld    │  TCP    │  你的專案        │
+│                     │────────►│  dockerd         │
+└─────────────────────┘         │  :23750+         │
+                                └──────────────────┘
 ```
-
-
 
 ## 快速開始
 
+### 前置
 
+- Windows 11 x64；第一次裝 WSL 需要管理員權限
+- 還沒裝 WSL 的話，開**管理員** PowerShell：
 
-### 0. 前置
+```powershell
+.\scripts\01-enable-wsl.ps1   # 開 WSL2 + Ubuntu；可能要重開機
+```
 
-- Windows 11 x64、可用系統管理員權限一次
-- 沒裝過 WSL：以**系統管理員** PowerShell 執行
-  ```powershell
-  .\scripts\01-enable-wsl.ps1      # 啟用 WSL2 功能與 Ubuntu；可能需要重開機
-  ```
-- 取得執行檔：從 Release 下載 `wsld.exe`、`wsld-gui.exe`，或自行 `make build-win`（產出在 `dist/`）
+- 執行檔：Release 下載，或自己 `make build-win`（產出在 `dist/`）
 
-
-
-### 1. 初始化（一次）
+### 初始化（做一次）
 
 ```powershell
 wsld init
 ```
 
-會挑選（或安裝）Ubuntu WSL2 distro，在裡面以 root 執行 bootstrap：安裝 Docker CE + Compose、開 systemd、把 dockerd 綁到 `tcp://127.0.0.1:23750`（占用時自動換埠）、`loginctl enable-linger`、把你的使用者加入 `docker` 群組，最後寫入 `%APPDATA%\wsl-docker\config.toml`。
+會選／裝 Ubuntu、在裡面裝 Docker、開 systemd、把 API 綁在 `127.0.0.1:23750`（被占用就換埠），並寫入 `%APPDATA%\wsl-docker\config.toml`。
 
-### 2. CLI
+### CLI
 
 ```powershell
-wsld start                 # 喚醒 distro、啟動 dockerd、等 API 就緒
-wsld status                # 退出碼 0 就緒／3 未就緒／4 API 無回應
+wsld start                 # 喚醒 distro、起 dockerd
+wsld status                # 0 就緒／3 未就緒／4 API 掛了
 wsld ps [-a] [--json]
 wsld logs <ct> [--tail 100] [--follow]
 wsld stop-ct <ct> / wsld start-ct <ct>
-wsld exec <ct> [cmd…]      # 互動 shell（bash→sh 自動退回）
-wsld doctor                # 11 項健康檢查，每項附建議
+wsld exec <ct> [cmd…]
+wsld doctor                # 健康檢查 + 建議
 ```
 
-一般 `docker` CLI 也能直接用：
+也可以直接用一般 `docker`：
 
 ```powershell
-$env:DOCKER_HOST = "tcp://127.0.0.1:23750"   # Windows 側
+$env:DOCKER_HOST = "tcp://127.0.0.1:23750"   # Windows
 ```
 
 ```bash
-export DOCKER_HOST=tcp://127.0.0.1:23750     # WSL 內（或重開終端讓 docker 群組生效，直接用 unix socket）
+export DOCKER_HOST=tcp://127.0.0.1:23750     # WSL（或重開終端後走 unix socket）
 cd ~/Projects/myapp && docker run -v "$PWD:/app" …
 ```
 
-
-
-### 3. GUI
+### GUI
 
 ```powershell
 wsld-gui.exe           # 開主視窗；按 X 縮到系統匣
-wsld-gui.exe --tray    # 只起系統匣
+wsld-gui.exe --tray    # 只留系統匣
 ```
 
-主視窗：標題列顯示 active distro（有 border 的開啟資料夾／終端）、連線狀態、啟動引擎；**tcp 路徑與設定不在 header**。左側側欄：**Containers**（compose 分組；Start／Stop／Logs／Exec／Info／Remove；右側 Info summary）、**Images**／**Volumes**／**Networks**、**Machines**（設為目前、folder／terminal、右側 Info 含 wsl 設定與用量、取消管理／unregister、新增發行版）、**Settings**（刷新間隔、shell、Tray 自啟、Theme）。左下版本、右下語言。詳見 [docs/GUI.md](docs/GUI.md)。0.5 多 distro 與上述補完見 [docs/ROADMAP.md](docs/ROADMAP.md) Phase 5。
+側欄切 Containers／Images／Volumes／Networks／Machines／Settings；標題列可開資料夾、終端、啟動引擎。細節：[GUI](docs/GUI.md)。
 
-### 4. 重開機之後
+### 重開機之後
 
-`wsld start` 或 GUI「啟動引擎」。細節與 Docker Desktop 並存、故障排除、已知限制：[docs/OPERATIONS.md](docs/OPERATIONS.md)。
+再跑一次 `wsld start`，或在 GUI 按「啟動引擎」。並存 Desktop、踩坑：[OPERATIONS](docs/OPERATIONS.md)。
 
-## 文件
+## 小提醒
 
-
-| 文件                                           | 內容                              |
-| -------------------------------------------- | ------------------------------- |
-| [docs/SPEC.md](docs/SPEC.md)                 | 規格；0.5 定義開放中；§6 為基底驗收        |
-| [docs/ROADMAP.md](docs/ROADMAP.md)           | 分期；**0.5 = Phase 5**               |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架構                              |
-| [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md)       | 01／02 腳本細節、退出碼、安全邊界             |
-| [docs/GUI.md](docs/GUI.md)                   | GUI 架構、功能對照、實機手測                |
-| [docs/OPERATIONS.md](docs/OPERATIONS.md)     | 重開機、Desktop 並存、故障排除、已知限制        |
-| [docs/TESTING.md](docs/TESTING.md)           | 一鍵測試（bats／Pester／Go／Playwright） |
-| [config.example.toml](config.example.toml)   | 設定範例                            |
-| `.cursor/rules/tdd-and-ui-testing.mdc`       | TDD；UI → Playwright             |
-
-
-
+1. 程式碼放 WSL `$HOME`，別把 `C:\` 當主戰場。
+2. 用 WSL Remote 開發比較順。
+3. 盡量別跟 Docker Desktop 雙引擎混著玩。
+4. API 預設 **23750**（占用會換），只聽 `127.0.0.1`。
 
 ## 開發
 
 ```bash
-make test        # shellcheck + bats + Pester + go test（含 windows 交叉 vet）+ Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（GOOS=windows/amd64）
+make test        # shellcheck + bats + Pester + go test + Playwright
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe
 ```
 
-原則：GUI 與 CLI 共用 `internal/*`，不重複邏輯；所有功能先寫測試。
+GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
-## 快速約定
+## 文件
 
-1. 原始碼放 WSL `$HOME`，不要放 `C:\` 當主目錄。
-2. 用 WSL Remote 開發。
-3. 避免與 Docker Desktop 雙引擎混用。
-4. 預設 API 埠 **23750**（占用會自動換）；API 只綁 `127.0.0.1`。
-5. 重開機後 `wsld start` 或 GUI Start。
-
-
+| 文件 | 內容 |
+| --- | --- |
+| [SPEC](docs/SPEC.md) | 規格（0.5 還在定） |
+| [ROADMAP](docs/ROADMAP.md) | 分期 |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
+| [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |
+| [GUI](docs/GUI.md) | 介面說明 |
+| [OPERATIONS](docs/OPERATIONS.md) | 日常使用／故障排除 |
+| [TESTING](docs/TESTING.md) | 怎麼跑測試 |
+| [config.example.toml](config.example.toml) | 設定範例 |
 
 ## 授權
 
