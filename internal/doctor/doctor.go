@@ -2,7 +2,7 @@
 package doctor
 
 import (
-	"github.com/irice/wsl-docker/internal/procutil"
+	"github.com/iridance/wsld/internal/procutil"
 
 	"context"
 	"fmt"
@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/i18n"
-	"github.com/irice/wsl-docker/internal/wsl"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 // Level 為檢查結果等級。

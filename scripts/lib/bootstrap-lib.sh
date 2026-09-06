@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wsl-docker bootstrap 純函式庫（可被 bats 測試）。
+# wsld bootstrap 純函式庫（可被 bats 測試）。
 # 由 scripts/02-bootstrap-docker.sh source；不要在此檔執行副作用。
 
 WSLD_DEFAULT_PORT=23750

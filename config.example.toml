@@ -1,4 +1,4 @@
-# 複製到 %APPDATA%\wsl-docker\config.toml
+# 複製到 %APPDATA%\wsld\config.toml
 # 0.5：多 machine profile＋單一 active；舊扁平格式載入時會自動遷移。
 
 active = "Ubuntu-26.04"

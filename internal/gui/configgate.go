@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/irice/wsl-docker/internal/i18n"
-	"github.com/irice/wsl-docker/internal/lifecycle"
+	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lifecycle"
 )
 
 // ConfigMissingLifecycle 在 config.toml 不存在時取代真正的 lifecycle.Manager：

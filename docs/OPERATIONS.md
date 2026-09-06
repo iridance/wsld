@@ -53,7 +53,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 | `bootstrap prerequisites not met`（exit 3） | systemd 剛啟用尚未生效 | `wsl --shutdown` → 重開 distro → `wsld init` |
 | `API 無回應` 但 `docker.service 運作中` | `daemon.json` hosts 沒有 `tcp://127.0.0.1:<port>`，或埠與 config 不一致 | 對照 `daemon.json` 與 `config.toml`；`wsld init` 可重寫 |
 | `有服務監聽但不是 Docker` | 埠被其他程式占用 | 重跑 `wsld init` 自動換埠 |
-| GUI 顯示「請先執行 wsld init」 | `%APPDATA%\wsl-docker\config.toml` 不存在 | `wsld init` |
+| GUI 顯示「請先執行 wsld init」 | `%APPDATA%\wsld\config.toml` 不存在 | `wsld init` |
 | Desktop WARN | Docker Desktop 同時運行 | 見上節 |
 | `docker` 指令在 WSL 內連不到 | 未設 `DOCKER_HOST`，也不在 `docker` 群組 | bootstrap 已把使用者加入 `docker` 群組，重開終端；或 `export DOCKER_HOST=tcp://127.0.0.1:23750` |
 

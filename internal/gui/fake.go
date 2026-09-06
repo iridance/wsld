@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irice/wsl-docker/internal/dockerapi"
-	"github.com/irice/wsl-docker/internal/lifecycle"
+	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/lifecycle"
 )
 
 // FakeEngine 是記憶體內的 Docker API 假實作，供 Go 測試與 Playwright 測試主機使用。

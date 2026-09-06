@@ -1,4 +1,4 @@
-// Package config 讀寫 %APPDATA%\wsl-docker\config.toml（SPEC §5.2）。
+// Package config 讀寫 %APPDATA%\wsld\config.toml（SPEC §5.2）。
 package config
 
 import (
@@ -20,7 +20,8 @@ const (
 	DefaultRefreshIntervalSec = 3
 	DefaultAPITimeoutSec      = 10
 	DefaultTheme              = "system"
-	appDirName                = "wsl-docker"
+	appDirName                = "wsld"
+	legacyAppDirName          = "wsl-docker" // 更名前的設定目錄
 	fileName                  = "config.toml"
 	// EnvOverride 可指定 config 路徑（測試／多環境）。
 	EnvOverride = "WSLD_CONFIG"
@@ -438,17 +439,51 @@ func DefaultPathFor(goos string, getenv func(string) string) string {
 	if p := getenv(EnvOverride); p != "" {
 		return p
 	}
-	var base string
+	return filepath.Join(configBaseDir(goos, getenv), appDirName, fileName)
+}
+
+// MigrateLegacyAppDir 若仍存在舊目錄 %APPDATA%\wsl-docker（或 XDG 同等路徑）
+// 且新目錄尚未建立，則整目錄更名為 wsld。WSLD_CONFIG 覆寫時不動作。
+func MigrateLegacyAppDir() error {
+	return MigrateLegacyAppDirFor(runtime.GOOS, os.Getenv)
+}
+
+// MigrateLegacyAppDirFor 便於測試。
+func MigrateLegacyAppDirFor(goos string, getenv func(string) string) error {
+	if getenv(EnvOverride) != "" {
+		return nil
+	}
+	base := configBaseDir(goos, getenv)
+	if base == "" {
+		return nil
+	}
+	oldDir := filepath.Join(base, legacyAppDirName)
+	newDir := filepath.Join(base, appDirName)
+	if _, err := os.Stat(newDir); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return os.Rename(oldDir, newDir)
+}
+
+func configBaseDir(goos string, getenv func(string) string) string {
 	if goos == "windows" {
-		base = getenv("APPDATA")
+		base := getenv("APPDATA")
 		if base == "" {
 			base = filepath.Join(getenv("USERPROFILE"), "AppData", "Roaming")
 		}
-	} else {
-		base = getenv("XDG_CONFIG_HOME")
-		if base == "" {
-			base = filepath.Join(getenv("HOME"), ".config")
-		}
+		return base
 	}
-	return filepath.Join(base, appDirName, fileName)
+	base := getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		base = filepath.Join(getenv("HOME"), ".config")
+	}
+	return base
 }

@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/irice/wsl-docker/internal/wsl"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 // runInherit 以繼承的 stdin/stdout/stderr 執行程式（互動式 docker exec）。

@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/irice/wsl-docker/internal/i18n"
-	"github.com/irice/wsl-docker/internal/lifecycle"
+	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lifecycle"
 )
 
 func TestConfigMissingLifecycle(t *testing.T) {
 	i18n.Set(i18n.EN)
-	g := ConfigMissingLifecycle{Path: `C:\Users\me\AppData\Roaming\wsl-docker\config.toml`}
+	g := ConfigMissingLifecycle{Path: `C:\Users\me\AppData\Roaming\wsld\config.toml`}
 
 	st := g.Status(context.Background())
 	if st.Ready() {

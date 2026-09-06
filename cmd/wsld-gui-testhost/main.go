@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/gui"
-	"github.com/irice/wsl-docker/internal/i18n"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/gui"
+	"github.com/iridance/wsld/internal/i18n"
 )
 
 func main() {

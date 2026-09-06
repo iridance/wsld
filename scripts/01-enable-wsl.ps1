@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  wsl-docker Phase 1：在 Windows 11 啟用 WSL2 並確保有一個 Ubuntu（WSL2）發行版。
+  wsld Phase 1：在 Windows 11 啟用 WSL2 並確保有一個 Ubuntu（WSL2）發行版。
 
 .DESCRIPTION
   1. 檢查 Windows 11 與系統管理員權限

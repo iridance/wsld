@@ -1,4 +1,4 @@
-# wsl-docker Roadmap
+# wsld Roadmap
 
 版本：0.5.1（git tag `v0.5.1`）  
 對應規格：[SPEC.md](SPEC.md)（**0.5.1 已交付**；Phase 0–4 基底已落地）
@@ -56,7 +56,7 @@ Extra ≠ 0.5／v2.0 完成條件
 ### 交付
 
 - Go module；`cmd/wsld`；`internal/{lifecycle,dockerapi,config,doctor}`
-- `%APPDATA%\wsl-docker\config.toml`
+- `%APPDATA%\wsld\config.toml`
 - 命令：`init`／`start`／`status`／`ps`／`logs`／`start-ct`／`stop-ct`／`doctor`（退出碼 0–4）
 - TDD；`docs/TESTING.md`（Go 部分）
 

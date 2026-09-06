@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/irice/wsl-docker/internal/wsl"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 // FakeWSL 模擬 wsl.exe：支援 --list --verbose／--list --online／--install／cat /etc/wsl.conf。

@@ -34,7 +34,7 @@ Windows                         WSL2
 wsld init
 ```
 
-會選／裝 Ubuntu、在裡面裝 Docker、開 systemd、把 API 綁在 `127.0.0.1:23750`（被占用就換埠），並寫入 `%APPDATA%\wsl-docker\config.toml`。
+會選／裝 Ubuntu、在裡面裝 Docker、開 systemd、把 API 綁在 `127.0.0.1:23750`（被占用就換埠），並寫入 `%APPDATA%\wsld\config.toml`。
 
 ### CLI
 

@@ -24,16 +24,16 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"github.com/irice/wsl-docker/frontend"
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/dockerapi"
-	"github.com/irice/wsl-docker/internal/doctor"
-	"github.com/irice/wsl-docker/internal/gui"
-	"github.com/irice/wsl-docker/internal/host"
-	"github.com/irice/wsl-docker/internal/i18n"
-	"github.com/irice/wsl-docker/internal/lifecycle"
-	"github.com/irice/wsl-docker/internal/wsl"
-	"github.com/irice/wsl-docker/scripts"
+	"github.com/iridance/wsld/frontend"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/doctor"
+	"github.com/iridance/wsld/internal/gui"
+	"github.com/iridance/wsld/internal/host"
+	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lifecycle"
+	"github.com/iridance/wsld/internal/wsl"
+	"github.com/iridance/wsld/scripts"
 )
 
 //go:embed assets/tray.ico
@@ -48,6 +48,7 @@ func main() {
 			startHidden = true
 		}
 	}
+	_ = config.MigrateLegacyAppDir()
 	cfgPath := config.DefaultPath()
 	cfg, cfgErr := config.Load(cfgPath)
 	if cfgErr != nil {

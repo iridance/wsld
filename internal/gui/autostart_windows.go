@@ -12,7 +12,7 @@ const runKey = `Software\Microsoft\Windows\CurrentVersion\Run`
 
 // RegistryAutostart 以 HKCU\...\Run 實作「登入時啟動 Tray」（預設關閉，由設定頁開啟）。
 type RegistryAutostart struct {
-	Name    string // 登錄值名稱，例如 "wsl-docker"
+	Name    string // 登錄值名稱，例如 "wsld"
 	Command string // 例如 "C:\path\wsld-gui.exe" --tray
 }
 

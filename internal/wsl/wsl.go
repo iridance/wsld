@@ -3,7 +3,7 @@
 package wsl
 
 import (
-	"github.com/irice/wsl-docker/internal/procutil"
+	"github.com/iridance/wsld/internal/procutil"
 
 	"bytes"
 	"context"

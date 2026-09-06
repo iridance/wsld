@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/irice/wsl-docker/internal/host"
+	"github.com/iridance/wsld/internal/host"
 )
 
 // DistroShell 開啟連到指定 WSL distro 的雙向 shell（Machines 底部 terminal）。

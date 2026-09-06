@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/dockerapi"
-	"github.com/irice/wsl-docker/internal/wsl"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 // ---- fakes -----------------------------------------------------------------

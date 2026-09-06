@@ -1,4 +1,4 @@
-﻿# wsl-docker：01-enable-wsl.ps1 使用的純函式（可被 Pester 測試，無副作用）。
+﻿# wsld：01-enable-wsl.ps1 使用的純函式（可被 Pester 測試，無副作用）。
 # 相容 Windows PowerShell 5.1。
 
 function ConvertFrom-WslList {

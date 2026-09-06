@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/irice/wsl-docker/internal/procutil"
+	"github.com/iridance/wsld/internal/procutil"
 )
 
 func openFolder(distro, user string) error {

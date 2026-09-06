@@ -296,7 +296,7 @@ func TestEndpointForPort(t *testing.T) {
 func TestDefaultPathUsesAPPDATAOnWindowsLayout(t *testing.T) {
 	t.Setenv("APPDATA", `C:\Users\irice\AppData\Roaming`)
 	got := DefaultPathFor("windows", func(k string) string { return os.Getenv(k) })
-	want := filepath.Join(`C:\Users\irice\AppData\Roaming`, "wsl-docker", "config.toml")
+	want := filepath.Join(`C:\Users\irice\AppData\Roaming`, "wsld", "config.toml")
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
@@ -305,7 +305,7 @@ func TestDefaultPathUsesAPPDATAOnWindowsLayout(t *testing.T) {
 func TestDefaultPathFallsBackToXDGOnOtherOS(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg")
 	got := DefaultPathFor("linux", func(k string) string { return os.Getenv(k) })
-	if got != filepath.Join("/tmp/xdg", "wsl-docker", "config.toml") {
+	if got != filepath.Join("/tmp/xdg", "wsld", "config.toml") {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -314,6 +314,86 @@ func TestDefaultPathHonoursOverrideEnv(t *testing.T) {
 	t.Setenv("WSLD_CONFIG", "/x/y.toml")
 	if got := DefaultPathFor("windows", os.Getenv); got != "/x/y.toml" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMigrateLegacyAppDirRenamesOldDir(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, legacyAppDirName)
+	newDir := filepath.Join(root, appDirName)
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, fileName), []byte("active = \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return root
+		}
+		return ""
+	}
+	if err := MigrateLegacyAppDirFor("linux", getenv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatalf("legacy dir still present: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(newDir, fileName)); err != nil {
+		t.Fatalf("migrated config missing: %v", err)
+	}
+}
+
+func TestMigrateLegacyAppDirSkipsWhenNewExists(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, legacyAppDirName)
+	newDir := filepath.Join(root, appDirName)
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "old.toml"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, fileName), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return root
+		}
+		return ""
+	}
+	if err := MigrateLegacyAppDirFor("linux", getenv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		t.Fatalf("legacy dir should remain when new exists: %v", err)
+	}
+}
+
+func TestMigrateLegacyAppDirSkipsOverrideEnv(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, legacyAppDirName)
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(k string) string {
+		switch k {
+		case EnvOverride:
+			return filepath.Join(root, "custom.toml")
+		case "XDG_CONFIG_HOME":
+			return root
+		}
+		return ""
+	}
+	if err := MigrateLegacyAppDirFor("linux", getenv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		t.Fatalf("should not migrate when override set: %v", err)
 	}
 }
 

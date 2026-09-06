@@ -6,12 +6,12 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/irice/wsl-docker/internal/cli"
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/doctor"
-	"github.com/irice/wsl-docker/internal/i18n"
-	"github.com/irice/wsl-docker/internal/wsl"
-	"github.com/irice/wsl-docker/scripts"
+	"github.com/iridance/wsld/internal/cli"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/doctor"
+	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/wsl"
+	"github.com/iridance/wsld/scripts"
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
@@ -22,6 +22,7 @@ func main() {
 	defer stop()
 
 	// 語系：預設英文；config.lang（與 GUI 右下角切換共用）；WSLD_LANG 環境變數可強制覆寫
+	_ = config.MigrateLegacyAppDir()
 	cfgPath := config.DefaultPath()
 	if c, err := config.Load(cfgPath); err == nil {
 		if l, ok := i18n.Parse(c.Lang); ok {

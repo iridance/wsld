@@ -19,12 +19,12 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/dockerapi"
-	"github.com/irice/wsl-docker/internal/doctor"
-	"github.com/irice/wsl-docker/internal/i18n"
-	"github.com/irice/wsl-docker/internal/lifecycle"
-	"github.com/irice/wsl-docker/internal/wsl"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/doctor"
+	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lifecycle"
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 // Engine 是 GUI 需要的 Docker API 子集（*dockerapi.Client 滿足）。

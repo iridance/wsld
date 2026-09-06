@@ -1,4 +1,4 @@
-# wsl-docker 產品規格（SPEC）
+# wsld 產品規格（SPEC）
 
 版本：0.5.1（git tag `v0.5.1`）  
 狀態：**0.5.1 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
@@ -51,10 +51,10 @@
 
 | 主題 | 決定 |
 |------|------|
-| 產品／repo | `wsl-docker` |
+| 產品／repo | `wsld` |
 | CLI | `wsld` |
 | GUI 二進位 | `wsld-gui.exe`（與 CLI 分開散佈；兩者都要） |
-| Config | `%APPDATA%\wsl-docker\config.toml` |
+| Config | `%APPDATA%\wsld\config.toml` |
 | Distro | 優先沿用既有 Ubuntu；否則安裝官方 Ubuntu |
 | Docker | Rootful CE + 預設安裝 Compose plugin |
 | API | 預設 `tcp://127.0.0.1:23750`；占用則自動遞增並寫入 config；只綁 loopback |
@@ -127,7 +127,7 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 ### 5.1 倉庫（目標）
 
 ```text
-wsl-docker/
+wsld/
   LICENSE                 # MIT
   README.md
   docs/ SPEC ROADMAP ARCHITECTURE BOOTSTRAP GUI TESTING
@@ -139,7 +139,7 @@ wsl-docker/
   frontend/               # Wails UI（若適用）
 ```
 
-### 5.2 Config（`%APPDATA%\wsl-docker\config.toml`）
+### 5.2 Config（`%APPDATA%\wsld\config.toml`）
 
 基底（扁平，仍可讀；0.5 載入時自動遷移）：
 

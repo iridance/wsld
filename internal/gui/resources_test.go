@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/irice/wsl-docker/internal/config"
-	"github.com/irice/wsl-docker/internal/dockerapi"
+	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/dockerapi"
 )
 
 func TestImagesListRemovePrune(t *testing.T) {

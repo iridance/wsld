@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wsl-docker Phase 1：在 WSL2（Ubuntu/Debian 或 Arch）內安裝 rootful Docker，
+# wsld Phase 1：在 WSL2（Ubuntu/Debian 或 Arch）內安裝 rootful Docker，
 # 讓 dockerd 同時監聽 unix socket 與 tcp://127.0.0.1:<port>（只綁 loopback），
 # 並啟用 systemd／linger，供 Windows 端 wsld / wsld-gui 使用。
 #

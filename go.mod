@@ -1,4 +1,4 @@
-module github.com/irice/wsl-docker
+module github.com/iridance/wsld
 
 go 1.27.1
 
