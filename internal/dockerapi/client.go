@@ -272,18 +272,70 @@ func (c *Client) StopContainer(ctx context.Context, id string, timeoutSec int) e
 	return nil
 }
 
+// RemoveContainer DELETE /containers/{id}?force=1（force 可刪 running）。
+func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
+	q := url.Values{}
+	if force {
+		q.Set("force", "1")
+	}
+	resp, err := c.do(ctx, http.MethodDelete, "/containers/"+url.PathEscape(id), q, nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // ContainerDetail 對應 GET /containers/{id}/json 的子集。
 type ContainerDetail struct {
-	ID     string `json:"Id"`
-	Name   string `json:"Name"`
-	Config struct {
-		Tty   bool   `json:"Tty"`
-		Image string `json:"Image"`
+	ID      string   `json:"Id"`
+	Name    string   `json:"Name"`
+	Created string   `json:"Created"`
+	Path    string   `json:"Path"`
+	Args    []string `json:"Args"`
+	Config  struct {
+		Tty    bool              `json:"Tty"`
+		Image  string            `json:"Image"`
+		Cmd    []string          `json:"Cmd"`
+		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	State struct {
-		Status  string `json:"Status"`
-		Running bool   `json:"Running"`
+		Status    string `json:"Status"`
+		Running   bool   `json:"Running"`
+		StartedAt string `json:"StartedAt"`
 	} `json:"State"`
+	HostConfig struct {
+		RestartPolicy struct {
+			Name              string `json:"Name"`
+			MaximumRetryCount int    `json:"MaximumRetryCount"`
+		} `json:"RestartPolicy"`
+	} `json:"HostConfig"`
+	NetworkSettings struct {
+		Ports    map[string][]PortBinding            `json:"Ports"`
+		Networks map[string]ContainerNetworkEndpoint `json:"Networks"`
+	} `json:"NetworkSettings"`
+	Mounts []ContainerMount `json:"Mounts"`
+}
+
+// PortBinding 是 inspect 的 HostPort 綁定。
+type PortBinding struct {
+	HostIP   string `json:"HostIp"`
+	HostPort string `json:"HostPort"`
+}
+
+// ContainerNetworkEndpoint 是單一網路端點。
+type ContainerNetworkEndpoint struct {
+	IPAddress string `json:"IPAddress"`
+	NetworkID string `json:"NetworkID"`
+}
+
+// ContainerMount 是掛載點。
+type ContainerMount struct {
+	Type        string `json:"Type"`
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+	Mode        string `json:"Mode"`
+	RW          bool   `json:"RW"`
 }
 
 // Inspect GET /containers/{id}/json。

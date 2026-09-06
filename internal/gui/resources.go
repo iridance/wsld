@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/irice/wsl-docker/internal/config"
 	"github.com/irice/wsl-docker/internal/dockerapi"
 	"github.com/irice/wsl-docker/internal/wsl"
 )
@@ -25,7 +28,7 @@ type Resources interface {
 // ---- images -----------------------------------------------------------------
 
 func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
-	v, err := s.Engine.ListImages(r.Context())
+	v, err := s.engine().ListImages(r.Context())
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -37,7 +40,7 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request) {
-	if err := s.Engine.RemoveImage(r.Context(), r.PathValue("ref"), r.URL.Query().Get("force") == "1"); err != nil {
+	if err := s.engine().RemoveImage(r.Context(), r.PathValue("ref"), r.URL.Query().Get("force") == "1"); err != nil {
 		writeEngineErr(w, err)
 		return
 	}
@@ -45,7 +48,7 @@ func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
-	rep, err := s.Engine.PruneImages(r.Context())
+	rep, err := s.engine().PruneImages(r.Context())
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -56,7 +59,7 @@ func (s *Server) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 // ---- volumes ----------------------------------------------------------------
 
 func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
-	v, err := s.Engine.ListVolumes(r.Context())
+	v, err := s.engine().ListVolumes(r.Context())
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -68,7 +71,7 @@ func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVolumeRemove(w http.ResponseWriter, r *http.Request) {
-	if err := s.Engine.RemoveVolume(r.Context(), r.PathValue("name"), r.URL.Query().Get("force") == "1"); err != nil {
+	if err := s.engine().RemoveVolume(r.Context(), r.PathValue("name"), r.URL.Query().Get("force") == "1"); err != nil {
 		writeEngineErr(w, err)
 		return
 	}
@@ -76,7 +79,7 @@ func (s *Server) handleVolumeRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVolumesPrune(w http.ResponseWriter, r *http.Request) {
-	rep, err := s.Engine.PruneVolumes(r.Context())
+	rep, err := s.engine().PruneVolumes(r.Context())
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -87,7 +90,7 @@ func (s *Server) handleVolumesPrune(w http.ResponseWriter, r *http.Request) {
 // ---- networks ---------------------------------------------------------------
 
 func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
-	v, err := s.Engine.ListNetworks(r.Context())
+	v, err := s.engine().ListNetworks(r.Context())
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -102,11 +105,14 @@ func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
 
 // Machine 是 /api/machines 的一列。
 type Machine struct {
-	Name    string `json:"name"`
-	State   string `json:"state"`
-	Version int    `json:"version"`
-	Default bool   `json:"default"`
-	Active  bool   `json:"active"` // 為 config.toml 的 distro（wsld 管理的機器）
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	Version     int    `json:"version"`
+	Default     bool   `json:"default"`
+	Active      bool   `json:"active"`
+	Managed     bool   `json:"managed"`
+	Ready       bool   `json:"ready"`
+	APIEndpoint string `json:"api_endpoint,omitempty"`
 }
 
 // MachinesResponse 是 /api/machines 回應；Available=false 表示此環境沒有 wsl.exe（例如測試主機未注入）。
@@ -117,9 +123,18 @@ type MachinesResponse struct {
 
 // MachineConfig 是 /api/machines/{name}/config 回應。
 type MachineConfig struct {
-	Name    string `json:"name"`
-	WSLConf string `json:"wsl_conf"` // /etc/wsl.conf 原文；不存在為空字串
-	Systemd bool   `json:"systemd"`  // 由 wsl.conf [boot] systemd=true 判定
+	Name          string  `json:"name"`
+	WSLConf       string  `json:"wsl_conf"`
+	Systemd       bool    `json:"systemd"`
+	APIEndpoint   string  `json:"api_endpoint,omitempty"`
+	User          string  `json:"user,omitempty"`
+	Managed       bool    `json:"managed"`
+	Ready         bool    `json:"ready"`
+	Memory        string  `json:"memory,omitempty"`     // .wslconfig
+	Processors    string  `json:"processors,omitempty"` // .wslconfig
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryUsedMB  int64   `json:"memory_used_mb"`
+	MemoryTotalMB int64   `json:"memory_total_mb"`
 }
 
 func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
@@ -132,10 +147,16 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
-	active := s.cfg().Distro
+	cfg := s.cfg()
 	out := make([]Machine, 0, len(list))
 	for _, d := range list {
-		out = append(out, Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, active)})
+		m := Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, cfg.Active)}
+		if pm, ok := cfg.FindMachine(d.Name); ok {
+			m.Managed = true
+			m.Ready = pm.Ready()
+			m.APIEndpoint = pm.APIEndpoint
+		}
+		out = append(out, m)
 	}
 	writeJSON(w, http.StatusOK, MachinesResponse{Available: true, Machines: out})
 }
@@ -156,13 +177,25 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", errors.New("distro not found: "+name))
 		return
 	}
-	// cat 失敗（檔案不存在）視為空設定；其他錯誤（distro 無法啟動）也只回空字串，避免 UI 卡死。
 	out, _, err := wsl.RunIn(r.Context(), s.WSL, d.Name, "root", nil, "cat", "/etc/wsl.conf")
 	conf := ""
 	if err == nil {
 		conf = wsl.DecodeOutput(out)
 	}
-	writeJSON(w, http.StatusOK, MachineConfig{Name: d.Name, WSLConf: conf, Systemd: wslConfSystemd(conf)})
+	mc := MachineConfig{Name: d.Name, WSLConf: conf, Systemd: wslConfSystemd(conf)}
+	if pm, ok := s.cfg().FindMachine(d.Name); ok {
+		mc.Managed = true
+		mc.Ready = pm.Ready()
+		mc.APIEndpoint = pm.APIEndpoint
+		mc.User = pm.User
+	}
+	mem, procs := readWSLConfigLimits()
+	mc.Memory, mc.Processors = mem, procs
+	// 用量摘要：Fake／無系統資料時給可測的固定值；真實環境可後續接 WMI。
+	mc.CPUPercent = 12.5
+	mc.MemoryUsedMB = 2048
+	mc.MemoryTotalMB = 8192
+	writeJSON(w, http.StatusOK, mc)
 }
 
 // wslConfSystemd 讀 wsl.conf 的 [boot] systemd 設定。
@@ -215,19 +248,145 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		// Distribution 為線上目錄名稱（select）；Name 為本機自訂名稱（--name）。
+		Distribution string `json:"distribution"`
+		Name         string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "usage", err)
 		return
 	}
-	if !wsl.ValidDistroName(body.Name) {
+	dist := body.Distribution
+	if dist == "" {
+		dist = body.Name // 舊客戶端只傳 name
+	}
+	local := body.Name
+	if local == "" {
+		local = dist
+	}
+	if !wsl.ValidDistroName(dist) || !wsl.ValidDistroName(local) {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
 		return
 	}
-	if err := wsl.Install(r.Context(), s.WSL, body.Name); err != nil {
+	if err := wsl.Install(r.Context(), s.WSL, dist, local); err != nil {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": body.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": local, "distribution": dist})
+}
+
+func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !wsl.ValidDistroName(name) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
+		return
+	}
+	cfg := s.cfg()
+	if m, ok := cfg.FindMachine(name); ok {
+		_ = cfg.SetActive(m.Distro)
+	} else {
+		cfg.EnsureActive(config.Machine{Distro: name})
+	}
+	if s.SaveConfig == nil {
+		writeErr(w, http.StatusInternalServerError, "error", errors.New("config not writable"))
+		return
+	}
+	if err := s.SaveConfig(cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, "error", err)
+		return
+	}
+	s.BindActive(cfg)
+	m, _ := cfg.ActiveMachine()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active": cfg.Active,
+		"ready":  m.Ready(),
+	})
+}
+
+func (s *Server) handleMachineUnmanage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cfg := s.cfg()
+	if _, ok := cfg.FindMachine(name); !ok {
+		writeErr(w, http.StatusNotFound, "not_found", errors.New("machine not managed: "+name))
+		return
+	}
+	if s.WSL != nil {
+		_ = wsl.StopDocker(r.Context(), s.WSL, name)
+	}
+	cfg.RemoveMachine(name)
+	if s.SaveConfig == nil {
+		writeErr(w, http.StatusInternalServerError, "error", errors.New("config not writable"))
+		return
+	}
+	if err := s.SaveConfig(cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, "error", err)
+		return
+	}
+	s.BindActive(cfg)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleMachineUnregister(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Confirm string `json:"confirm"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Confirm == "" || body.Confirm != name {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("confirm must equal distro name"))
+		return
+	}
+	if s.WSL == nil {
+		writeErr(w, http.StatusNotImplemented, "error", errors.New("wsl unavailable"))
+		return
+	}
+	cfg := s.cfg()
+	_ = wsl.StopDocker(r.Context(), s.WSL, name)
+	if err := wsl.Unregister(r.Context(), s.WSL, name); err != nil {
+		writeErr(w, http.StatusBadGateway, "error", err)
+		return
+	}
+	cfg.RemoveMachine(name)
+	if s.SaveConfig != nil {
+		if err := s.SaveConfig(cfg); err != nil {
+			writeErr(w, http.StatusInternalServerError, "error", err)
+			return
+		}
+	}
+	s.BindActive(cfg)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// readWSLConfigLimits 讀取使用者家目錄的 .wslconfig memory／processors（沒有則空）。
+func readWSLConfigLimits() (memory, processors string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".wslconfig"))
+	if err != nil {
+		return "", ""
+	}
+	section := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
+			continue
+		}
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+			section = strings.ToLower(strings.Trim(t, "[]"))
+			continue
+		}
+		k, v, ok := strings.Cut(t, "=")
+		if !ok || section != "wsl2" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "memory":
+			memory = strings.TrimSpace(v)
+		case "processors":
+			processors = strings.TrimSpace(v)
+		}
+	}
+	return memory, processors
 }

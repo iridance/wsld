@@ -58,6 +58,31 @@ wsld_detect_distro_id() {
   sed -n 's/^ID=//p' "$f" | tr -d '"' | head -1
 }
 
+# $1 = os-release 路徑。stdout = debian | arch；不支援則 unknown 且 exit 1。
+wsld_distro_family() {
+  local id
+  id="$(wsld_detect_distro_id "$@" || true)"
+  case "$id" in
+    ubuntu|debian)
+      echo debian
+      return 0
+      ;;
+    arch|archlinux|manjaro|endeavouros)
+      echo arch
+      return 0
+      ;;
+    *)
+      echo unknown
+      return 1
+      ;;
+  esac
+}
+
+# dockerd 在 PATH 上即視為引擎已安裝（跨 apt／pacman）。
+wsld_docker_engine_installed() {
+  command -v dockerd >/dev/null 2>&1
+}
+
 # --- 埠選擇 ----------------------------------------------------------------
 
 # 可被測試覆寫。回傳 0 = 埠已被占用。

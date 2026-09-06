@@ -225,6 +225,7 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	cfg.Distro = d.Name
 
 	user := opts.User
+	needEnsure := user != ""
 	if user == "" {
 		out, _, err := wsl.RunIn(ctx, m.WSL, d.Name, "", nil, "id", "-un")
 		if err != nil {
@@ -232,8 +233,18 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		}
 		user = strings.TrimSpace(wsl.DecodeOutput(out))
 		if user == "" || user == "root" {
-			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_root", d.Name))
+			user = wsl.SuggestLinuxUser()
+			needEnsure = true
+			m.print(i18n.T("lc.init_creating_user", d.Name, user))
 		}
+	}
+	if needEnsure {
+		if err := wsl.EnsureUser(ctx, m.WSL, d.Name, user); err != nil {
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_create", d.Name, err))
+		}
+	}
+	if user == "" || user == "root" || !wsl.ValidLinuxUsername(user) {
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_root", d.Name, d.Name))
 	}
 	cfg.User = user
 
@@ -271,7 +282,11 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	if chosen != port {
 		m.print(i18n.T("lc.init_port_changed", port, chosen))
 	}
-	cfg.APIEndpoint = config.EndpointForPort(chosen)
+	cfg.EnsureActive(config.Machine{
+		Distro:      d.Name,
+		User:        user,
+		APIEndpoint: config.EndpointForPort(chosen),
+	})
 	return cfg, nil
 }
 

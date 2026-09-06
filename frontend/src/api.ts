@@ -17,6 +17,22 @@ export interface Container {
   Labels?: Record<string, string> | null;
 }
 
+export interface ContainerInfo {
+  name: string;
+  id: string;
+  image: string;
+  state: string;
+  status: string;
+  created: string;
+  started: string;
+  command: string;
+  ports: string;
+  networks: { name: string; ip: string }[];
+  mounts: { source: string; dest: string; mode: string }[];
+  labels: Record<string, string> | null;
+  restart_policy: string;
+}
+
 export interface Image {
   Id: string;
   RepoTags: string[] | null;
@@ -55,6 +71,9 @@ export interface Machine {
   version: number;
   default: boolean;
   active: boolean;
+  managed?: boolean;
+  ready?: boolean;
+  api_endpoint?: string;
 }
 
 export interface MachinesResponse {
@@ -66,6 +85,15 @@ export interface MachineConfig {
   name: string;
   wsl_conf: string;
   systemd: boolean;
+  api_endpoint?: string;
+  user?: string;
+  managed?: boolean;
+  ready?: boolean;
+  memory?: string;
+  processors?: string;
+  cpu_percent?: number;
+  memory_used_mb?: number;
+  memory_total_mb?: number;
 }
 
 export interface OnlineDistro {
@@ -90,7 +118,8 @@ export interface Settings {
   refresh_interval_sec: number;
   exec_shell: string;
   tray_autostart: boolean;
-  lang?: string; // en | zh-TW
+  lang?: string;
+  theme?: string;
 }
 
 export interface Meta {
@@ -100,6 +129,7 @@ export interface Meta {
   config: Settings;
   distro: string;
   api_endpoint: string;
+  active_ready?: boolean;
   autostart_supported: boolean;
 }
 
@@ -127,15 +157,17 @@ function headers(): Record<string, string> {
   return h;
 }
 
-async function call<T>(method: string, path: string, body?: unknown, asText = false): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, asText = false, signal?: AbortSignal): Promise<T> {
   let resp: Response;
   try {
     resp = await fetch(cfg.base + path, {
       method,
       headers: headers(),
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
   } catch (e) {
+    if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) throw e;
     throw new ApiError(0, "network", String(e));
   }
   if (!resp.ok) {
@@ -166,22 +198,30 @@ export function wsUrl(path: string, params: Record<string, string | number> = {}
 
 export const api = {
   meta: () => call<Meta>("GET", "/api/meta"),
-  status: () => call<Status>("GET", "/api/status"),
+  status: (signal?: AbortSignal) => call<Status>("GET", "/api/status", undefined, false, signal),
   startEngine: () => call<Status>("POST", "/api/engine/start"),
-  containers: () => call<Container[]>("GET", "/api/containers?all=1"),
-  images: () => call<Image[]>("GET", "/api/images"),
+  containers: (signal?: AbortSignal) => call<Container[]>("GET", "/api/containers?all=1", undefined, false, signal),
+  images: (signal?: AbortSignal) => call<Image[]>("GET", "/api/images", undefined, false, signal),
   removeImage: (ref: string, force = false) => call<void>("DELETE", `/api/images/${encodeURIComponent(ref)}${force ? "?force=1" : ""}`),
   pruneImages: () => call<PruneReport>("POST", "/api/images/prune"),
-  volumes: () => call<Volume[]>("GET", "/api/volumes"),
+  volumes: (signal?: AbortSignal) => call<Volume[]>("GET", "/api/volumes", undefined, false, signal),
   removeVolume: (name: string, force = false) => call<void>("DELETE", `/api/volumes/${encodeURIComponent(name)}${force ? "?force=1" : ""}`),
   pruneVolumes: () => call<PruneReport>("POST", "/api/volumes/prune"),
-  networks: () => call<Network[]>("GET", "/api/networks"),
-  machines: () => call<MachinesResponse>("GET", "/api/machines"),
+  networks: (signal?: AbortSignal) => call<Network[]>("GET", "/api/networks", undefined, false, signal),
+  machines: (signal?: AbortSignal) => call<MachinesResponse>("GET", "/api/machines", undefined, false, signal),
   machineConfig: (name: string) => call<MachineConfig>("GET", `/api/machines/${encodeURIComponent(name)}/config`),
   machinesOnline: () => call<OnlineDistro[]>("GET", "/api/machines/online"),
-  installMachine: (name: string) => call<{ ok: boolean; name: string }>("POST", "/api/machines/install", { name }),
+  installMachine: (distribution: string, name: string) =>
+    call<{ ok: boolean; name: string; distribution: string }>("POST", "/api/machines/install", { distribution, name }),
+  useMachine: (name: string) => call<{ active: string; ready: boolean }>("POST", `/api/machines/${encodeURIComponent(name)}/use`),
+  unmanageMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unmanage`),
+  unregisterMachine: (name: string, confirm: string) =>
+    call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unregister`, { confirm }),
   startContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/start`),
   stopContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/stop`),
+  removeContainer: (id: string, force = true) =>
+    call<void>("DELETE", `/api/containers/${encodeURIComponent(id)}${force ? "?force=1" : ""}`),
+  containerInfo: (id: string) => call<ContainerInfo>("GET", `/api/containers/${encodeURIComponent(id)}`),
   logs: (id: string, tail = 100) =>
     call<string>("GET", `/api/containers/${encodeURIComponent(id)}/logs?tail=${tail}`, undefined, true),
   getSettings: () => call<Settings>("GET", "/api/settings"),
@@ -192,4 +232,6 @@ export const api = {
     wsUrl(`/api/containers/${encodeURIComponent(id)}/logs/stream`, { tail }),
   execUrl: (id: string, cols: number, rows: number) =>
     wsUrl(`/api/containers/${encodeURIComponent(id)}/exec`, { cols, rows }),
+  machineExecUrl: (name: string, cols: number, rows: number) =>
+    wsUrl(`/api/machines/${encodeURIComponent(name)}/exec`, { cols, rows }),
 };

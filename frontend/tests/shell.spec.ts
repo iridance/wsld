@@ -5,7 +5,7 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("side panel lists the five views with large icons; Containers is active by default", async ({ page }) => {
+test("side panel lists the six views with large icons; Containers is active by default", async ({ page }) => {
   await open(page);
   const nav = page.getByTestId("side-nav");
   await expect(nav).toBeVisible();
@@ -15,6 +15,7 @@ test("side panel lists the five views with large icons; Containers is active by 
     ["nav-volumes", "volumes", "Volumes"],
     ["nav-networks", "networks", "Networks"],
     ["nav-machines", "machines", "Machines"],
+    ["nav-settings", "settings", "Settings"],
   ];
   for (const [tid, ico, label] of items) {
     const b = nav.getByTestId(tid);

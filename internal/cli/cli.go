@@ -99,6 +99,12 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdExec(ctx, rest)
 	case "doctor":
 		err = a.cmdDoctor(ctx, rest)
+	case "use":
+		err = a.cmdUse(ctx, rest)
+	case "unmanage":
+		err = a.cmdUnmanage(ctx, rest)
+	case "unregister":
+		err = a.cmdUnregister(ctx, rest)
 	default:
 		err = fail(ExitUsage, errors.New(i18n.T("cli.unknown_command", cmd)))
 	}
@@ -231,6 +237,9 @@ func (a *App) cmdStart(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := a.requireActiveReady(cfg); err != nil {
+		return err
+	}
 	m := a.manager(cfg, a.apiFor(cfg))
 	st, err := m.Start(ctx)
 	if err != nil {
@@ -313,6 +322,9 @@ func (a *App) cmdPs(ctx context.Context, args []string) error {
 	}
 	cfg, err := a.loadConfig()
 	if err != nil {
+		return err
+	}
+	if err := a.requireActiveReady(cfg); err != nil {
 		return err
 	}
 	api := a.apiFor(cfg)
@@ -509,6 +521,128 @@ func (a *App) cmdDoctor(ctx context.Context, args []string) error {
 	default:
 		return fail(ExitNotReady, errors.New(i18n.T("cli.exit.not_ready")))
 	}
+}
+
+func (a *App) requireActiveReady(cfg config.Config) error {
+	m, ok := cfg.ActiveMachine()
+	if !ok {
+		return fail(ExitNotReady, errors.New(i18n.T("cli.no_active")))
+	}
+	if !m.Ready() {
+		return fail(ExitNotReady, errors.New(i18n.T("cli.active_not_ready", m.Distro)))
+	}
+	return nil
+}
+
+func (a *App) cmdUse(_ context.Context, args []string) error {
+	fs := a.newFlags("use")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "distro")))
+	}
+	name := fs.Arg(0)
+	if !wsl.ValidDistroName(name) {
+		return fail(ExitUsage, fmt.Errorf("invalid distro name %q", name))
+	}
+	cfg, err := config.Load(a.ConfigPath)
+	if err != nil {
+		if config.IsNotFound(err) {
+			cfg = config.Default()
+		} else {
+			return fail(ExitError, errors.New(i18n.T("cli.config_invalid", err)))
+		}
+	}
+	if m, ok := cfg.FindMachine(name); ok {
+		_ = cfg.SetActive(m.Distro)
+	} else {
+		cfg.EnsureActive(config.Machine{Distro: name})
+	}
+	if err := config.Save(a.ConfigPath, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.Stdout, i18n.T("cli.use_done", cfg.Active))
+	if m, ok := cfg.ActiveMachine(); ok && !m.Ready() {
+		fmt.Fprintln(a.Stdout, i18n.T("cli.active_not_ready", m.Distro))
+	}
+	return nil
+}
+
+func (a *App) cmdUnmanage(ctx context.Context, args []string) error {
+	fs := a.newFlags("unmanage")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "distro")))
+	}
+	name := fs.Arg(0)
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	if _, ok := cfg.FindMachine(name); !ok {
+		return fail(ExitError, errors.New(i18n.T("cli.machine_missing", name)))
+	}
+	_ = wsl.StopDocker(ctx, a.WSL, name) // best-effort：distro 未醒／無 docker 仍刪 profile
+	if !cfg.RemoveMachine(name) {
+		return fail(ExitError, errors.New(i18n.T("cli.machine_missing", name)))
+	}
+	if err := config.Save(a.ConfigPath, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.Stdout, i18n.T("cli.unmanage_done", name))
+	return nil
+}
+
+func (a *App) cmdUnregister(ctx context.Context, args []string) error {
+	name, confirm, err := parseUnregisterArgs(args)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "distro")))
+	}
+	if confirm == "" || confirm != name {
+		return fail(ExitUsage, errors.New(i18n.T("cli.unregister_confirm", name)))
+	}
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	_ = wsl.StopDocker(ctx, a.WSL, name)
+	if err := wsl.Unregister(ctx, a.WSL, name); err != nil {
+		return fail(ExitError, err)
+	}
+	cfg.RemoveMachine(name)
+	if err := config.Save(a.ConfigPath, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.Stdout, i18n.T("cli.unregister_done", name))
+	return nil
+}
+
+func parseUnregisterArgs(args []string) (name, confirm string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--confirm":
+			if i+1 >= len(args) {
+				return "", "", fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "--confirm <name>")))
+			}
+			confirm = args[i+1]
+			i++
+		case strings.HasPrefix(a, "-"):
+			return "", "", fail(ExitUsage, fmt.Errorf("unknown flag %s", a))
+		default:
+			if name != "" {
+				return "", "", fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "distro")))
+			}
+			name = a
+		}
+	}
+	return name, confirm, nil
 }
 
 // DefaultExec 以繼承 stdio 執行外部程式（真實環境用）。

@@ -1,7 +1,7 @@
 # wsl-docker 產品規格（SPEC）
 
-版本：0.5  
-狀態：**0.5 功能定義開放中**（Phase 0–4 基底已於 2026-09-06 通過 §6 驗收；Phase 5 見 Roadmap）  
+版本：0.5.1（git tag `v0.5.1`）  
+狀態：**0.5.1 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-09-06
 
 ## 1. 問題與目標
@@ -30,7 +30,7 @@
 - TDD；UI 變更以 **Playwright** 驗證
 - 授權：**MIT**；正式散佈目標：**windows/amd64**
 
-### 1.3a 產品 0.5（Phase 5，定義中）
+### 1.3a 產品 0.5（Phase 5，已交付）
 
 見 [ROADMAP.md](ROADMAP.md) Phase 5：多 distro（單一 active）、Machines／Containers 補完、Settings 側欄＋theme、Info summary、UI 打磨。
 
@@ -154,7 +154,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 # lang = "en"
 ```
 
-0.5 目標形狀（示意）：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 machine（各含 `distro`／`user`／`api_endpoint`）。詳見 Roadmap Phase 5。
+0.5 形狀：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 `[[machines]]`（各含 `distro`／`user`／`api_endpoint`）。舊扁平格式載入時自動遷移。範例見 `config.example.toml`。
 
 ### 5.3 Bootstrap
 
@@ -175,7 +175,9 @@ api_endpoint = "tcp://127.0.0.1:23750"
 |------|------|
 | `init` | distro 策略、bootstrap、寫／更新該 machine profile（含 API port）並可設 active |
 | `start` | 喚醒 active distro、ensure docker、探測 API |
-| `use` | 切換 active machine（0.5；與 GUI「設為目前」同寫 config） |
+| `use` | 切換 active machine（與 GUI「設為目前」同寫 config） |
+| `unmanage` | 停該 distro docker 後刪 profile（保留 WSL） |
+| `unregister` | `wsl --unregister`（需 `--confirm <name>`）＋刪 profile |
 | `status` | WSL／docker／API 狀態（對準 active） |
 | `ps` | 容器列表 |
 | `logs <id>` | 預設尾部 100 行；`--follow` 可選 |
@@ -248,6 +250,5 @@ Phase 0–4 已於 2026-09-06 通過下列項目（Ubuntu-26.04 實機）。**0.
 
 ## 7. 仍開放／延後
 
-- 0.5（Phase 5）定義／實作中：多 distro、Settings 側欄、Info／Remove／Machines 動作等（見 Roadmap）
 - v2 WinUI 與 Go core 整合方式、WinAppDriver／UIA（Phase 6 前）
 - Extra（見 Roadmap）：**Setup 應用**（一鍵啟用 WSL → 重開接續 init）、arm64、專用隔離 distro 旗標、npiperelay、自動更新

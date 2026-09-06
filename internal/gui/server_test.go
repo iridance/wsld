@@ -40,6 +40,7 @@ func newEnv(t *testing.T, token string) *env {
 	}
 	s := &Server{
 		Engine: e.engine, Life: e.life, Autostart: e.auto, Version: "test", Token: token,
+		Shell:          FakeDistroShell{},
 		LoadConfig:     func() (config.Config, error) { return config.Load(e.cfgP) },
 		SaveConfig:     func(c config.Config) error { return config.Save(e.cfgP, c) },
 		OnWindowAction: func(a string) { e.window = append(e.window, a) },
@@ -173,6 +174,88 @@ func TestEngineStartNotReadyMapsTo503(t *testing.T) {
 	}
 }
 
+func TestEngineStartAutoInitsPlaceholderActive(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	// 切到未 init 的 distro（占位 profile）
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("use = %d %s", resp.StatusCode, b)
+	}
+	c, _ := e.s.LoadConfig()
+	m, _ := c.FindMachine("docker-desktop")
+	if m.Ready() {
+		t.Fatal("expected placeholder")
+	}
+	e.engine.SetDown(true)
+
+	resp, b = e.req(t, "POST", "/api/engine/start", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("start should auto-init: %d %s", resp.StatusCode, b)
+	}
+	c, _ = e.s.LoadConfig()
+	m, ok := c.FindMachine("docker-desktop")
+	if !ok || !m.Ready() {
+		t.Fatalf("profile should be filled after start: ok=%v m=%+v", ok, m)
+	}
+	if c.Active != "docker-desktop" || c.APIEndpoint == "" {
+		t.Fatalf("active cfg = %+v", c)
+	}
+	_, b = e.req(t, "GET", "/api/meta", "")
+	var meta Meta
+	_ = json.Unmarshal(b, &meta)
+	if !meta.ActiveReady || meta.Distro != "docker-desktop" {
+		t.Fatalf("meta after start = %+v", meta)
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
+	var st StatusResponse
+	_ = json.Unmarshal(b, &st)
+	if !st.Ready {
+		t.Fatalf("engine should be up: %+v", st)
+	}
+	if _, ok := c.FindMachine("Ubuntu-26.04"); !ok {
+		t.Fatal("original machine should remain")
+	}
+}
+
+func TestCORSAllowsDELETE(t *testing.T) {
+	e := newEnv(t, "")
+	req, err := http.NewRequest(http.MethodOptions, e.srv.URL+"/api/containers/web", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "http://wails.localhost")
+	req.Header.Set("Access-Control-Request-Method", "DELETE")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	allow := resp.Header.Get("Access-Control-Allow-Methods")
+	if !strings.Contains(allow, "DELETE") {
+		t.Fatalf("preflight must allow DELETE (Wails cross-origin remove); got %q", allow)
+	}
+}
+
+func TestContainerRemoveForce(t *testing.T) {
+	e := newEnv(t, "")
+	req, _ := http.NewRequest(http.MethodDelete, e.srv.URL+"/api/containers/web?force=1", nil)
+	req.Header.Set("Origin", "http://wails.localhost")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("remove = %d %s", resp.StatusCode, b)
+	}
+	_, b := e.req(t, "GET", "/api/containers?all=1", "")
+	if strings.Contains(string(b), `"/web"`) {
+		t.Fatalf("web still listed after remove: %s", b)
+	}
+}
+
 func TestContainersListAndAll(t *testing.T) {
 	e := newEnv(t, "")
 	_, b := e.req(t, "GET", "/api/containers", "")
@@ -302,6 +385,37 @@ func TestExecOnStoppedContainerFails(t *testing.T) {
 	resp, b := e.req(t, "GET", "/api/containers/db/exec", "")
 	// Docker 對未執行容器的 exec 回 409，橋接層原樣轉為 409 conflict
 	if resp.StatusCode != 409 || !strings.Contains(string(b), "not running") {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+}
+
+func TestMachineExecWebSocketEcho(t *testing.T) {
+	e := newEnv(t, "")
+	c := e.ws(t, "/api/machines/Ubuntu-26.04/exec?cols=80&rows=24")
+	defer c.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, b, err := c.Read(ctx)
+	if err != nil || !strings.Contains(string(b), "fake-shell$") {
+		t.Fatalf("prompt = %q err=%v", b, err)
+	}
+	if err := c.Write(ctx, websocket.MessageBinary, []byte("pwd\n")); err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	for !strings.Contains(out, "you typed: pwd") {
+		_, msg, err := c.Read(ctx)
+		if err != nil {
+			t.Fatalf("read: %v (got %q)", err, out)
+		}
+		out += string(msg)
+	}
+}
+
+func TestMachineExecInvalidName(t *testing.T) {
+	e := newEnv(t, "")
+	resp, b := e.req(t, "GET", "/api/machines/bad name!/exec", "")
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 }

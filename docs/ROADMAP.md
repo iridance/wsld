@@ -1,7 +1,7 @@
 # wsl-docker Roadmap
 
-版本：0.5  
-對應規格：[SPEC.md](SPEC.md)（**0.5 功能定義開放中**；Phase 0–4 基底已落地）
+版本：0.5.1（git tag `v0.5.1`）  
+對應規格：[SPEC.md](SPEC.md)（**0.5.1 已交付**；Phase 0–4 基底已落地）
 
 ## 總覽
 
@@ -11,11 +11,11 @@ Phase 1  Bootstrap 腳本可手動跑通         ✅
 Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
-Phase 5  0.5 主線：多 distro＋GUI 補完    ← 定義中／實作中
+Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.1**
 Extra    延後能力（含首次 Setup）           ← 有需求再排
 Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
-0.5 = Phase 5 完成定義全過（見下方）；不綁死語意化版號字串至實作波再定
+0.5 = Phase 5 完成定義全過（見下方）；發行版號 **0.5.1**（`v0.5.1`）
 之後 v2.0 = Phase 6
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -102,7 +102,7 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ---
 
-## Phase 5 — 0.5 主線（功能定義開放中）
+## Phase 5 — 0.5 主線（已交付）
 
 **目標**：多 distro（Machines 切換作用於全部功能）＋ GUI／設定／Info 補完與打磨；TCP 引擎模型不變。
 
@@ -111,10 +111,10 @@ Extra ≠ 0.5／v2.0 完成條件
 #### 多 distro
 
 - Config：多 machine profile＋單一 `active`；舊扁平 `config.toml` **自動遷移**
-- 全局設定：`lang`、`tray_autostart`、`refresh_interval_sec`、`exec_shell`
+- 全局設定：`lang`、`tray_autostart`、`refresh_interval_sec`、`exec_shell`、`theme`
 - 每 machine：`distro`、`user`、`api_endpoint`（各自埠，避免並行 dockerd 搶埠）
 - GUI：Machines「設為目前」；CLI：`wsld use <distro>`（同寫 config）
-- 「設為目前」即寫**占位 profile**；未 init 可 active → 全功能未就緒並引導 init／Start；`init` 補齊 endpoint／user／port
+- 「設為目前」即寫**占位 profile**；未 init 可 active → 橫幅提示；**Start engine**（或 `wsld init`）自動 bootstrap／補齊 endpoint／user／port 後再拉起引擎
 - 切換 active：不停舊引擎；硬切 Logs／Terminal／Info／快取／pending
 - 取消管理：一律先停該 distro docker → 刪 profile（不刪 WSL）
 - Unregister 發行版：GUI＋CLI；輸入 distro 名稱雙重確認
@@ -142,16 +142,16 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ### 完成定義
 
-- [ ] 多 profile＋active；遷移舊 config；每 machine 自有埠
-- [ ] GUI「設為目前」與 `wsld use` 同步；切換硬切面板／快取；未 init active 顯示未就緒
-- [ ] 取消管理（停 docker＋刪 profile）；unregister（打名稱確認）
-- [ ] Machines：folder／terminal（home）／右側 Info（含 `.wslconfig` memory／processors、wsl.conf、tcp、用量摘要）
-- [ ] Containers：Remove（含 running）；Info summary 欄位齊全（必要時 inspect）
-- [ ] Settings 側欄＋theme；header 無 Settings／無 tcp；header icon 有 border
-- [ ] 列高／格線與 side nav 間距打磨
-- [ ] 相關 Go 測試＋Playwright 通過；實機抽樣驗收（切換 distro、unregister 確認、Remove running）
+- [x] 多 profile＋active；遷移舊 config；每 machine 自有埠
+- [x] GUI「設為目前」與 `wsld use` 同步；切換硬切面板／快取；未 init active 顯示未就緒
+- [x] 取消管理（停 docker＋刪 profile）；unregister（打名稱確認）
+- [x] Machines：folder／terminal（home）／右側 Info（含 `.wslconfig` memory／processors、wsl.conf、tcp、用量摘要）
+- [x] Containers：Remove（含 running）；Info summary 欄位齊全（必要時 inspect）
+- [x] Settings 側欄＋theme；header 無 Settings／無 tcp；header icon 有 border
+- [x] 列高／格線與 side nav 間距打磨
+- [x] 相關 Go 測試＋Playwright 通過；實機抽樣驗收（切換 distro、unregister 確認、Remove running）
 
-**退出條件**：上列完成定義全勾；產品敘事可標 0.5 已交付（語意化版號字串於實作波決定）。
+**退出條件**：上列完成定義全勾；產品敘事標 **0.5.1** 已交付（git tag `v0.5.1`；`make build-win` 注入 GUI／CLI 版號）。
 
 > 曾列在 P5「延後」的項目改見下方 **Extra**；Compose 專案視圖已於基底完成，不進 Extra。
 

@@ -33,6 +33,7 @@ type Engine interface {
 	ListContainers(ctx context.Context, all bool) ([]dockerapi.Container, error)
 	StartContainer(ctx context.Context, id string) error
 	StopContainer(ctx context.Context, id string, timeoutSec int) error
+	RemoveContainer(ctx context.Context, id string, force bool) error
 	Logs(ctx context.Context, id string, opts dockerapi.LogsOptions) (io.ReadCloser, error)
 	Inspect(ctx context.Context, id string) (dockerapi.ContainerDetail, error)
 	ExecCreate(ctx context.Context, containerID string, cmd []string, tty bool) (string, error)
@@ -72,12 +73,19 @@ type Server struct {
 	OnWindowAction func(action string)
 	// OnDistroAction 開啟 distro 資料夾／終端（測試主機記錄即可）；回傳錯誤會轉成 500。
 	OnDistroAction func(action string) error
+	// Shell 開啟 Machines 列表內嵌 terminal（nil → 501）。
+	Shell DistroShell
 	// OnLangChange 於設定頁切換語系後呼叫（Tray 選單文字需重建）。
 	OnLangChange func(l i18n.Lang)
+	// NewEngine 於切換 active 時建立新 Docker client（nil＝測試用 FakeEngine 不換）。
+	NewEngine func(cfg config.Config) Engine
+	// OnActiveChange 於 active 變更後額外通知（例如 Tray 重繪）。
+	OnActiveChange func(cfg config.Config)
 
 	startMu   sync.Mutex
 	starting  bool
 	lastStart *lifecycle.Status
+	engineMu  sync.RWMutex
 }
 
 // NewToken 產生隨機 bearer token。
@@ -96,6 +104,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/containers", s.handleContainers)
 	mux.HandleFunc("POST /api/containers/{id}/start", s.handleContainerStart)
 	mux.HandleFunc("POST /api/containers/{id}/stop", s.handleContainerStop)
+	mux.HandleFunc("DELETE /api/containers/{id}", s.handleContainerRemove)
+	mux.HandleFunc("GET /api/containers/{id}", s.handleContainerInspect)
 	mux.HandleFunc("GET /api/containers/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/containers/{id}/logs/stream", s.handleLogsStream)
 	mux.HandleFunc("GET /api/containers/{id}/exec", s.handleExec)
@@ -110,6 +120,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/machines/online", s.handleMachinesOnline)
 	mux.HandleFunc("GET /api/machines/{name}/config", s.handleMachineConfig)
 	mux.HandleFunc("POST /api/machines/install", s.handleMachineInstall)
+	mux.HandleFunc("POST /api/machines/{name}/use", s.handleMachineUse)
+	mux.HandleFunc("POST /api/machines/{name}/unmanage", s.handleMachineUnmanage)
+	mux.HandleFunc("POST /api/machines/{name}/unregister", s.handleMachineUnregister)
+	mux.HandleFunc("GET /api/machines/{name}/exec", s.handleMachineExec)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
@@ -127,7 +141,7 @@ func cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -204,6 +218,48 @@ func (s *Server) cfg() config.Config {
 	return config.Default()
 }
 
+// BindActive 切換 active 後重綁 Engine／Lifecycle（不停舊引擎）。
+func (s *Server) BindActive(cfg config.Config) {
+	s.engineMu.Lock()
+	defer s.engineMu.Unlock()
+	if s.NewEngine != nil {
+		s.Engine = s.NewEngine(cfg)
+	}
+	if fl, ok := s.Life.(*FakeLifecycle); ok {
+		fl.mu.Lock()
+		fl.Distro = cfg.Distro
+		fl.Endpoint = cfg.APIEndpoint
+		fl.mu.Unlock()
+		// 占位 profile：API 尚未就緒（對齊真實 NewEngine ping 失敗）
+		if am, ok := cfg.ActiveMachine(); ok && !am.Ready() && fl.Engine != nil {
+			fl.Engine.mu.Lock()
+			fl.Engine.Down = true
+			fl.Engine.mu.Unlock()
+		}
+	}
+	if mgr, ok := s.Life.(*lifecycle.Manager); ok {
+		mgr.Cfg = cfg
+		if p, ok := s.Engine.(lifecycle.Pinger); ok {
+			mgr.API = p
+		}
+	}
+	if s.OnActiveChange != nil {
+		s.OnActiveChange(cfg)
+	}
+}
+
+func (s *Server) engine() Engine {
+	s.engineMu.RLock()
+	defer s.engineMu.RUnlock()
+	return s.Engine
+}
+
+func (s *Server) life() Lifecycle {
+	s.engineMu.RLock()
+	defer s.engineMu.RUnlock()
+	return s.Life
+}
+
 // ---- handlers ---------------------------------------------------------------
 
 // Meta 是 /api/meta 回應。
@@ -214,6 +270,7 @@ type Meta struct {
 	Config             Settings          `json:"config"`
 	Distro             string            `json:"distro"`
 	APIEndpoint        string            `json:"api_endpoint"`
+	ActiveReady        bool              `json:"active_ready"`
 	AutostartSupported bool              `json:"autostart_supported"`
 }
 
@@ -222,11 +279,18 @@ type Settings struct {
 	RefreshIntervalSec int    `json:"refresh_interval_sec"`
 	ExecShell          string `json:"exec_shell"`
 	TrayAutostart      bool   `json:"tray_autostart"`
-	Lang               string `json:"lang,omitempty"` // en／zh-TW；PUT 時省略＝不變
+	Lang               string `json:"lang,omitempty"`
+	Theme              string `json:"theme,omitempty"` // light | dark | system
 }
 
 func (s *Server) settingsFrom(c config.Config) Settings {
-	st := Settings{RefreshIntervalSec: c.RefreshIntervalSec, ExecShell: c.ExecShell, TrayAutostart: c.TrayAutostart, Lang: c.LangOrDefault()}
+	st := Settings{
+		RefreshIntervalSec: c.RefreshIntervalSec,
+		ExecShell:          c.ExecShell,
+		TrayAutostart:      c.TrayAutostart,
+		Lang:               c.LangOrDefault(),
+		Theme:              c.ThemeOrDefault(),
+	}
 	if s.Autostart != nil {
 		if on, err := s.Autostart.Enabled(); err == nil {
 			st.TrayAutostart = on
@@ -238,6 +302,10 @@ func (s *Server) settingsFrom(c config.Config) Settings {
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg()
 	_, unsupported := s.Autostart.(UnsupportedAutostart)
+	ready := false
+	if m, ok := c.ActiveMachine(); ok {
+		ready = m.Ready()
+	}
 	writeJSON(w, http.StatusOK, Meta{
 		Version:            s.Version,
 		Lang:               string(i18n.Current()),
@@ -245,6 +313,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Config:             s.settingsFrom(c),
 		Distro:             c.Distro,
 		APIEndpoint:        c.APIEndpoint,
+		ActiveReady:        ready,
 		AutostartSupported: s.Autostart != nil && !unsupported,
 	})
 }
@@ -257,7 +326,7 @@ type StatusResponse struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	st := s.Life.Status(r.Context())
+	st := s.life().Status(r.Context())
 	s.startMu.Lock()
 	starting := s.starting
 	s.startMu.Unlock()
@@ -280,7 +349,12 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	st, err := s.Life.Start(ctx)
+	// 切換到尚未 init 的 distro 後按 Start：先自動 bootstrap／寫入 profile，再 ensure 引擎。
+	if err := s.ensureActiveInitialized(ctx); err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	st, err := s.life().Start(ctx)
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -288,9 +362,66 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready()})
 }
 
+// ensureActiveInitialized：active 為占位（未 Ready）時執行 Init／補齊設定並重綁引擎。
+func (s *Server) ensureActiveInitialized(ctx context.Context) error {
+	cfg := s.cfg()
+	am, ok := cfg.ActiveMachine()
+	if !ok {
+		return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.no_active"))
+	}
+	if am.Ready() {
+		return nil
+	}
+	if fl, ok := s.life().(*FakeLifecycle); ok {
+		ep := nextMachineEndpoint(cfg)
+		cfg.EnsureActive(config.Machine{Distro: am.Distro, User: "testuser", APIEndpoint: ep})
+		if s.SaveConfig == nil {
+			return errors.New("config not writable")
+		}
+		if err := s.SaveConfig(cfg); err != nil {
+			return err
+		}
+		s.BindActive(cfg)
+		_ = fl // BindActive 已更新 Distro／Endpoint
+		return nil
+	}
+	if mgr, ok := s.life().(*lifecycle.Manager); ok {
+		mgr.Cfg = cfg
+		newCfg, err := mgr.Init(ctx, lifecycle.InitOptions{Distro: am.Distro})
+		if err != nil {
+			return err
+		}
+		if s.SaveConfig == nil {
+			return errors.New("config not writable")
+		}
+		if err := s.SaveConfig(newCfg); err != nil {
+			return err
+		}
+		s.BindActive(newCfg)
+		return nil
+	}
+	return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.active_not_ready", am.Distro, am.Distro))
+}
+// nextMachineEndpoint 選一個尚未被其他 machine 占用的 loopback 埠（測試／占位補齊用）。
+func nextMachineEndpoint(cfg config.Config) string {
+	used := map[int]bool{}
+	for _, m := range cfg.Machines {
+		tmp := config.Config{APIEndpoint: m.APIEndpoint}
+		if p, err := tmp.APIPort(); err == nil {
+			used[p] = true
+		}
+	}
+	for p := config.DefaultPort; p < config.DefaultPort+100; p++ {
+		if !used[p] {
+			return config.EndpointForPort(p)
+		}
+	}
+	return config.EndpointForPort(config.DefaultPort)
+}
+
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	all := r.URL.Query().Get("all") == "1" || r.URL.Query().Get("all") == "true"
-	list, err := s.Engine.ListContainers(r.Context(), all)
+	list, err := s.engine().ListContainers(r.Context(), all)
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -302,7 +433,7 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
-	if err := s.Engine.StartContainer(r.Context(), r.PathValue("id")); err != nil {
+	if err := s.engine().StartContainer(r.Context(), r.PathValue("id")); err != nil {
 		writeEngineErr(w, err)
 		return
 	}
@@ -314,11 +445,103 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 	if t <= 0 {
 		t = 10
 	}
-	if err := s.Engine.StopContainer(r.Context(), r.PathValue("id"), t); err != nil {
+	if err := s.engine().StopContainer(r.Context(), r.PathValue("id"), t); err != nil {
 		writeEngineErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": "stopped"})
+}
+
+func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	if err := s.engine().RemoveContainer(r.Context(), r.PathValue("id"), force); err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ContainerInfo 是 Info drawer 用的摘要。
+type ContainerInfo struct {
+	Name          string            `json:"name"`
+	ID            string            `json:"id"`
+	Image         string            `json:"image"`
+	State         string            `json:"state"`
+	Status        string            `json:"status"`
+	Created       string            `json:"created"`
+	Started       string            `json:"started"`
+	Command       string            `json:"command"`
+	Ports         string            `json:"ports"`
+	Networks      []NetworkInfo     `json:"networks"`
+	Mounts        []MountInfo       `json:"mounts"`
+	Labels        map[string]string `json:"labels"`
+	RestartPolicy string            `json:"restart_policy"`
+}
+
+// NetworkInfo 含網路名與 IP。
+type NetworkInfo struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+}
+
+// MountInfo 是掛載摘要。
+type MountInfo struct {
+	Source string `json:"source"`
+	Dest   string `json:"dest"`
+	Mode   string `json:"mode"`
+}
+
+func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) {
+	d, err := s.engine().Inspect(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, containerInfoFromDetail(d))
+}
+
+func containerInfoFromDetail(d dockerapi.ContainerDetail) ContainerInfo {
+	name := strings.TrimPrefix(d.Name, "/")
+	cmd := strings.Join(d.Config.Cmd, " ")
+	if cmd == "" && d.Path != "" {
+		cmd = strings.TrimSpace(d.Path + " " + strings.Join(d.Args, " "))
+	}
+	ports := formatInspectPorts(d.NetworkSettings.Ports)
+	nets := make([]NetworkInfo, 0, len(d.NetworkSettings.Networks))
+	for n, ep := range d.NetworkSettings.Networks {
+		nets = append(nets, NetworkInfo{Name: n, IP: ep.IPAddress})
+	}
+	mounts := make([]MountInfo, 0, len(d.Mounts))
+	for _, m := range d.Mounts {
+		mounts = append(mounts, MountInfo{Source: m.Source, Dest: m.Destination, Mode: m.Mode})
+	}
+	rp := d.HostConfig.RestartPolicy.Name
+	if rp == "" {
+		rp = "no"
+	}
+	return ContainerInfo{
+		Name: name, ID: d.ID, Image: d.Config.Image, State: d.State.Status,
+		Status: d.State.Status, Created: d.Created, Started: d.State.StartedAt,
+		Command: cmd, Ports: ports, Networks: nets, Mounts: mounts,
+		Labels: d.Config.Labels, RestartPolicy: rp,
+	}
+}
+
+func formatInspectPorts(ports map[string][]dockerapi.PortBinding) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	var parts []string
+	for priv, binds := range ports {
+		if len(binds) == 0 {
+			parts = append(parts, priv)
+			continue
+		}
+		for _, b := range binds {
+			parts = append(parts, b.HostPort+"→"+priv)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func tailParam(r *http.Request) int {
@@ -332,7 +555,7 @@ func tailParam(r *http.Request) int {
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.Engine.Logs(r.Context(), r.PathValue("id"), dockerapi.LogsOptions{Tail: tailParam(r)})
+	rc, err := s.engine().Logs(r.Context(), r.PathValue("id"), dockerapi.LogsOptions{Tail: tailParam(r)})
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -349,7 +572,7 @@ func (s *Server) acceptWS(w http.ResponseWriter, r *http.Request) (*websocket.Co
 }
 
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.Engine.Logs(r.Context(), r.PathValue("id"), dockerapi.LogsOptions{Tail: tailParam(r), Follow: true})
+	rc, err := s.engine().Logs(r.Context(), r.PathValue("id"), dockerapi.LogsOptions{Tail: tailParam(r), Follow: true})
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -401,12 +624,12 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		explicit = strings.Fields(v)
 	}
 	cmd := cfg.ExecCommand(explicit)
-	execID, err := s.Engine.ExecCreate(r.Context(), id, cmd, true)
+	execID, err := s.engine().ExecCreate(r.Context(), id, cmd, true)
 	if err != nil {
 		writeEngineErr(w, err)
 		return
 	}
-	conn, err := s.Engine.ExecStart(context.Background(), execID, true)
+	conn, err := s.engine().ExecStart(context.Background(), execID, true)
 	if err != nil {
 		writeEngineErr(w, err)
 		return
@@ -422,7 +645,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
 	rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
 	if cols > 0 && rows > 0 {
-		_ = s.Engine.ExecResize(ctx, execID, rows, cols)
+		_ = s.engine().ExecResize(ctx, execID, rows, cols)
 	}
 	// ws → 容器 stdin
 	go func() {
@@ -436,7 +659,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 			if typ == websocket.MessageText {
 				var ctl execControl
 				if json.Unmarshal(data, &ctl) == nil && ctl.Type == "resize" && ctl.Cols > 0 && ctl.Rows > 0 {
-					_ = s.Engine.ExecResize(ctx, execID, ctl.Rows, ctl.Cols)
+					_ = s.engine().ExecResize(ctx, execID, ctl.Rows, ctl.Cols)
 				}
 				continue
 			}
@@ -446,6 +669,66 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	// 容器輸出 → ws
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			if werr := c.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			_ = c.Close(websocket.StatusNormalClosure, "exec ended")
+			return
+		}
+	}
+}
+
+func (s *Server) handleMachineExec(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !wsl.ValidDistroName(name) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
+		return
+	}
+	if s.Shell == nil {
+		writeErr(w, http.StatusNotImplemented, "error", errors.New("distro shell unavailable"))
+		return
+	}
+	user := ""
+	if m, ok := s.cfg().FindMachine(name); ok {
+		user = m.User
+	}
+	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
+	rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
+	conn, err := s.Shell.Open(r.Context(), name, user, cols, rows)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "error", err)
+		return
+	}
+	c, err := s.acceptWS(w, r)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	defer c.CloseNow()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		defer cancel()
+		for {
+			typ, data, err := c.Read(ctx)
+			if err != nil {
+				conn.Close()
+				return
+			}
+			if typ == websocket.MessageText {
+				continue // resize 對 pipe shell 無作用
+			}
+			if _, err := conn.Write(data); err != nil {
+				return
+			}
+		}
+	}()
 	buf := make([]byte, 4096)
 	for {
 		n, err := conn.Read(buf)
@@ -493,6 +776,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	c.RefreshIntervalSec = in.RefreshIntervalSec
 	c.ExecShell = strings.TrimSpace(in.ExecShell)
 	c.TrayAutostart = in.TrayAutostart
+	if in.Theme != "" {
+		switch in.Theme {
+		case "light", "dark", "system":
+			c.Theme = in.Theme
+		default:
+			writeErr(w, http.StatusBadRequest, "usage", fmt.Errorf("theme must be light, dark, or system"))
+			return
+		}
+	}
 	if s.Autostart != nil {
 		if err := s.Autostart.Set(in.TrayAutostart); err != nil && in.TrayAutostart {
 			writeErr(w, http.StatusBadRequest, "error", err)
@@ -517,7 +809,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "error", errors.New("doctor unavailable"))
 		return
 	}
-	rep := doctor.Run(r.Context(), doctor.Deps{WSL: s.WSL, Cfg: s.cfg(), API: s.Engine, Processes: s.Processes})
+	rep := doctor.Run(r.Context(), doctor.Deps{WSL: s.WSL, Cfg: s.cfg(), API: s.engine(), Processes: s.Processes})
 	type item struct {
 		ID, Title, Level, Detail, Hint string
 	}

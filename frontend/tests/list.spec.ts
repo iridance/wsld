@@ -5,12 +5,13 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("header carries distro, connection badge and endpoint; footer carries version and language", async ({ page }) => {
+test("header carries distro and connection badge; footer carries version and language", async ({ page }) => {
   await open(page);
   const header = page.getByTestId("header");
   await expect(header.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
   await expect(header.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
-  await expect(header.getByTestId("status-endpoint")).toHaveText("tcp://127.0.0.1:23750");
+  await expect(header.getByTestId("status-endpoint")).toHaveCount(0);
+  await expect(header.getByTestId("btn-settings")).toHaveCount(0);
   await expect(page.getByTestId("status-refresh")).toHaveCount(0);
   const footer = page.getByTestId("status-bar");
   await expect(footer.getByTestId("status-version")).toHaveText("vtesthost");
@@ -34,6 +35,34 @@ test("layout: status bar sticks to the bottom and list fills the rest (banner hi
   expect(Math.round(footer!.y + footer!.height)).toBe(640);
   expect(footer!.height).toBeLessThan(60);
   expect(list!.height).toBeGreaterThan(400);
+});
+
+test("layout: notice pins above the status bar without shifting the list", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 640 });
+  await open(page);
+  const listBefore = await page.getByTestId("container-list").boundingBox();
+  const footerBefore = await page.getByTestId("status-bar").boundingBox();
+  expect(listBefore).not.toBeNull();
+  expect(footerBefore).not.toBeNull();
+
+  await page.getByTestId("nav-images").click();
+  await page.getByTestId("btn-rm-image-bbb222bbb222").click();
+  await page.getByTestId("confirm-ok").click();
+  const notice = page.getByTestId("notice");
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("redis:7");
+
+  const listAfter = await page.getByTestId("images-list").boundingBox();
+  const footerAfter = await page.getByTestId("status-bar").boundingBox();
+  const noticeBox = await notice.boundingBox();
+  expect(listAfter).not.toBeNull();
+  expect(footerAfter).not.toBeNull();
+  expect(noticeBox).not.toBeNull();
+  // footer 不因 notice 上移；notice 貼在 status bar 上方
+  expect(Math.round(footerAfter!.y)).toBe(Math.round(footerBefore!.y));
+  expect(Math.round(noticeBox!.y + noticeBox!.height)).toBe(Math.round(footerAfter!.y));
+  // 列表區不被 notice 擠壓（高度仍接近滿版）
+  expect(listAfter!.height).toBeGreaterThan(350);
 });
 
 test("lists running and stopped containers together", async ({ page }) => {
@@ -163,7 +192,6 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
   await open(page);
   const expected: Record<string, string> = {
     "btn-start-engine": "power",
-    "btn-settings": "settings",
     "btn-open-folder": "folder",
     "btn-open-terminal": "terminal",
     "btn-start-web": "play",
@@ -171,21 +199,21 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
     "btn-logs-web": "logs",
     "btn-term-web": "terminal",
     "btn-info-web": "info",
+    "btn-rm-web": "trash",
   };
   for (const [tid, icon] of Object.entries(expected)) {
     const b = page.getByTestId(tid);
     await expect(b.locator("svg.ico").first()).toHaveAttribute("data-icon", icon);
-    // icon 在文字前面，且不進入可存取名稱
     expect(await b.evaluate((e) => e.firstElementChild?.tagName.toLowerCase())).toBe("svg");
     await expect(b.locator("svg.ico")).toHaveAttribute("aria-hidden", "true");
   }
-  // 列操作：只有圖示，沒有文字與邊框；名稱交給 aria-label／title
   for (const [tid, label] of [
     ["btn-start-web", "Start"],
     ["btn-stop-web", "Stop"],
     ["btn-logs-web", "Logs"],
     ["btn-term-web", "Terminal"],
     ["btn-info-web", "Info"],
+    ["btn-rm-web", "Remove"],
   ]) {
     const b = page.getByTestId(tid);
     await expect(b).toHaveText("");
@@ -194,9 +222,8 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
     expect(await b.evaluate((e) => getComputedStyle(e).borderStyle)).toBe("none");
   }
   await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
-  await page.getByTestId("btn-settings").click();
+  await page.getByTestId("nav-settings").click();
   await expect(page.getByTestId("settings-save").locator("svg.ico")).toHaveAttribute("data-icon", "save");
-  await expect(page.getByTestId("settings-close").locator("svg.ico")).toHaveAttribute("data-icon", "close");
 });
 
 test("header shows the connected WSL distro name next to the connection badge", async ({ page }) => {

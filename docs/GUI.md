@@ -45,7 +45,7 @@
 - **Header**：active distro 名稱（無 config 時顯示 wsld）＋ **有 border** 的 Open folder／Open terminal、連線徽章、啟動引擎。**不顯示** API endpoint（tcp）與 Settings（分別在 Machines Info／側欄 Settings）。
 - **Side nav**：Containers／Images／Volumes／Networks／Machines／**Settings**；`aria-current="page"`；存 localStorage。上下間距對齊左右間距。切換視圖關閉 Logs／Terminal／Info。
 - **Info drawer（右）**：Containers／Compose／Machines 詳情（見下表）。
-- **Footer**：左版本、右語言下拉（無邊框）。
+- **Footer**：左版本（`make build-*` 注入，對齊 git tag／預設 **0.5.1** → 顯示 `v0.5.1`）、右語言下拉（無邊框）。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
 
 ## 功能對照（SPEC §5.5／Roadmap 0.5）
@@ -62,7 +62,7 @@
 | Start／Stop／Remove | pending 回饋；Remove 可含 running（確認會停） | `list`（Remove 隨 0.5） |
 | Logs／Exec | tail 100；Live；xterm exec | `panels.spec.ts` |
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
-| Machines | 設為目前、folder、terminal（底部 panel、home）、取消管理、unregister、右側 Info、Add | `views`（隨 0.5） |
+| Machines | 設為目前、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | 側欄：refresh、exec_shell、tray_autostart、Theme Light／Dark／System | `settings`（搬遷） |
 | i18n | footer 語言下拉 | `list.spec.ts` |
@@ -70,7 +70,7 @@
 
 ### 破壞性操作的規則
 
-- 移除／清除／取消管理一律確認對話框；unregister 需**輸入 distro 名稱**。
+- 移除／清除一律確認對話框；**刪除發行版**（對應 Add）需**輸入 distro 名稱**後才可確定（`wsl --unregister`）。
 - 容器 Remove：running 可刪（會先停止）；映像／volume 使用中仍不自動 force（409 → banner）。
 - 成功結果顯示在綠色 notice（8 秒後自動消失）。
 
@@ -79,7 +79,8 @@
 | 端點 | 說明 |
 |---|---|
 | `GET /api/meta`／`GET /api/status`／`POST /api/engine/start` | 版本、語系訊息、設定；引擎狀態；啟動引擎 |
-| `POST /api/distro/{open-folder\|open-terminal}` | 開啟 active distro 的 user home（`\\wsl$\…\home\<user>`）或外部終端（0.5：Machines 列亦可對指定 distro） |
+| `GET /api/machines/{name}/exec` | Machines 底部 xterm（WSL `script` PTY → login bash／user home） |
+| `POST /api/distro/{open-folder\|open-terminal}` | Header：開啟 active distro 的 user home 或外部終端 |
 | `GET /api/containers?all=1`、`POST …/start|stop`、`DELETE …`（Remove）、`GET …/logs[/stream]`、`GET …/exec` | 容器 |
 | `GET /api/images`、`DELETE /api/images/{ref}[?force=1]`、`POST /api/images/prune` | 映像 |
 | `GET /api/volumes`、`DELETE /api/volumes/{name}[?force=1]`、`POST /api/volumes/prune` | volume |
@@ -99,7 +100,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（GOOS=windows，-tags desktop,production，-H windowsgui）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.1 → 左下角 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -125,6 +126,7 @@ Playwright 在 WSL 需要 Chromium 相依套件；本機若無 sudo，可將 `li
 | `POST /__test/lang {"lang":"zh-TW"}` | 切換語系 |
 | `POST /__test/container?name=&image=&state=` | 新增容器；帶 `project=&service=` 則為 compose 容器 |
 | `POST /__test/action-delay?ms=` | 讓 Start／Stop 延遲回應（測 pending 回饋） |
+| `POST /__test/list-hold`／`POST /__test/list-release`／`GET /__test/list-held` | 卡住下一次 ListImages（測刷新競態／abort） |
 | `POST /__test/image?tag=&size=&containers=` | 新增映像（`containers>0` 視為使用中） |
 | `POST /__test/volume?name=&in_use=1` | 新增 volume |
 | `POST /__test/network?name=&driver=` | 新增網路 |
@@ -138,7 +140,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 
 1. `dist\wsld-gui.exe` 開啟後標題列「已連線」，列表顯示容器；側欄切視圖。
 2. 按 X → 縮 Tray；Tray「開啟主視窗」可還原；`--tray`／「結束」行為同既有。
-3. Settings（側欄，0.5）→「登入時啟動 Tray」→ HKCU Run；Theme 切換可見。
+3. Settings（側欄，0.5）→「開機自啟動」toggle → HKCU Run；Theme radio 切換可見。
 4. Machines：設為目前、Info（tcp／wsl 設定）、folder／terminal；unregister 需打名稱（0.5）。
 
 ## 圖示與 Windows 資源
@@ -148,8 +150,15 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 
 ## 已知限制
 
-- 0.5 前：前端配色以淺色為主；Theme 為 Phase 5 目標。
+- Theme：Light／Dark／System（`data-theme`／`prefers-color-scheme`）。
 - Images 的「使用中」欄依 Docker `/images/json` 的 `Containers`；舊版 daemon 可能回 -1，顯示為「–」。
-- Machines「新增發行版」只執行 `wsl --install --no-launch`：首次進入 distro 建立使用者、以及 Docker bootstrap（`wsld init`）仍需使用者操作；0.5 以「設為目前」＋ init 納管。
+- Machines「新增發行版」只執行 `wsl --install --no-launch`：首次進入 distro 建立使用者、以及 Docker bootstrap（`wsld init`）仍需使用者操作；以「設為目前」＋ `wsld init` 納管。
 - Networks 為唯讀；建立／刪除網路請用 `docker network`。
 - npiperelay／自動更新／arm64／**首次 Setup 一鍵**：Roadmap Extra（不綁 0.5）。
+
+## 0.5 實機抽樣驗收
+
+1. 多 distro：`wsld use`／GUI「設為目前」切換；不停舊引擎；Logs／Terminal／Info 硬切；未 init 顯示未就緒，**Start engine 自動 init 後連線**。
+2. Unregister：需輸入發行版名稱確認；profile 刪除。
+3. Containers：Remove running（確認後刪除）；Info summary 欄位齊全。
+4. Settings 側欄 Theme；header 無 Settings／tcp；folder／terminal 有 border。

@@ -89,3 +89,28 @@ test("group Stop/Start act on every container of the project", async ({ page, re
   await expect(row(page, "shop-api-1")).toHaveAttribute("data-state", "running");
   await expect(group(page, "shop").getByTestId("group-count")).toHaveText("2/2");
 });
+
+test("compose group header uses dark-friendly colors under Theme Dark", async ({ page, request }) => {
+  await addComposeContainer(request, "shop", "web", "nginx:1.27");
+  await open(page);
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("settings-theme-dark").check();
+  await page.getByTestId("settings-save").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.getByTestId("nav-containers").click();
+  const cell = group(page, "shop").locator("td").first();
+  const colors = await cell.evaluate((e) => {
+    const cs = getComputedStyle(e);
+    const parse = (c: string) => {
+      const m = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [255, 255, 255];
+    };
+    const [br, bg, bb] = parse(cs.backgroundColor);
+    const [fr, fg, fb] = parse(cs.color);
+    const lum = (r: number, g: number, b: number) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    return { bgLum: lum(br, bg, bb), fgLum: lum(fr, fg, fb) };
+  });
+  expect(colors.bgLum).toBeLessThan(0.35); // 不可再是淺灰底
+  expect(colors.fgLum).toBeGreaterThan(0.6); // 文字要夠亮
+});

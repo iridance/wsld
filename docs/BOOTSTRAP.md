@@ -1,6 +1,6 @@
 # Bootstrap（Phase 1）
 
-把一台 Windows 11 從零帶到「WSL2 Ubuntu 內有 rootful Docker CE，且 API 只綁 `127.0.0.1:23750`」。
+把一台 Windows 11 從零帶到「WSL2（Ubuntu/Debian 或 Arch）內有 rootful Docker，且 API 只綁 `127.0.0.1:23750`」。
 兩支腳本都冪等，可重複執行。
 
 ## 步驟
@@ -33,9 +33,9 @@ bash scripts/02-bootstrap-docker.sh --dry-run
 
 | 步驟 | 動作 | 冪等行為 |
 |---|---|---|
-| 0 | 檢查 WSL2 核心、Ubuntu/Debian、使用者存在 | 不符則 exit 3 |
+| 0 | 檢查 WSL2 核心、Ubuntu/Debian／Arch、使用者存在 | 不符則 exit 3 |
 | 1 | `/etc/wsl.conf` 寫入 `[boot] systemd=true` | 已存在則略過；新寫入時要求 `wsl --shutdown` 後重跑（exit 3） |
-| 2 | 官方 apt 來源安裝 `docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` | 已安裝則略過 |
+| 2 | Debian：官方 apt 安裝 docker-ce…；Arch：`pacman` 安裝 `docker`／`docker-compose`／`docker-buildx` | 已安裝則略過 |
 | 3 | `usermod -aG docker <user>` | 已在群組則略過 |
 | 4 | 選埠：從 `--port` 起遞增找空埠；寫 `/etc/docker/daemon.json`（`hosts` = unix socket + `tcp://127.0.0.1:<port>`）與 systemd drop-in 清掉 `-H fd://` | 既有 daemon.json 已是同埠或 dockerd 正在監聽則沿用；含其他設定時先備份 `.wsld.bak` |
 | 5 | `systemctl enable --now docker`、`loginctl enable-linger <user>` | — |

@@ -216,6 +216,27 @@ func Terminate(ctx context.Context, r Runner, distro string) error {
 	return err
 }
 
+// Unregister 執行 wsl --unregister <distro>（永久刪除發行版）。
+func Unregister(ctx context.Context, r Runner, distro string) error {
+	if !ValidDistroName(distro) {
+		return fmt.Errorf("invalid distro name %q", distro)
+	}
+	_, stderr, err := r.Run(ctx, nil, "--unregister", distro)
+	if err != nil {
+		return fmt.Errorf("wsl --unregister %s: %w: %s", distro, err, strings.TrimSpace(DecodeOutput(stderr)))
+	}
+	return nil
+}
+
+// StopDocker 在指定 distro 內 systemctl stop docker（best-effort；失敗由呼叫端決定）。
+func StopDocker(ctx context.Context, r Runner, distro string) error {
+	_, stderr, err := RunIn(ctx, r, distro, "root", nil, "systemctl", "stop", "docker")
+	if err != nil {
+		return fmt.Errorf("systemctl stop docker: %w: %s", err, strings.TrimSpace(DecodeOutput(stderr)))
+	}
+	return nil
+}
+
 // OnlineDistro 為 `wsl --list --online` 的一列。
 type OnlineDistro struct {
 	Name     string
@@ -255,14 +276,26 @@ func ListOnline(ctx context.Context, r Runner) ([]OnlineDistro, error) {
 	return ParseOnline(DecodeOutput(out)), nil
 }
 
-// Install 執行 `wsl --install -d <name> --no-launch`；名稱只允許 [A-Za-z0-9._-]。
-func Install(ctx context.Context, r Runner, name string) error {
+// Install 執行 `wsl --install -d <distribution> [--name <name>] --no-launch`。
+// distribution 為線上目錄名稱；name 為本機自訂名稱（空則與 distribution 相同）。
+func Install(ctx context.Context, r Runner, distribution, name string) error {
+	if !ValidDistroName(distribution) {
+		return fmt.Errorf("invalid distribution %q", distribution)
+	}
+	if name == "" {
+		name = distribution
+	}
 	if !ValidDistroName(name) {
 		return fmt.Errorf("invalid distro name %q", name)
 	}
-	_, stderr, err := r.Run(ctx, nil, "--install", "-d", name, "--no-launch")
+	args := []string{"--install", "-d", distribution}
+	if name != distribution {
+		args = append(args, "--name", name)
+	}
+	args = append(args, "--no-launch")
+	_, stderr, err := r.Run(ctx, nil, args...)
 	if err != nil {
-		return fmt.Errorf("wsl --install %s: %w: %s", name, err, strings.TrimSpace(DecodeOutput(stderr)))
+		return fmt.Errorf("wsl --install %s: %w: %s", distribution, err, strings.TrimSpace(DecodeOutput(stderr)))
 	}
 	return nil
 }

@@ -165,3 +165,46 @@ teardown() {
   run wsld_detect_distro_id "$TMPD/os-release"
   [ "$output" = "ubuntu" ]
 }
+
+@test "distro_family maps ubuntu/debian to debian and arch* to arch" {
+  printf 'ID=ubuntu\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "debian" ]
+
+  printf 'ID=debian\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "debian" ]
+
+  printf 'ID=arch\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arch" ]
+
+  printf 'ID=archlinux\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arch" ]
+
+  printf 'ID=fedora\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -ne 0 ]
+  [ "$output" = "unknown" ]
+}
+
+@test "docker_engine_installed is true when dockerd is on PATH" {
+  PATH="$TMPD/bin:$PATH"
+  mkdir -p "$TMPD/bin"
+  printf '#!/bin/sh\n' > "$TMPD/bin/dockerd"
+  chmod +x "$TMPD/bin/dockerd"
+  run wsld_docker_engine_installed
+  [ "$status" -eq 0 ]
+}
+
+@test "docker_engine_installed is false without dockerd" {
+  PATH="/usr/bin:/bin"
+  command -v dockerd >/dev/null 2>&1 && skip "host has dockerd"
+  run wsld_docker_engine_installed
+  [ "$status" -ne 0 ]
+}

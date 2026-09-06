@@ -217,6 +217,7 @@ func TestInitPortChangeIsPersisted(t *testing.T) {
 
 func TestInitFlags(t *testing.T) {
 	h := newHarness(t, false)
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- id -u bob"] = "1000\n"
 	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -s -- --user bob --port 24000 --no-compose"] = "WSLD_API_PORT=24000\n"
 	if code := h.run("init", "--user", "bob", "--port", "24000", "--no-compose"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
@@ -403,5 +404,114 @@ func TestLangOverrideZh(t *testing.T) {
 	h.app.Lang = i18n.ZhTW
 	if code := h.run("help"); code != 0 || !strings.Contains(h.out.String(), "用法") {
 		t.Fatalf("zh help: %s", h.out.String())
+	}
+}
+
+func TestUseSwitchesActiveAndWritesPlaceholder(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("use", "Ubuntu-Extra"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	c, err := config.Load(h.app.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Active != "Ubuntu-Extra" || c.Distro != "Ubuntu-Extra" {
+		t.Fatalf("active = %+v", c)
+	}
+	m, ok := c.FindMachine("Ubuntu-Extra")
+	if !ok || m.Ready() {
+		t.Fatalf("want placeholder machine, got ok=%v m=%+v", ok, m)
+	}
+	if !strings.Contains(h.out.String(), "Ubuntu-Extra") {
+		t.Fatalf("out=%q", h.out.String())
+	}
+}
+
+func TestUseExistingMachineDoesNotClearEndpoint(t *testing.T) {
+	h := newHarness(t, true)
+	c, _ := config.Load(h.app.ConfigPath)
+	c.UpsertMachine(config.Machine{Distro: "Ubuntu-22.04", User: "bob", APIEndpoint: "tcp://127.0.0.1:23751"})
+	_ = config.Save(h.app.ConfigPath, c)
+	if code := h.run("use", "Ubuntu-22.04"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	c, _ = config.Load(h.app.ConfigPath)
+	if c.APIEndpoint != "tcp://127.0.0.1:23751" || c.User != "bob" {
+		t.Fatalf("cfg = %+v", c)
+	}
+}
+
+func TestUseRequiresDistroArg(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("use"); code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+}
+
+func TestUnmanageStopsDockerAndRemovesProfile(t *testing.T) {
+	h := newHarness(t, true)
+	c, _ := config.Load(h.app.ConfigPath)
+	c.UpsertMachine(config.Machine{Distro: "Ubuntu-22.04", User: "bob", APIEndpoint: "tcp://127.0.0.1:23751"})
+	_ = c.SetActive("Ubuntu-26.04")
+	_ = config.Save(h.app.ConfigPath, c)
+	h.wsl.resp["-d Ubuntu-22.04 -u root -- systemctl stop docker"] = ""
+	if code := h.run("unmanage", "Ubuntu-22.04"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	c, _ = config.Load(h.app.ConfigPath)
+	if _, ok := c.FindMachine("Ubuntu-22.04"); ok {
+		t.Fatal("profile should be removed")
+	}
+	if c.Active != "Ubuntu-26.04" {
+		t.Fatalf("active should stay primary, got %q", c.Active)
+	}
+	joined := strings.Join(h.wsl.calls, "\n")
+	if !strings.Contains(joined, "systemctl stop docker") {
+		t.Fatalf("expected stop docker, calls:\n%s", joined)
+	}
+}
+
+func TestUnregisterRequiresConfirmName(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("unregister", "Ubuntu-26.04"); code != 2 {
+		t.Fatalf("missing confirm: code=%d", code)
+	}
+	h = newHarness(t, true)
+	if code := h.run("unregister", "Ubuntu-26.04", "--confirm", "Wrong"); code != 2 {
+		t.Fatalf("wrong confirm: code=%d err=%q", code, h.errb.String())
+	}
+}
+
+func TestUnregisterRemovesDistroAndProfile(t *testing.T) {
+	h := newHarness(t, true)
+	c, _ := config.Load(h.app.ConfigPath)
+	c.UpsertMachine(config.Machine{Distro: "Ubuntu-22.04", User: "bob", APIEndpoint: "tcp://127.0.0.1:23751"})
+	_ = c.SetActive("Ubuntu-26.04")
+	_ = config.Save(h.app.ConfigPath, c)
+	h.wsl.resp["-d Ubuntu-22.04 -u root -- systemctl stop docker"] = ""
+	h.wsl.resp["--unregister Ubuntu-22.04"] = ""
+	if code := h.run("unregister", "Ubuntu-22.04", "--confirm", "Ubuntu-22.04"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	c, _ = config.Load(h.app.ConfigPath)
+	if _, ok := c.FindMachine("Ubuntu-22.04"); ok {
+		t.Fatal("profile should be gone")
+	}
+	joined := strings.Join(h.wsl.calls, "\n")
+	if !strings.Contains(joined, "--unregister Ubuntu-22.04") {
+		t.Fatalf("calls:\n%s", joined)
+	}
+}
+
+func TestStartNotReadyWhenActivePlaceholder(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("use", "Ghost"); code != 0 {
+		t.Fatal(code)
+	}
+	h.out.Reset()
+	h.errb.Reset()
+	if code := h.run("start"); code != 3 || !strings.Contains(h.errb.String(), "wsld init") {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
 	}
 }

@@ -232,6 +232,7 @@ func TestInitPicksUbuntuDetectsUserRunsBundleAndParsesPort(t *testing.T) {
 func TestInitHonoursExplicitDistroUserPort(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  Ubuntu-22.04 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
+		"-d Ubuntu-22.04 -u root -- id -u bob": {{out: "1000\n"}},
 		"-d Ubuntu-22.04 -u root -- bash -s -- --user bob --port 24000": {{out: "WSLD_API_PORT=24000\n"}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
@@ -241,6 +242,37 @@ func TestInitHonoursExplicitDistroUserPort(t *testing.T) {
 	}
 	if cfg.Distro != "Ubuntu-22.04" || cfg.User != "bob" || cfg.APIEndpoint != "tcp://127.0.0.1:24000" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestInitCreatesUserWhenDefaultIsRoot(t *testing.T) {
+	old := wsl.CurrentUsername
+	wsl.CurrentUsername = func() (string, error) { return `PC\irice`, nil }
+	defer func() { wsl.CurrentUsername = old }()
+
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n* Debian1 Stopped 2\r\n")}},
+		"-d Debian1 -- id -un": {{out: "root\n"}},
+		"-d Debian1 -u root -- id -u irice": {{err: errors.New("no such user")}},
+		"-d Debian1 -u root -- useradd -m -s /bin/bash irice": {{}},
+		"-d Debian1 -u root -- usermod -aG sudo irice":         {{}},
+		"-d Debian1 -u root -- usermod -aG wheel irice":        {{err: errors.New("no wheel")}},
+		"-d Debian1 -u root -- bash -s -- --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
+	}}
+	var out bytes.Buffer
+	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Output: &out, Sleep: func(time.Duration) {}}
+	cfg, err := m.Init(context.Background(), InitOptions{Distro: "Debian1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.User != "irice" || cfg.Distro != "Debian1" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if !fr.called("useradd -m -s /bin/bash irice") {
+		t.Fatal("should useradd")
+	}
+	if !strings.Contains(out.String(), "irice") {
+		t.Fatalf("should log creating user: %q", out.String())
 	}
 }
 

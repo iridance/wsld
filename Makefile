@@ -1,7 +1,8 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 
-VERSION ?= 1.0.0
+# 版號對齊 git tag（v0.5.1 → 注入 main.version → GUI 左下角 v0.5.1）；未在 exact tag 上時預設 0.5.1
+VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' | grep . || echo 0.5.1)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt icon winres
@@ -19,6 +20,7 @@ fmt:
 
 build-win: build-gui
 	mkdir -p dist
+	@echo "building wsld.exe VERSION=$(VERSION)"
 	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/wsld.exe ./cmd/wsld
 
 # 前端（Vite）→ frontend/dist，供 go:embed 與 Playwright 使用
@@ -28,6 +30,7 @@ build-frontend:
 # Wails v2 GUI（Windows；WebView2 執行期由 Wails 自帶 bootstrapper 處理）
 build-gui: build-frontend
 	mkdir -p dist
+	@echo "building wsld-gui.exe VERSION=$(VERSION)"
 	GOOS=windows GOARCH=amd64 go build -trimpath -tags desktop,production \
 	  -ldflags "$(LDFLAGS) -H windowsgui" -o dist/wsld-gui.exe ./cmd/wsld-gui
 

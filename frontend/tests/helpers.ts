@@ -14,6 +14,23 @@ export async function actionDelay(request: APIRequestContext, ms: number): Promi
   expect((await request.post(`/__test/action-delay?ms=${ms}`)).ok()).toBeTruthy();
 }
 
+/** 讓下一次 ListImages 快照後阻塞，直到 listRelease（測刷新競態）。 */
+export async function listHold(request: APIRequestContext): Promise<void> {
+  expect((await request.post("/__test/list-hold")).ok()).toBeTruthy();
+}
+
+export async function listRelease(request: APIRequestContext): Promise<void> {
+  expect((await request.post("/__test/list-release")).ok()).toBeTruthy();
+}
+
+export async function waitListHeld(request: APIRequestContext): Promise<void> {
+  await expect.poll(async () => {
+    const r = await request.get("/__test/list-held");
+    expect(r.ok()).toBeTruthy();
+    return ((await r.json()) as { waiting: boolean }).waiting;
+  }).toBe(true);
+}
+
 export async function lifecycle(request: APIRequestContext, state: "ok" | "broken"): Promise<void> {
   expect((await request.post(`/__test/lifecycle/${state}`)).ok()).toBeTruthy();
 }

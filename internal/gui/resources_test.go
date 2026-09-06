@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/irice/wsl-docker/internal/config"
 	"github.com/irice/wsl-docker/internal/dockerapi"
 )
 
@@ -174,6 +175,24 @@ func TestMachinesListConfigOnlineInstall(t *testing.T) {
 	if len(m.Machines) != 3 || m.Machines[2].Name != "Debian" || m.Machines[2].State != "Stopped" {
 		t.Fatalf("after install = %+v", m.Machines)
 	}
+	resp, b = e.req(t, http.MethodPost, "/api/machines/install", `{"distribution":"Debian","name":"Debian1"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("install custom name = %d %s", resp.StatusCode, b)
+	}
+	if got := w.Installed(); len(got) != 2 || got[1] != "Debian1" {
+		t.Fatalf("installed custom = %v", got)
+	}
+	_, b = e.req(t, http.MethodGet, "/api/machines", "")
+	_ = json.Unmarshal(b, &m)
+	foundCustom := false
+	for _, row := range m.Machines {
+		if row.Name == "Debian1" {
+			foundCustom = true
+		}
+	}
+	if !foundCustom {
+		t.Fatalf("after custom install = %+v", m.Machines)
+	}
 	resp, _ = e.req(t, http.MethodPost, "/api/machines/install", `{"name":"bad name"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid name = %d", resp.StatusCode)
@@ -182,5 +201,72 @@ func TestMachinesListConfigOnlineInstall(t *testing.T) {
 	resp, b = e.req(t, http.MethodPost, "/api/machines/install", `{"name":"Alpine"}`)
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("failed install = %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestMachineUseUnmanageUnregister(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+
+	resp, b := e.req(t, http.MethodPost, "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("use = %d %s", resp.StatusCode, b)
+	}
+	c, err := e.s.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Active != "docker-desktop" {
+		t.Fatalf("active = %q", c.Active)
+	}
+	m, ok := c.FindMachine("docker-desktop")
+	if !ok || m.Ready() {
+		t.Fatalf("want placeholder, got %+v", m)
+	}
+	if e.life.Distro != "docker-desktop" {
+		t.Fatalf("lifecycle not rebound: %q", e.life.Distro)
+	}
+	_, b = e.req(t, http.MethodGet, "/api/meta", "")
+	var meta Meta
+	_ = json.Unmarshal(b, &meta)
+	if meta.Distro != "docker-desktop" || meta.ActiveReady {
+		t.Fatalf("meta = %+v", meta)
+	}
+
+	// re-use primary (already managed+ready)
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatal(resp.StatusCode)
+	}
+	c, _ = e.s.LoadConfig()
+	um, _ := c.FindMachine("Ubuntu-26.04")
+	if !um.Ready() {
+		t.Fatalf("Ubuntu should remain ready: %+v machines=%+v", um, c.Machines)
+	}
+
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/docker-desktop/unmanage", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unmanage = %d", resp.StatusCode)
+	}
+	c, _ = e.s.LoadConfig()
+	if _, ok := c.FindMachine("docker-desktop"); ok {
+		t.Fatal("should be unmanaged")
+	}
+
+	resp, b = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/unregister", `{"confirm":"nope"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad confirm = %d %s", resp.StatusCode, b)
+	}
+	// add second machine then unregister it
+	c, _ = e.s.LoadConfig()
+	c.UpsertMachine(config.Machine{Distro: "docker-desktop", User: "x", APIEndpoint: "tcp://127.0.0.1:23752"})
+	_ = e.s.SaveConfig(c)
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/docker-desktop/unregister", `{"confirm":"docker-desktop"}`)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unregister = %d", resp.StatusCode)
+	}
+	c, _ = e.s.LoadConfig()
+	if _, ok := c.FindMachine("docker-desktop"); ok {
+		t.Fatal("profile should be gone")
 	}
 }

@@ -54,6 +54,7 @@ func main() {
 
 	srv := &gui.Server{
 		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
+		Shell:      gui.FakeDistroShell{},
 		LoadConfig: func() (config.Config, error) { return config.Load(*cfgPath) },
 		SaveConfig: func(c config.Config) error { return config.Save(*cfgPath, c) },
 		Assets:     spaHandler(*dist),
@@ -79,6 +80,18 @@ func main() {
 		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
 		engine.SetActionDelay(time.Duration(ms) * time.Millisecond)
 		ok(w)
+	})
+	mux.HandleFunc("POST /__test/list-hold", func(w http.ResponseWriter, r *http.Request) {
+		engine.ArmListHold()
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/list-release", func(w http.ResponseWriter, r *http.Request) {
+		engine.ReleaseListHold()
+		ok(w)
+	})
+	mux.HandleFunc("GET /__test/list-held", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"waiting": engine.ListHoldWaiting()})
 	})
 	mux.HandleFunc("POST /__test/lifecycle/{state}", func(w http.ResponseWriter, r *http.Request) {
 		life.Broken = r.PathValue("state") == "broken"

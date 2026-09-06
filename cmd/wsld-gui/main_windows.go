@@ -84,7 +84,14 @@ func main() {
 		Processes:      doctor.WindowsProcesses,
 		OnWindowAction: app.onWindowAction,
 		OnDistroAction: app.onDistroAction,
+		Shell:          gui.HostDistroShell{},
 		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
+		NewEngine: func(c config.Config) gui.Engine {
+			if c.APIEndpoint == "" {
+				return dockerapi.New(config.EndpointForPort(config.DefaultPort), time.Duration(c.APITimeoutSec)*time.Second)
+			}
+			return dockerapi.New(c.APIEndpoint, time.Duration(c.APITimeoutSec)*time.Second)
+		},
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {
@@ -174,9 +181,9 @@ func (a *guiApp) onDistroAction(action string) error {
 	}
 	switch action {
 	case "open-folder":
-		return host.OpenFolder(cfg.Distro)
+		return host.OpenFolder(cfg.Distro, cfg.User)
 	case "open-terminal":
-		return host.OpenTerminal(cfg.Distro)
+		return host.OpenTerminal(cfg.Distro, cfg.User)
 	default:
 		return fmt.Errorf("unknown distro action %q", action)
 	}

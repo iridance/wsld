@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wsl-docker Phase 1：在 WSL2 Ubuntu 內安裝 rootful Docker CE（+ compose plugin），
+# wsl-docker Phase 1：在 WSL2（Ubuntu/Debian 或 Arch）內安裝 rootful Docker，
 # 讓 dockerd 同時監聽 unix socket 與 tcp://127.0.0.1:<port>（只綁 loopback），
 # 並啟用 systemd／linger，供 Windows 端 wsld / wsld-gui 使用。
 #
@@ -37,13 +37,14 @@ fi
 wsld_is_wsl || die "此腳本僅支援在 WSL2 發行版內執行（uname -r 未含 microsoft/WSL）" 3
 
 DISTRO_ID="$(wsld_detect_distro_id || true)"
-case "$DISTRO_ID" in
-  ubuntu|debian) ;;
-  *) die "目前僅支援 Ubuntu/Debian 系發行版（偵測到: ${DISTRO_ID:-unknown}）" 3 ;;
+FAMILY="$(wsld_distro_family || true)"
+case "$FAMILY" in
+  debian|arch) ;;
+  *) die "目前僅支援 Ubuntu/Debian 或 Arch 系發行版（偵測到: ${DISTRO_ID:-unknown}）" 3 ;;
 esac
 
 id "$WSLD_USER" >/dev/null 2>&1 || die "使用者不存在: $WSLD_USER" 2
-log "distro=$DISTRO_ID user=$WSLD_USER start-port=$WSLD_PORT compose=$WSLD_INSTALL_COMPOSE dry-run=$WSLD_DRY_RUN"
+log "distro=$DISTRO_ID family=$FAMILY user=$WSLD_USER start-port=$WSLD_PORT compose=$WSLD_INSTALL_COMPOSE dry-run=$WSLD_DRY_RUN"
 
 # ---------------------------------------------------------------- 1. wsl.conf systemd
 NEED_WSL_RESTART=0
@@ -66,10 +67,9 @@ if [ "$NEED_WSL_RESTART" = "1" ] || ! [ -d /run/systemd/system ]; then
   [ "$WSLD_DRY_RUN" = "1" ] || exit 3
 fi
 
-# ---------------------------------------------------------------- 2. 安裝 Docker CE
-export DEBIAN_FRONTEND=noninteractive
-
-if ! command -v docker >/dev/null 2>&1 || ! dpkg -s docker-ce >/dev/null 2>&1; then
+# ---------------------------------------------------------------- 2. 安裝 Docker
+install_docker_debian() {
+  export DEBIAN_FRONTEND=noninteractive
   log "安裝 Docker CE（官方 apt 來源）"
   run $SUDO apt-get update -y
   run $SUDO apt-get install -y ca-certificates curl gnupg
@@ -89,16 +89,49 @@ if ! command -v docker >/dev/null 2>&1 || ! dpkg -s docker-ce >/dev/null 2>&1; t
   pkgs=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin)
   [ "$WSLD_INSTALL_COMPOSE" = "1" ] && pkgs+=(docker-compose-plugin)
   run $SUDO apt-get install -y "${pkgs[@]}"
-else
-  log "Docker CE 已安裝，略過安裝"
+}
+
+install_docker_arch() {
+  log "安裝 Docker（pacman 官方套件）"
+  pkgs=(docker)
+  [ "$WSLD_INSTALL_COMPOSE" = "1" ] && pkgs+=(docker-compose)
+  command -v docker-buildx >/dev/null 2>&1 || pkgs+=(docker-buildx)
+  run $SUDO pacman -Sy --noconfirm --needed "${pkgs[@]}"
+}
+
+ensure_compose_debian() {
   if [ "$WSLD_INSTALL_COMPOSE" = "1" ] && ! docker compose version >/dev/null 2>&1; then
     log "補安裝 docker-compose-plugin"
     run $SUDO apt-get update -y
     run $SUDO apt-get install -y docker-compose-plugin
   fi
+}
+
+ensure_compose_arch() {
+  if [ "$WSLD_INSTALL_COMPOSE" = "1" ] && ! docker compose version >/dev/null 2>&1; then
+    log "補安裝 docker-compose"
+    run $SUDO pacman -Sy --noconfirm --needed docker-compose
+  fi
+}
+
+if ! wsld_docker_engine_installed; then
+  case "$FAMILY" in
+    debian) install_docker_debian ;;
+    arch) install_docker_arch ;;
+  esac
+else
+  log "Docker 引擎已安裝，略過安裝"
+  case "$FAMILY" in
+    debian) ensure_compose_debian ;;
+    arch) ensure_compose_arch ;;
+  esac
 fi
 
 # ---------------------------------------------------------------- 3. docker 群組
+if ! getent group docker >/dev/null 2>&1; then
+  log "建立 docker 群組"
+  run $SUDO groupadd --system docker
+fi
 if id -nG "$WSLD_USER" | tr ' ' '\n' | grep -qx docker; then
   log "$WSLD_USER 已在 docker 群組"
 else
@@ -116,7 +149,6 @@ if [ -n "$CURRENT_PORT" ] && [ "$CURRENT_PORT" = "$WSLD_PORT" ]; then
   PORT="$CURRENT_PORT"
   log "沿用既有 daemon.json 埠 $PORT"
 elif [ -n "$CURRENT_PORT" ] && systemctl is-active --quiet docker 2>/dev/null; then
-  # dockerd 自己占著 CURRENT_PORT；視為可沿用，除非使用者明確指定不同起始埠
   PORT="$CURRENT_PORT"
   log "dockerd 已在埠 $PORT 監聽，沿用"
 else
@@ -164,7 +196,6 @@ if command -v curl >/dev/null 2>&1; then
   [ "$ping" = "OK" ] || die "API http://127.0.0.1:${PORT}/_ping 未回 OK（得到: '${ping}'）" 4
 fi
 
-# 確認沒有綁到非 loopback
 if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -E ":${PORT}\$" | grep -vqE '^(127\.0\.0\.1|\[::1\])'; then
   die "dockerd 在埠 ${PORT} 綁到了非 loopback 位址，請檢查 daemon.json" 1
 fi

@@ -1,12 +1,15 @@
 # 複製到 %APPDATA%\wsl-docker\config.toml
+# 0.5：多 machine profile＋單一 active；舊扁平格式載入時會自動遷移。
 
-distro = "Ubuntu-26.04"
-user = "irice"
-api_endpoint = "tcp://127.0.0.1:23750"
-
-# 可選
+active = "Ubuntu-26.04"
+# theme = "system"       # light | dark | system
 # exec_shell = ""
 # refresh_interval_sec = 3
 # tray_autostart = false
 # api_timeout_sec = 10
 # lang = "en"            # en | zh-TW；GUI 右下角切換後會寫回這裡（WSLD_LANG 環境變數可強制覆寫）
+
+[[machines]]
+distro = "Ubuntu-26.04"
+user = "irice"
+api_endpoint = "tcp://127.0.0.1:23750"

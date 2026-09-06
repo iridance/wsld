@@ -15,6 +15,132 @@ func TestDefaultValues(t *testing.T) {
 	if c.RefreshIntervalSec != 3 || c.APITimeoutSec != 10 || c.TrayAutostart {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
+	if c.ThemeOrDefault() != "system" {
+		t.Fatalf("ThemeOrDefault = %q", c.ThemeOrDefault())
+	}
+}
+
+func TestLoadMigratesFlatConfigToMachines(t *testing.T) {
+	p := writeTemp(t, `
+distro = "Ubuntu-26.04"
+user = "irice"
+api_endpoint = "tcp://127.0.0.1:23751"
+lang = "zh-TW"
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Active != "Ubuntu-26.04" {
+		t.Fatalf("Active = %q", c.Active)
+	}
+	if len(c.Machines) != 1 {
+		t.Fatalf("Machines = %+v", c.Machines)
+	}
+	m := c.Machines[0]
+	if m.Distro != "Ubuntu-26.04" || m.User != "irice" || m.APIEndpoint != "tcp://127.0.0.1:23751" {
+		t.Fatalf("machine = %+v", m)
+	}
+	if c.Distro != m.Distro || c.User != m.User || c.APIEndpoint != m.APIEndpoint {
+		t.Fatalf("derived not synced: %+v", c)
+	}
+	if !m.Ready() {
+		t.Fatal("migrated machine should be Ready")
+	}
+}
+
+func TestLoadMultiMachineConfig(t *testing.T) {
+	p := writeTemp(t, `
+active = "Ubuntu-22.04"
+theme = "dark"
+refresh_interval_sec = 5
+
+[[machines]]
+distro = "Ubuntu-26.04"
+user = "irice"
+api_endpoint = "tcp://127.0.0.1:23750"
+
+[[machines]]
+distro = "Ubuntu-22.04"
+user = "bob"
+api_endpoint = "tcp://127.0.0.1:23751"
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Active != "Ubuntu-22.04" || c.Theme != "dark" || c.RefreshIntervalSec != 5 {
+		t.Fatalf("got %+v", c)
+	}
+	if c.Distro != "Ubuntu-22.04" || c.User != "bob" || c.APIEndpoint != "tcp://127.0.0.1:23751" {
+		t.Fatalf("derived = distro=%q user=%q ep=%q", c.Distro, c.User, c.APIEndpoint)
+	}
+	if len(c.Machines) != 2 {
+		t.Fatalf("Machines len = %d", len(c.Machines))
+	}
+}
+
+func TestPlaceholderMachineAllowed(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "Ubuntu-Extra"})
+	if err := c.SetActive("Ubuntu-Extra"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("placeholder should validate: %v", err)
+	}
+	m, ok := c.ActiveMachine()
+	if !ok || m.Ready() {
+		t.Fatalf("want unready placeholder, got ok=%v m=%+v", ok, m)
+	}
+}
+
+func TestSetActiveAndSaveWritesNewFormatOnly(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u1", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "B", User: "u2", APIEndpoint: "tcp://127.0.0.1:23751"})
+	if err := c.SetActive("B"); err != nil {
+		t.Fatal(err)
+	}
+	c.Theme = "light"
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "active") || !strings.Contains(body, "[[machines]]") {
+		t.Fatalf("want new format, got:\n%s", body)
+	}
+	head := body
+	if i := strings.Index(body, "[[machines]]"); i >= 0 {
+		head = body[:i]
+	}
+	for _, key := range []string{"distro =", "user =", "api_endpoint ="} {
+		if strings.Contains(head, key) {
+			t.Fatalf("flat key %q leaked before machines:\n%s", key, body)
+		}
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Active != "B" || got.Distro != "B" || got.Theme != "light" {
+		t.Fatalf("reload = %+v", got)
+	}
+}
+
+func TestUpsertMachineUpdatesExisting(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "Ubuntu", User: "", APIEndpoint: ""})
+	c.UpsertMachine(Machine{Distro: "Ubuntu", User: "irice", APIEndpoint: "tcp://127.0.0.1:23750"})
+	_ = c.SetActive("Ubuntu")
+	if len(c.Machines) != 1 || !c.Machines[0].Ready() {
+		t.Fatalf("Machines = %+v", c.Machines)
+	}
 }
 
 func TestLoadAppliesDefaultsForMissingOptionalFields(t *testing.T) {
@@ -91,19 +217,22 @@ func TestValidate(t *testing.T) {
 		ok   bool
 	}{
 		{"valid", func(c *Config) {}, true},
-		{"empty distro", func(c *Config) { c.Distro = "" }, false},
-		{"empty user", func(c *Config) { c.User = "" }, false},
-		{"unix endpoint rejected", func(c *Config) { c.APIEndpoint = "unix:///var/run/docker.sock" }, false},
-		{"localhost ok", func(c *Config) { c.APIEndpoint = "tcp://localhost:23750" }, true},
-		{"ipv6 loopback ok", func(c *Config) { c.APIEndpoint = "tcp://[::1]:23750" }, true},
-		{"no port", func(c *Config) { c.APIEndpoint = "tcp://127.0.0.1" }, false},
+		{"empty active", func(c *Config) { c.Active = "" }, false},
+		{"active missing from machines", func(c *Config) { c.Active = "Nope" }, false},
+		{"empty machine distro", func(c *Config) { c.Machines[0].Distro = ""; c.Active = "" }, false},
+		{"unix endpoint rejected", func(c *Config) { c.Machines[0].APIEndpoint = "unix:///var/run/docker.sock"; c.syncDerived() }, false},
+		{"localhost ok", func(c *Config) { c.Machines[0].APIEndpoint = "tcp://localhost:23750"; c.syncDerived() }, true},
+		{"ipv6 loopback ok", func(c *Config) { c.Machines[0].APIEndpoint = "tcp://[::1]:23750"; c.syncDerived() }, true},
+		{"no port", func(c *Config) { c.Machines[0].APIEndpoint = "tcp://127.0.0.1"; c.syncDerived() }, false},
 		{"refresh zero", func(c *Config) { c.RefreshIntervalSec = 0 }, false},
 		{"timeout zero", func(c *Config) { c.APITimeoutSec = 0 }, false},
+		{"bad theme", func(c *Config) { c.Theme = "neon" }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := Default()
-			c.Distro, c.User = "Ubuntu", "bob"
+			c.UpsertMachine(Machine{Distro: "Ubuntu", User: "bob", APIEndpoint: EndpointForPort(DefaultPort)})
+			_ = c.SetActive("Ubuntu")
 			tc.mut(&c)
 			err := c.Validate()
 			if (err == nil) != tc.ok {
@@ -116,9 +245,10 @@ func TestValidate(t *testing.T) {
 func TestSaveRoundTripAndCreatesDir(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "config.toml")
 	c := Default()
-	c.Distro, c.User = "Ubuntu-26.04", "irice"
-	c.APIEndpoint = "tcp://127.0.0.1:23752"
+	c.UpsertMachine(Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: "tcp://127.0.0.1:23752"})
+	_ = c.SetActive("Ubuntu-26.04")
 	c.ExecShell = "fish"
+	c.Theme = "dark"
 	if err := Save(p, c); err != nil {
 		t.Fatal(err)
 	}
@@ -126,13 +256,20 @@ func TestSaveRoundTripAndCreatesDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != c {
+	if got.Active != c.Active || got.ExecShell != c.ExecShell || got.Theme != c.Theme {
 		t.Fatalf("round trip mismatch:\n got %+v\nwant %+v", got, c)
+	}
+	if got.Distro != "Ubuntu-26.04" || got.User != "irice" || got.APIEndpoint != "tcp://127.0.0.1:23752" {
+		t.Fatalf("derived = %+v", got)
+	}
+	if len(got.Machines) != 1 {
+		t.Fatalf("Machines = %+v", got.Machines)
 	}
 }
 
 func TestSaveRefusesInvalid(t *testing.T) {
-	c := Default() // 缺 distro/user
+	c := Default()
+	c.Theme = "neon"
 	if err := Save(filepath.Join(t.TempDir(), "c.toml"), c); err == nil {
 		t.Fatal("expected validation error")
 	}

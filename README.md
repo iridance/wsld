@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前在做 **0.5**（多 distro、Machines／Containers／Settings 等，細節還在定）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底已可用；之後 v2.0 會換成 WinUI。
+目前 **0.5.1**（tag `v0.5.1`）已交付（多 distro、Machines／Containers／Settings／Theme）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -40,6 +40,9 @@ wsld init
 
 ```powershell
 wsld start                 # 喚醒 distro、起 dockerd
+wsld use <distro>          # 設為目前 machine（可寫占位 profile）
+wsld unmanage <distro>     # 停 docker 並刪 profile（保留 WSL）
+wsld unregister <d> --confirm <d>
 wsld status                # 0 就緒／3 未就緒／4 API 掛了
 wsld ps [-a] [--json]
 wsld logs <ct> [--tail 100] [--follow]
@@ -83,7 +86,7 @@ wsld-gui.exe --tray    # 只留系統匣
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.5.1；GUI 左下角 v0.5.1）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -92,7 +95,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（0.5 還在定） |
+| [SPEC](docs/SPEC.md) | 規格（**0.5.1** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |

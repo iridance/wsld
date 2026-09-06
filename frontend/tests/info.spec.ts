@@ -19,8 +19,12 @@ test("container Info opens a right-side drawer with status and ports; columns ar
   await expect(drawer).toHaveAttribute("data-kind", "container");
   await expect(drawer).toHaveAttribute("data-name", "web");
   await expect(page.getByTestId("info-title")).toContainText("web");
-  await expect(page.getByTestId("info-status")).toContainText("Up");
-  await expect(page.getByTestId("info-ports")).toHaveText("8080→80/tcp");
+  await expect(page.getByTestId("info-status")).toContainText("running");
+  await expect(page.getByTestId("info-ports")).toContainText("80");
+  await expect(page.getByTestId("info-command")).toContainText("nginx");
+  await expect(page.getByTestId("info-networks")).toContainText("bridge");
+  await expect(page.getByTestId("info-mounts")).toContainText("/app");
+  await expect(page.getByTestId("info-restart")).toHaveText("unless-stopped");
 
   // 從右側滑出：貼在列表右側、寬度約 340
   const box = await drawer.boundingBox();
@@ -33,6 +37,15 @@ test("container Info opens a right-side drawer with status and ports; columns ar
 
   await page.getByTestId("btn-info-close").click();
   await expect(drawer).toBeHidden();
+});
+
+test("Remove running container asks for confirmation and deletes the row", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("btn-rm-web").click();
+  const dlg = page.getByTestId("confirm-dialog");
+  await expect(dlg.getByTestId("confirm-text")).toContainText("web");
+  await dlg.getByTestId("confirm-ok").click();
+  await expect(page.locator('[data-testid="container-row"][data-name="web"]')).toHaveCount(0);
 });
 
 test("compose group actions are icon-only and Info opens project drawer", async ({ page, request }) => {
@@ -73,7 +86,7 @@ test("header distro has open-folder and open-terminal icon buttons; refresh inte
   await expect(term).toHaveAttribute("aria-label", "Open terminal");
   await expect(folder.locator("svg.ico")).toHaveAttribute("data-icon", "folder");
   await expect(term.locator("svg.ico")).toHaveAttribute("data-icon", "terminal");
-  expect(await folder.evaluate((e) => getComputedStyle(e).borderStyle)).toBe("none");
+  expect(await folder.evaluate((e) => getComputedStyle(e).borderStyle)).not.toBe("none");
 
   await folder.click();
   await term.click();

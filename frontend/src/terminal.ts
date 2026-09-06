@@ -1,7 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "./api";
 
 export interface TerminalSession {
   term: Terminal;
@@ -10,15 +9,23 @@ export interface TerminalSession {
   text(): string;
 }
 
-/** 在 host 內開 xterm 並以 WebSocket 連到容器 exec。 */
-export function openTerminal(host: HTMLElement, containerId: string, onClosed: (reason: string) => void): TerminalSession {
-  const term = new Terminal({ cursorBlink: true, convertEol: false, fontSize: 13, theme: { background: "#1e1e1e" } });
+/** 在 host 內開 xterm；urlFor 於 fit 後依 cols/rows 產生 WebSocket URL。 */
+export function openTerminal(host: HTMLElement, urlFor: (cols: number, rows: number) => string, onClosed: (reason: string) => void): TerminalSession {
+  const term = new Terminal({
+    cursorBlink: true,
+    convertEol: false,
+    fontSize: 13,
+    theme: {
+      background: getComputedStyle(document.documentElement).getPropertyValue("--xterm-bg").trim() || "#1e1e1e",
+      foreground: getComputedStyle(document.documentElement).getPropertyValue("--term-fg").trim() || "#e2e8f0",
+    },
+  });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);
   fit.fit();
 
-  const ws = new WebSocket(api.execUrl(containerId, term.cols, term.rows));
+  const ws = new WebSocket(urlFor(term.cols, term.rows));
   ws.binaryType = "arraybuffer";
   const enc = new TextEncoder();
   const dec = new TextDecoder();

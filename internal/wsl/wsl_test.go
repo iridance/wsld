@@ -170,20 +170,27 @@ func TestParseOnline(t *testing.T) {
 
 func TestListOnlineAndInstall(t *testing.T) {
 	r := &fakeRunner{out: map[string]result{
-		"--list --online":                 {stdout: "NAME    FRIENDLY NAME\r\nDebian  Debian GNU/Linux\r\n"},
-		"--install -d Debian --no-launch": {stdout: "Installing: Debian\r\n"},
+		"--list --online":                              {stdout: "NAME    FRIENDLY NAME\r\nDebian  Debian GNU/Linux\r\n"},
+		"--install -d Debian --no-launch":              {stdout: "Installing: Debian\r\n"},
+		"--install -d Debian --name Debian1 --no-launch": {stdout: "Installing: Debian as Debian1\r\n"},
 	}}
 	got, err := ListOnline(context.Background(), r)
 	if err != nil || len(got) != 1 || got[0].Name != "Debian" {
 		t.Fatalf("got %+v %v", got, err)
 	}
-	if err := Install(context.Background(), r, "Debian"); err != nil {
+	if err := Install(context.Background(), r, "Debian", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(context.Background(), r, ""); err == nil {
-		t.Fatal("empty name must be rejected")
+	if err := Install(context.Background(), r, "Debian", "Debian1"); err != nil {
+		t.Fatal(err)
 	}
-	if err := Install(context.Background(), r, "bad name"); err == nil {
+	if err := Install(context.Background(), r, "", ""); err == nil {
+		t.Fatal("empty distribution must be rejected")
+	}
+	if err := Install(context.Background(), r, "bad name", ""); err == nil {
 		t.Fatal("names with spaces must be rejected")
+	}
+	if err := Install(context.Background(), r, "Debian", "bad name"); err == nil {
+		t.Fatal("local names with spaces must be rejected")
 	}
 }

@@ -80,13 +80,51 @@ func (f *FakeWSL) Run(_ context.Context, _ io.Reader, args ...string) ([]byte, [
 			fmt.Fprintf(&b, "%-32s%s\r\n", d.Name, d.Friendly)
 		}
 		return []byte(b.String()), nil, nil
-	case len(args) == 4 && args[0] == "--install" && args[1] == "-d":
+	case args[0] == "--install":
+		distro, local := "", ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "-d", "--distribution":
+				if i+1 < len(args) {
+					i++
+					distro = args[i]
+				}
+			case "--name":
+				if i+1 < len(args) {
+					i++
+					local = args[i]
+				}
+			}
+		}
+		if distro == "" {
+			return nil, []byte("missing distribution"), &wsl.ExitError{Code: 1}
+		}
+		if local == "" {
+			local = distro
+		}
 		if f.FailInstall {
 			return nil, []byte("Installation failed"), &wsl.ExitError{Code: 1, Stderr: "Installation failed"}
 		}
-		f.installed = append(f.installed, args[2])
-		f.distros = append(f.distros, wsl.Distro{Name: args[2], State: "Stopped", Version: 2})
-		return []byte("Installing: " + args[2] + "\r\n"), nil, nil
+		f.installed = append(f.installed, local)
+		f.distros = append(f.distros, wsl.Distro{Name: local, State: "Stopped", Version: 2})
+		return []byte("Installing: " + local + "\r\n"), nil, nil
+	case len(args) == 2 && args[0] == "--unregister":
+		name := args[1]
+		out := f.distros[:0]
+		found := false
+		for _, d := range f.distros {
+			if strings.EqualFold(d.Name, name) {
+				found = true
+				continue
+			}
+			out = append(out, d)
+		}
+		if !found {
+			return nil, []byte("There is no distribution with the supplied name."), &wsl.ExitError{Code: 1}
+		}
+		f.distros = out
+		delete(f.confs, name)
+		return nil, nil, nil
 	case len(args) >= 2 && args[0] == "-d":
 		name := args[1]
 		found := false
@@ -105,6 +143,7 @@ func (f *FakeWSL) Run(_ context.Context, _ io.Reader, args ...string) ([]byte, [
 			}
 			return []byte(conf), nil, nil
 		}
+		// systemctl stop docker 等 best-effort 命令
 		return nil, nil, nil
 	}
 	return nil, nil, errors.New("fake wsl: unsupported args " + joined)

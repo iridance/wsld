@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,10 @@ type FakeEngine struct {
 	LastResize [2]int
 	// ActionDelay 讓 Start/Stop 延遲回應（模擬 docker stop 寬限期）。
 	ActionDelay time.Duration
+	// listHold：下一次 ListImages 先快照後阻塞，直到 ReleaseListHold（測刷新競態）。
+	listHold        chan struct{}
+	listHoldArmed   bool
+	listHoldWaiting bool
 
 	images   []dockerapi.Image
 	volumes  map[string]*fakeVolume
@@ -43,6 +48,36 @@ func (f *FakeEngine) SetActionDelay(d time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ActionDelay = d
+}
+
+// ArmListHold 讓下一次 ListImages 快照後阻塞，直到 ReleaseListHold。
+func (f *FakeEngine) ArmListHold() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listHold != nil {
+		close(f.listHold)
+	}
+	f.listHold = make(chan struct{})
+	f.listHoldArmed = true
+}
+
+// ReleaseListHold 放行被 ArmListHold 卡住的 ListImages。
+func (f *FakeEngine) ReleaseListHold() {
+	f.mu.Lock()
+	ch := f.listHold
+	f.listHold = nil
+	f.listHoldArmed = false
+	f.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// ListHoldWaiting 表示目前有 ListImages 卡在 hold 上。
+func (f *FakeEngine) ListHoldWaiting() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listHoldWaiting
 }
 
 func (f *FakeEngine) sleepAction(ctx context.Context) {
@@ -80,6 +115,12 @@ func (f *FakeEngine) Reset() {
 	f.execEcho = true
 	f.LastResize = [2]int{}
 	f.ActionDelay = 0
+	if f.listHold != nil {
+		close(f.listHold)
+	}
+	f.listHold = nil
+	f.listHoldArmed = false
+	f.listHoldWaiting = false
 	f.mu.Unlock()
 	// dual-stack 發佈埠會回傳 IPv4 與 IPv6 兩筆，前端須去重
 	f.AddContainer("web", "nginx:1.27", "running", []dockerapi.Port{
@@ -139,13 +180,34 @@ func conflict(msg string) error {
 }
 
 // ListImages 實作 Resources。
-func (f *FakeEngine) ListImages(context.Context) ([]dockerapi.Image, error) {
+func (f *FakeEngine) ListImages(ctx context.Context) ([]dockerapi.Image, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if err := f.down(); err != nil {
+		f.mu.Unlock()
 		return nil, err
 	}
-	return append([]dockerapi.Image{}, f.images...), nil
+	out := append([]dockerapi.Image{}, f.images...)
+	var hold <-chan struct{}
+	if f.listHoldArmed {
+		hold = f.listHold
+		f.listHoldArmed = false
+		f.listHoldWaiting = true
+	}
+	f.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			f.mu.Lock()
+			f.listHoldWaiting = false
+			f.mu.Unlock()
+			return nil, ctx.Err()
+		}
+		f.mu.Lock()
+		f.listHoldWaiting = false
+		f.mu.Unlock()
+	}
+	return out, nil
 }
 
 // RemoveImage 實作 Resources：ref 比對 tag、ID 或短 ID。
@@ -369,6 +431,27 @@ func (f *FakeEngine) StopContainer(ctx context.Context, id string, _ int) error 
 	return nil
 }
 
+// RemoveContainer 實作 Engine。
+func (f *FakeEngine) RemoveContainer(ctx context.Context, id string, force bool) error {
+	f.sleepAction(ctx)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return err
+	}
+	cid := f.findLocked(id)
+	c := f.containers[cid]
+	if c == nil {
+		return &dockerapi.APIError{Status: 404, Message: "No such container: " + id}
+	}
+	if c.State == "running" && !force {
+		return &dockerapi.APIError{Status: 409, Message: "container is running: stop before remove or use force"}
+	}
+	delete(f.containers, cid)
+	delete(f.logs, cid)
+	return nil
+}
+
 // Logs 實作 Engine：非 follow 回尾部；follow 先回尾部再持續推送。
 func (f *FakeEngine) Logs(ctx context.Context, id string, opts dockerapi.LogsOptions) (io.ReadCloser, error) {
 	f.mu.Lock()
@@ -452,6 +535,24 @@ func (f *FakeEngine) Inspect(_ context.Context, id string) (dockerapi.ContainerD
 	}
 	d.ID, d.Name, d.Config.Image, d.State.Status = c.ID, c.Names[0], c.Image, c.State
 	d.State.Running = c.State == "running"
+	d.Created = time.Unix(c.Created, 0).UTC().Format(time.RFC3339Nano)
+	if d.State.Running {
+		d.State.StartedAt = d.Created
+	}
+	d.Config.Cmd = []string{"nginx", "-g", "daemon off;"}
+	d.Config.Labels = c.Labels
+	d.HostConfig.RestartPolicy.Name = "unless-stopped"
+	d.NetworkSettings.Networks = map[string]dockerapi.ContainerNetworkEndpoint{
+		"bridge": {IPAddress: "172.17.0.2"},
+	}
+	if len(c.Ports) > 0 {
+		d.NetworkSettings.Ports = map[string][]dockerapi.PortBinding{}
+		for _, p := range c.Ports {
+			key := fmt.Sprintf("%d/%s", p.PrivatePort, p.Type)
+			d.NetworkSettings.Ports[key] = []dockerapi.PortBinding{{HostIP: p.IP, HostPort: strconv.Itoa(int(p.PublicPort))}}
+		}
+	}
+	d.Mounts = []dockerapi.ContainerMount{{Type: "bind", Source: "/home/irice/app", Destination: "/app", Mode: "rw", RW: true}}
 	return d, nil
 }
 
@@ -477,6 +578,14 @@ func (f *FakeEngine) ExecStart(ctx context.Context, execID string, _ bool) (net.
 	if !strings.HasPrefix(execID, "exec-") {
 		return nil, &dockerapi.APIError{Status: 404, Message: "No such exec instance"}
 	}
+	f.mu.Lock()
+	echo := f.execEcho
+	f.mu.Unlock()
+	return OpenFakeShell(echo), nil
+}
+
+// OpenFakeShell 開啟回顯假 shell（容器 exec 與 machine terminal 共用）。
+func OpenFakeShell(echo bool) net.Conn {
 	client, server := net.Pipe()
 	go func() {
 		defer server.Close()
@@ -505,14 +614,14 @@ func (f *FakeEngine) ExecStart(ctx context.Context, execID string, _ bool) (net.
 					}
 				default:
 					line = append(line, b)
-					if f.execEcho {
+					if echo {
 						_, _ = server.Write([]byte{b})
 					}
 				}
 			}
 		}
 	}()
-	return client, nil
+	return client
 }
 
 // ExecResize 實作 Engine（記錄最後尺寸供測試）。
