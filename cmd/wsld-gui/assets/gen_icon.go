@@ -4,7 +4,8 @@
 //
 //	go run ./cmd/wsld-gui/assets/gen_icon.go
 //
-// 輸出 assets/tray.ico（16/24/32/48/256 多尺寸，PNG 壓縮）與 assets/icon.png（256）。
+// 輸出 assets/tray.ico（16/20/24/32/40/48/64/256；≤64 為 BMP、256 為 PNG）
+// 與 assets/icon.png（256）。
 package main
 
 import (
@@ -16,6 +17,9 @@ import (
 	"os"
 	"path/filepath"
 )
+
+// Windows 10/11 常見 DPI（100–200%）用到的尺寸階梯。
+var sizes = []int{16, 20, 24, 32, 40, 48, 64, 256}
 
 func draw(n int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, n, n))
@@ -60,20 +64,81 @@ func draw(n int) *image.NRGBA {
 	return img
 }
 
+// encodeBMPIcon 寫入 ICO 用的 32bpp DIB（XOR + 1bpp AND mask）。
+// 小尺寸用 BMP 較穩；LoadImage／Tray 對 PNG-in-ICO 較挑。
+func encodeBMPIcon(img *image.NRGBA) []byte {
+	n := img.Bounds().Dx()
+	xorStride := n * 4
+	andStride := ((n + 31) / 32) * 4 // 每列對齊 32-bit
+	xorSize := xorStride * n
+	andSize := andStride * n
+
+	var b bytes.Buffer
+	le := binary.LittleEndian
+	_ = binary.Write(&b, le, uint32(40))       // biSize
+	_ = binary.Write(&b, le, int32(n))         // biWidth
+	_ = binary.Write(&b, le, int32(n*2))       // biHeight：XOR + AND
+	_ = binary.Write(&b, le, uint16(1))        // biPlanes
+	_ = binary.Write(&b, le, uint16(32))       // biBitCount
+	_ = binary.Write(&b, le, uint32(0))        // biCompression = BI_RGB
+	_ = binary.Write(&b, le, uint32(xorSize+andSize))
+	_ = binary.Write(&b, le, int32(0))
+	_ = binary.Write(&b, le, int32(0))
+	_ = binary.Write(&b, le, uint32(0))
+	_ = binary.Write(&b, le, uint32(0))
+
+	// XOR：bottom-up，BGRA
+	row := make([]byte, xorStride)
+	for y := n - 1; y >= 0; y-- {
+		for x := 0; x < n; x++ {
+			c := img.NRGBAAt(x, y)
+			i := x * 4
+			row[i], row[i+1], row[i+2], row[i+3] = c.B, c.G, c.R, c.A
+		}
+		b.Write(row)
+	}
+
+	// AND mask：透明處為 1（遮罩），不透明為 0；bottom-up
+	andRow := make([]byte, andStride)
+	for y := n - 1; y >= 0; y-- {
+		clear(andRow)
+		for x := 0; x < n; x++ {
+			if img.NRGBAAt(x, y).A < 128 {
+				andRow[x/8] |= 0x80 >> uint(x%8)
+			}
+		}
+		b.Write(andRow)
+	}
+	return b.Bytes()
+}
+
+func encodeFrame(img *image.NRGBA) []byte {
+	if img.Bounds().Dx() >= 256 {
+		var b bytes.Buffer
+		must(png.Encode(&b, img))
+		return b.Bytes()
+	}
+	return encodeBMPIcon(img)
+}
+
 func main() {
 	dir := "cmd/wsld-gui/assets"
 	if len(os.Args) > 1 {
 		dir = os.Args[1]
 	}
-	sizes := []int{16, 24, 32, 48, 256}
-	var pngs [][]byte
-	for _, n := range sizes {
-		var b bytes.Buffer
-		if err := png.Encode(&b, draw(n)); err != nil {
-			panic(err)
+
+	frames := make([][]byte, len(sizes))
+	var png256 []byte
+	for i, n := range sizes {
+		img := draw(n)
+		frames[i] = encodeFrame(img)
+		if n == 256 {
+			var b bytes.Buffer
+			must(png.Encode(&b, img))
+			png256 = b.Bytes()
 		}
-		pngs = append(pngs, b.Bytes())
 	}
+
 	var out bytes.Buffer
 	le := binary.LittleEndian
 	_ = binary.Write(&out, le, uint16(0))
@@ -91,15 +156,16 @@ func main() {
 		out.WriteByte(0)
 		_ = binary.Write(&out, le, uint16(1))
 		_ = binary.Write(&out, le, uint16(32))
-		_ = binary.Write(&out, le, uint32(len(pngs[i])))
+		_ = binary.Write(&out, le, uint32(len(frames[i])))
 		_ = binary.Write(&out, le, uint32(offset))
-		offset += len(pngs[i])
+		offset += len(frames[i])
 	}
-	for _, p := range pngs {
-		out.Write(p)
+	for _, f := range frames {
+		out.Write(f)
 	}
+
 	must(os.WriteFile(filepath.Join(dir, "tray.ico"), out.Bytes(), 0o644))
-	must(os.WriteFile(filepath.Join(dir, "icon.png"), pngs[len(pngs)-1], 0o644))
+	must(os.WriteFile(filepath.Join(dir, "icon.png"), png256, 0o644))
 }
 
 func must(err error) {

@@ -1,7 +1,7 @@
 # wsld Roadmap
 
-版本：0.5.1（git tag `v0.5.1`）  
-對應規格：[SPEC.md](SPEC.md)（**0.5.1 已交付**；Phase 0–4 基底已落地）
+版本：0.5.2（git tag `v0.5.2`）  
+對應規格：[SPEC.md](SPEC.md)（**0.5.2 已交付**；Phase 0–4 基底已落地）
 
 ## 總覽
 
@@ -11,11 +11,11 @@ Phase 1  Bootstrap 腳本可手動跑通         ✅
 Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
-Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.1**
+Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.2**
 Extra    延後能力（含首次 Setup）           ← 有需求再排
 Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
-0.5 = Phase 5 完成定義全過（見下方）；發行版號 **0.5.1**（`v0.5.1`）
+0.5 = Phase 5 完成定義全過（見下方）；發行版號 **0.5.2**（`v0.5.2`）
 之後 v2.0 = Phase 6
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -151,7 +151,7 @@ Extra ≠ 0.5／v2.0 完成條件
 - [x] 列高／格線與 side nav 間距打磨
 - [x] 相關 Go 測試＋Playwright 通過；實機抽樣驗收（切換 distro、unregister 確認、Remove running）
 
-**退出條件**：上列完成定義全勾；產品敘事標 **0.5.1** 已交付（git tag `v0.5.1`；`make build-win` 注入 GUI／CLI 版號）。
+**退出條件**：上列完成定義全勾；產品敘事標 **0.5.2** 已交付（git tag `v0.5.2`；`make build-win` 注入 GUI／CLI 版號）。
 
 > 曾列在 P5「延後」的項目改見下方 **Extra**；Compose 專案視圖已於基底完成，不進 Extra。
 

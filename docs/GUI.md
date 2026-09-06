@@ -45,7 +45,7 @@
 - **Header**：active distro 名稱（無 config 時顯示 wsld）＋ **有 border** 的 Open folder／Open terminal、連線徽章、啟動引擎。**不顯示** API endpoint（tcp）與 Settings（分別在 Machines Info／側欄 Settings）。
 - **Side nav**：Containers／Images／Volumes／Networks／Machines／**Settings**；`aria-current="page"`；存 localStorage。上下間距對齊左右間距。切換視圖關閉 Logs／Terminal／Info。
 - **Info drawer（右）**：Containers／Compose／Machines 詳情（見下表）。
-- **Footer**：左版本（`make build-*` 注入，對齊 git tag／預設 **0.5.1** → 顯示 `v0.5.1`）、右語言下拉（無邊框）。
+- **Footer**：左版本（`make build-*` 注入，對齊 git tag／預設 **0.5.2** → 顯示 `v0.5.2`）、右語言下拉（無邊框）。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
 
 ## 功能對照（SPEC §5.5／Roadmap 0.5）
@@ -100,7 +100,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.1 → 左下角 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.5.2 → 左下角 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -145,7 +145,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 
 ## 圖示與 Windows 資源
 
-- `cmd/wsld-gui/assets/gen_icon.go`（`go run`）產生 `tray.ico`（16/24/32/48/256）與 `icon.png`；Tray 與視窗共用同一圖示。
+- `cmd/wsld-gui/assets/gen_icon.go`（`go run`／`make icon`）產生 `tray.ico`（16/20/24/32/40/48/64/256；≤64 BMP、256 PNG）與 `icon.png`；Tray 與視窗共用同一圖示。
 - `cmd/wsld-gui/winres/winres.json` 以 [go-winres](https://github.com/tc-hib/go-winres) 產生 `rsrc_windows_amd64.syso`（圖示群組 ID 3 = Wails 的 `AppIconID`、Per-Monitor v2 DPI manifest、Common Controls v6、版本資源）。`make winres` 重新產生；`.syso` 已入版控，`go build` 會自動連結。
 
 ## 已知限制
