@@ -41,7 +41,7 @@
 
 ### 1.5 非目標（0.5）
 
-- WinUI、arm64 正式支援、npiperelay、自動更新、專用隔離 distro 旗標
+- WinUI（Phase 6）；arm64／npiperelay／自動更新／專用隔離 distro 旗標（Roadmap Extra）
 - Kubernetes、Compose 視覺 IDE
 - 以 `C:\` 為一等公民專案路徑
 - SSH／暴露 `0.0.0.0` 上的 Docker API
@@ -246,4 +246,4 @@ Phase 0–4 已於 2026-09-06 通過下列項目（Ubuntu-26.04 實機）。**0.
 
 - 0.5（Phase 5）定義／實作中：多 distro、Settings 側欄、Info／Remove／Machines 動作等（見 Roadmap）
 - v2 WinUI 與 Go core 整合方式、WinAppDriver／UIA（Phase 6 前）
-- 延後：arm64、專用隔離 distro 旗標、npiperelay、自動更新
+- Extra（見 Roadmap）：arm64、專用隔離 distro 旗標、npiperelay、自動更新

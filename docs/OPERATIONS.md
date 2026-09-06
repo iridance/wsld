@@ -76,12 +76,12 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 ## 已知限制（現行／0.5 目標）
 
-- **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64（arm64 延後）。
+- **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64（arm64 見 Roadmap Extra）。
 - **多 distro（0.5 目標）**：多 profile、單一 active；每 managed machine 自有 API 埠。基底階段仍為單一 distro config，實作前請見 Roadmap Phase 5。
 - **rootful dockerd**：容器以 root 執行 dockerd（bootstrap 有把使用者加入 `docker` 群組）。rootless 不在範圍。
-- **無 npiperelay（延後）**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
+- **無 npiperelay（Extra）**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
 - **GUI**：
   - 0.5 目標：Theme Light／Dark／System；Settings 在側欄；header 無 tcp 路徑。
   - 「登入時啟動 Tray」只起 Tray，不自動啟動引擎。
-- **自動更新（延後）**：無；以發布頁下載新版覆蓋。
+- **自動更新（Extra）**：無；以發布頁下載新版覆蓋。
 - **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。

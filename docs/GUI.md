@@ -152,4 +152,4 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 - Images 的「使用中」欄依 Docker `/images/json` 的 `Containers`；舊版 daemon 可能回 -1，顯示為「–」。
 - Machines「新增發行版」只執行 `wsl --install --no-launch`：首次進入 distro 建立使用者、以及 Docker bootstrap（`wsld init`）仍需使用者操作；0.5 以「設為目前」＋ init 納管。
 - Networks 為唯讀；建立／刪除網路請用 `docker network`。
-- npiperelay／自動更新／arm64：延後（見 Roadmap）。
+- npiperelay／自動更新／arm64：Roadmap Extra（不綁 0.5）。

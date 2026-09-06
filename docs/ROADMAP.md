@@ -12,10 +12,12 @@ Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
 Phase 5  0.5 主線：多 distro＋GUI 補完    ← 定義中／實作中
+Extra    延後能力（不綁 0.5／v2.0）         ← 有需求再排
 Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
 0.5 = Phase 5 完成定義全過（見下方）；不綁死語意化版號字串至實作波再定
 之後 v2.0 = Phase 6
+Extra ≠ 0.5／v2.0 完成條件
 ```
 
 ---
@@ -151,17 +153,24 @@ Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
 **退出條件**：上列完成定義全勾；產品敘事可標 0.5 已交付（語意化版號字串於實作波決定）。
 
-### 延後（不進 0.5 完成定義）
-
-- npiperelay（Windows named pipe ↔ 引擎）
-- 自動更新（`wsld`／`wsld-gui` 本體）
-- arm64 正式支援
-- 專用隔離 distro 旗標
-- ~~Compose 專案視圖~~ → 已於基底階段實作（列表分組、整組操作）
+> 曾列在 P5「延後」的項目改見下方 **Extra**；Compose 專案視圖已於基底完成，不進 Extra。
 
 ---
 
-## Phase 6 — WinUI（之後 v2.0）
+## Extra — 延後能力（不限版本）
+
+### 候選
+
+- [ ] npiperelay（Windows named pipe ↔ 引擎）
+- [ ] 自動更新（`wsld`／`wsld-gui` 本體）
+- [ ] arm64 正式支援
+- [ ] 專用隔離 distro 旗標
+
+**退出條件**：各項自訂；**不**阻擋 Phase 5／6 結案。
+
+---
+
+## Phase 6 — WinUI（預計 v2.0）
 
 - 見 SPEC §1.4；另訂 `docs/GUI-WINUI.md`
 
@@ -169,18 +178,23 @@ Phase 6  WinUI 3 GUI                       ← 之後 v2.0
 
 ## 優先序
 
-1. 碼在 WSL、引擎同 distro（rootful）  
-2. 本機 TCP（23750+，每 managed machine 一埠）  
-3. 0.5 = Phase 5；TDD + Playwright  
-4. 之後 v2.0 = WinUI  
-5. 只綁 127.0.0.1  
-6. GUI／CLI 共用 core  
+1. 碼在 WSL、引擎同 distro（rootful）
+2. 本機 TCP（23750+，每 managed machine 一埠）
+3. 0.5 = Phase 5；TDD + Playwright
+4. 之後 v2.0 = WinUI
+5. Extra 有需求再排（不擋主線）
+6. 只綁 127.0.0.1
+7. GUI／CLI 共用 core
 
 ## 里程碑
 
-| Phase | 版本角色 |
-|-------|----------|
-| 0 | 前置 |
-| 1–4 | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放） |
-| 5 | **0.5 主線** |
-| 6 | 之後 **v2.0** |
+
+| Phase | 版本角色                             |
+| ----- | -------------------------------- |
+| 0     | 前置                               |
+| 1–4   | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放）     |
+| 5     | **0.5 主線**                       |
+| Extra | 延後能力（npiperelay／自動更新／arm64／隔離旗標） |
+| 6     | 之後 **v2.0**                      |
+
+
