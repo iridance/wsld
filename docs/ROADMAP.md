@@ -13,10 +13,16 @@ Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
 Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.4**
 Extra    延後能力（含首次 Setup）           ← 有需求再排
-Phase 6  WinUI 3 GUI                       ← 之後 v2.0
+Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-WINUI.md
+  6a Rust core + CLI（並行 opt-in）
+  6b Rust 橋接 server + testhost
+  6c WinUI3 PoC spike（go/no-go 關卡）
+  6d WinUI3 殼 + 核心視圖
+  6e Machines/Settings/Terminal/Tray
+  6f Parity 驗證 + cutover（→ v2.0.0）
 
 0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨
-之後 v2.0 = Phase 6
+之後 v2.0 = Phase 6（6a–6f）
 Extra ≠ 0.5／v2.0 完成條件
 ```
 
@@ -195,9 +201,130 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ---
 
-## Phase 6 — WinUI（預計 v2.0）
+## Phase 6 — Rust core + WinUI3（預計 v2.0）
 
-- 見 SPEC §1.4；另訂 `docs/GUI-WINUI.md`
+對應規格：[SPEC.md](SPEC.md) §1.4／§7；完整架構設計：[GUI-WINUI.md](GUI-WINUI.md)。
+
+**已鎖定決策**：核心（取代 Go `internal/*`）與 CLI 改寫為 Rust；GUI 改寫為純 Rust（`windows-rs` 直寫 WinUI3/XAML，非 C#/.NET 殼）；核心與 GUI／CLI 間沿用現有本機 HTTP+WebSocket 橋接 API 模式；漸進式並行遷移（現有 Go/Wails 產品持續發布，新架構在旁邊長出來，功能與測試對等後才切換）。
+
+### Phase 6a — Rust core + CLI（並行、opt-in binary）
+
+**目標**：`wsld-core`＋`wsld-cli` 對齊現有 Go `internal/{lifecycle,dockerapi,wsl,config,doctor,i18n,procutil,host}`＋`internal/cli` 的行為，作為額外的 opt-in 二進位發布，不影響現行 Go 產品。
+
+#### 交付
+
+- Cargo workspace（`crates/wsld-core`、`crates/wsld-cli`）
+- `wsld-core`：lifecycle／dockerapi／wsl／config／doctor／i18n／procutil／host，逐一對應現有 Go package（見 GUI-WINUI.md §1.2）
+- `wsld-cli`：`clap` derive，子命令與退出碼（0–4）對齊現有 `wsld` CLI
+
+#### 完成定義
+
+- [ ] `cli`／`config`／`wsl`／`lifecycle`／`doctor`／`i18n` 現有 Go 測試逐一有對應且綠燈的 Rust 測試（checklist 逐套件核對，非只看數量）
+- [ ] Rust CLI 能讀寫現有 Go CLI 產生的 `%APPDATA%\wsld\config.toml`，兩者可在同一機器並行、不互相破壞
+- [ ] 實機（Ubuntu-26.04）跑通 `init`／`start`／`status`／`ps`／`logs`／`doctor`／`use`／`unmanage`／`unregister`，與現有 Go CLI 側寫同一份 config 不衝突
+
+**退出條件**：上列完成定義全過；可進入 6b。
+
+---
+
+### Phase 6b — Rust 橋接 server + testhost
+
+**目標**：`internal/gui/server.go`＋`resources.go`＋`fake.go`／`fakewsl.go` 對應的橋接 API，改寫成 `wsld-bridge`（共用型別）＋`wsld-bridge-server`（axum）＋`wsld-testhost`。
+
+#### 交付
+
+- `wsld-bridge`：REST／WS API 的 serde 型別（server 與未來 GUI client 共用）
+- `wsld-bridge-server`：axum router，對 `Backend` trait 泛型，路由與 `/__test/*` 對齊現有 `internal/gui`（見 GUI-WINUI.md §2）
+- `wsld-testhost`：Linux/CI 可跑，服務現有（未修改）`frontend/dist` + fake engine
+
+#### 完成定義
+
+- [ ] `internal/gui` 現有 30 個 server 測試對應的情境（路由形狀、錯誤碼、WS framing、fake engine 狀態轉換）在 `wsld-bridge-server` 有對應且綠燈的整合測試
+- [ ] 現有**未修改**的 TS 前端＋現有 10 個 Playwright spec 直接對新 Rust testhost 跑過並全過（證明橋接層行為對等，零 UI 風險）
+
+**退出條件**：上列完成定義全過；可進入 6c。
+
+---
+
+### Phase 6c — WinUI3 proof-of-concept（time-boxed spike，go/no-go 關卡）
+
+**目標**：在投入 6d／6e 工程量之前，驗證純 Rust（`windows-rs`）寫 WinUI3 的可行性。
+
+#### 交付
+
+- 最小 WinUI3 視窗（`windows-rs` + Windows App SDK bootstrap、一個 XAML 頁面、一個按鈕）
+- Tray icon（`Shell_NotifyIcon`）與 XAML `DispatcherQueue` 共存於同一行程的 spike
+- 背景 tokio runtime（跑 axum 橋接 server）與 UI thread 的 threading 方案 spike（見 GUI-WINUI.md §6.2 預設方案）
+- 封裝模式決定：MSIX vs unpackaged
+
+#### 完成定義
+
+- [ ] 證明（或否證）XAML dispatcher、tray 訊息泵、tokio runtime 三者可在同一行程穩定共存，不死鎖
+- [ ] 手寫 `.xaml` 檔透過 WinRT XAML loader 載入可行（若不可行，記錄改用程式碼建構 UI 的替代方案）
+- [ ] 封裝模式（MSIX／unpackaged）定案
+
+**退出條件（go/no-go）**：可行 → 進入 6d。**不可行**（在合理工作量內無法解決 threading/工具鏈問題）→ 中止純 Rust GUI 路線，改為 C#/.NET 殼＋Rust core FFI／sidecar，回頭修訂本文件與 GUI-WINUI.md 後再重新排 6d 起的階段。
+
+---
+
+### Phase 6d — WinUI3 殼 + 核心視圖
+
+**目標**：原生 XAML 版面骨架（header／side nav／main／info drawer／footer）＋ Containers／Images／Volumes／Networks 四個視圖。
+
+#### 交付
+
+- WinUI3 殼：header／side nav／main／info drawer／footer，對應 [GUI.md](GUI.md) 版面
+- Containers／Images／Volumes／Networks：列表＋列操作＋info drawer，透過 `wsld-bridge` 型別呼叫內嵌 server
+
+#### 完成定義
+
+- [ ] 上述四視圖功能對齊 [GUI.md](GUI.md) 功能對照表對應項目
+- [ ] 手動 smoke test checklist（比照 GUI.md「實機（Windows）手測項目」）通過
+- [ ] 6b 的橋接 contract test 仍全過（API 未變，只是新增了一個 client）
+
+**退出條件**：上列完成定義全過；可進入 6e。
+
+---
+
+### Phase 6e — Machines／Settings／Terminal／Tray／Autostart
+
+**目標**：剩餘 Windows 整合較重的部分。
+
+#### 交付
+
+- Machines 視圖（設為目前／folder／terminal／Info／unmanage／unregister／Add distro）
+- Settings 視圖（refresh／exec_shell／tray_autostart／Theme）
+- Logs／Exec 面板的終端 widget（子 spike：`vte`／`alacritty_terminal` parser 驅動自訂 XAML 控制項，無現成範例）
+- Tray（`Shell_NotifyIcon`）、single-instance mutex、autostart 登錄檔
+
+#### 完成定義
+
+- [ ] 全部視圖功能對齊 [GUI.md](GUI.md) 完整功能表
+- [ ] 終端 widget 可用（Logs tail／live、Exec 互動）
+- [ ] i18n（EN／zh-TW）對齊 `wsld-core::i18n`
+- [ ] 手動 smoke test checklist 通過
+
+**退出條件**：上列完成定義全過；可進入 6f。
+
+---
+
+### Phase 6f — Parity 驗證 + cutover
+
+**目標**：確認 Rust/WinUI3 build 與現行 Go/Wails 產品功能與測試對等，決定並執行切換。
+
+#### 交付
+
+- 逐套件 Go 測試 → Rust 測試對應 checklist（100% 覆蓋確認）
+- 逐 Playwright spec 行為斷言 → 橋接 contract test 或手動 smoke test 對應 checklist
+- SPEC §6 驗收清單在 Rust/WinUI3 build 上重跑一次（實機）
+
+#### 完成定義
+
+- [ ] 上述三項 checklist 全過
+- [ ] 版號跳至 **v2.0.0**；沿用既有發行管道（`.github/workflows/release.yml`）與檔名（`dist/wsld.exe`／`dist/wsld-gui.exe`）
+- [ ] Go/Wails 版進入至少一個發行週期的 deprecation 通知（README／Roadmap 標註），觀察無迴歸後才移除 `cmd/`／`internal/`／`frontend/` 舊碼
+
+**退出條件**：上列完成定義全過；v2.0.0 發布，Phase 6 結案。
 
 ---
 
@@ -206,7 +333,7 @@ Extra ≠ 0.5／v2.0 完成條件
 1. 碼在 WSL、引擎同 distro（rootful）
 2. 本機 TCP（23750+，每 managed machine 一埠）
 3. 0.5 = Phase 5；TDD + Playwright
-4. 之後 v2.0 = WinUI
+4. 之後 v2.0 = Rust core + WinUI3（Phase 6a–6f）
 5. Extra 有需求再排（不擋主線；含 Setup／npiperelay 等）
 6. 只綁 127.0.0.1
 7. GUI／CLI 共用 core
@@ -220,6 +347,9 @@ Extra ≠ 0.5／v2.0 完成條件
 | 1–4   | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放） |
 | 5     | **0.5 主線** |
 | Extra | Setup 一鍵、npiperelay、自動更新、arm64、隔離旗標 |
-| 6     | 之後 **v2.0** |
+| 6a–6b | Rust core／CLI／橋接 server 並行開發（不影響現行發布） |
+| 6c    | go/no-go 關卡：純 Rust WinUI3（`windows-rs`）可行性 |
+| 6d–6e | WinUI3 殼與功能對等 |
+| 6f    | Parity 驗證＋cutover → 之後 **v2.0.0** |
 
 

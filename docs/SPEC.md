@@ -36,8 +36,11 @@
 
 ### 1.4 之後（v2.0）目標
 
-- **WinUI 3** UI（Roadmap Phase 6）
+- 核心（取代 Go `internal/*`）與 GUI 皆改寫為**純 Rust**；**WinUI 3** UI 透過 `windows-rs` 的 WinRT 投影直接寫（非 C#/.NET 殼）（Roadmap Phase 6a–6f）
+- 核心與 GUI／CLI 之間沿用現有的本機 HTTP+WebSocket 橋接 API 模式（不改為 in-process FFI）
+- 遷移採漸進式並行：現有 Go/Wails 產品持續發布，新架構在同一 repo 旁邊長出來，功能與測試對等後才切換
 - 功能至少對齊當時 GUI；與同一引擎／CLI 行為一致
+- 完整設計見 [GUI-WINUI.md](GUI-WINUI.md)
 
 ### 1.5 非目標（0.5）
 
@@ -250,5 +253,7 @@ Phase 0–4 已於 2026-09-06 通過下列項目（Ubuntu-26.04 實機）。**0.
 
 ## 7. 仍開放／延後
 
-- v2 WinUI 與 Go core 整合方式、WinAppDriver／UIA（Phase 6 前）
+- ~~v2 WinUI 與 Go core 整合方式~~：已定案——v2 為 Rust core（取代 Go internal）＋ WinUI3（純 Rust／`windows-rs`）；整合方式沿用 HTTP+WS 橋接。見 [GUI-WINUI.md](GUI-WINUI.md)。
+- ~~WinAppDriver／UIA（Phase 6 前）~~：已定案——不採 WinAppDriver/UIA；改採橋接 API contract test＋手動/腳本化 smoke test。見 [GUI-WINUI.md](GUI-WINUI.md) §3。如日後手測不敷使用可重新評估。
+- 新開放項（見 [GUI-WINUI.md](GUI-WINUI.md) §6）：WinUI3 封裝模式（MSIX vs unpackaged）、Phase 6c spike 的 go/no-go 結果（純 Rust `windows-rs` 可行性，否則退回 C#/.NET 殼＋Rust core FFI）
 - Extra（見 Roadmap）：**Setup 應用**（一鍵啟用 WSL → 重開接續 init）、arm64、專用隔離 distro 旗標、npiperelay、自動更新
