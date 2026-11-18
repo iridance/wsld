@@ -3,6 +3,7 @@ import {
   ApiError,
   type Container,
   type Image,
+  type InstallProgress,
   type MachinesResponse,
   type Meta,
   type Network,
@@ -1778,6 +1779,7 @@ export class App {
       spellcheck: "false",
     }) as HTMLInputElement;
     const err = el("div", { class: "field-error", "data-testid": "add-machine-error", hidden: "" });
+    const progress = installProgressBlock();
     const install = btn({ class: "primary", type: "submit", "data-testid": "add-machine-install" }, "plus", t("gui.machines.install"));
     const cancel = btn({ type: "button", "data-testid": "add-machine-cancel" }, "close", t("gui.cancel"));
     const syncInstallEnabled = () => {
@@ -1800,6 +1802,7 @@ export class App {
       { method: "dialog", class: "add-machine-form" },
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.select") }), selectField(sel)),
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.name") }), textField(name)),
+      progress,
       err,
       el("div", { class: "row" }, cancel, install),
     );
@@ -1817,6 +1820,20 @@ export class App {
       err.hidden = true;
       this.st.busy.add("install");
       this.renderViewBody();
+      // wsl.exe 在 pipe 下不輸出進度：輪詢後端觀察到的下載量
+      let polling = true;
+      updateInstallProgress(progress, { active: true, phase: "preparing", downloaded: 0, total: 0, bytes_per_sec: 0, elapsed_sec: 0 });
+      progress.hidden = false;
+      const poll = async () => {
+        try {
+          const p = await api.installProgress();
+          if (polling && p.active) updateInstallProgress(progress, p);
+        } catch {
+          /* 進度僅供參考，失敗不影響安裝 */
+        }
+      };
+      void poll();
+      const timer = window.setInterval(poll, 1000);
       try {
         await api.installMachine(dist, nm);
         d.close();
@@ -1826,6 +1843,9 @@ export class App {
         err.textContent = e instanceof ApiError ? e.message : String(e);
         err.hidden = false;
       } finally {
+        polling = false;
+        window.clearInterval(timer);
+        progress.hidden = true;
         this.st.busy.delete("install");
         cancel.disabled = false;
         sel.disabled = false;
@@ -2085,6 +2105,51 @@ function formatCPU(pct: number): string {
 function formatMem(used: number, total: number): string {
   const pct = memPct(used, total);
   return `${used}/${total} MB (${Number.isInteger(pct) ? pct : pct.toFixed(1)}%)`;
+}
+
+/** 新增機器對話框的下載進度區塊（沿用 usage-meter 的 track／fill 樣式）。 */
+function installProgressBlock(): HTMLElement {
+  const fill = el("div", { class: "usage-fill" });
+  fill.style.width = "0%";
+  return el(
+    "div",
+    { class: "install-progress", "data-testid": "add-machine-progress", role: "status", "aria-live": "polite", hidden: "" },
+    el("div", { class: "usage-head" },
+      el("span", { class: "usage-label", "data-testid": "add-machine-progress-label" }),
+      el("span", { class: "usage-value", "data-testid": "add-machine-progress-pct" }),
+    ),
+    el("div", { class: "usage-track" }, fill),
+    el("div", { class: "install-progress-detail", "data-testid": "add-machine-progress-detail" }),
+  );
+}
+
+function updateInstallProgress(block: HTMLElement, p: InstallProgress): void {
+  const phase = p.phase ?? "installing";
+  const known = phase === "downloading" && p.total > 0;
+  const pct = known ? clampPct(Math.floor((p.downloaded / p.total) * 100)) : phase === "installing" && p.total > 0 ? 100 : 0;
+  block.setAttribute("data-phase", phase);
+  block.setAttribute("data-pct", String(pct));
+  if (known) block.removeAttribute("data-indeterminate");
+  else block.setAttribute("data-indeterminate", "true");
+  block.querySelector<HTMLElement>(".usage-fill")!.style.width = `${pct}%`;
+  block.querySelector<HTMLElement>('[data-testid="add-machine-progress-label"]')!.textContent = t(`gui.machines.progress_${phase}`);
+  block.querySelector<HTMLElement>('[data-testid="add-machine-progress-pct"]')!.textContent = known ? `${pct}%` : "";
+  const parts: string[] = [];
+  if (phase === "downloading" && p.downloaded > 0) {
+    parts.push(p.total > 0 ? `${humanSize(p.downloaded)} / ${humanSize(p.total)}` : humanSize(p.downloaded));
+    if (p.bytes_per_sec > 0) parts.push(`${humanSize(p.bytes_per_sec)}/s`);
+  }
+  parts.push(fmt(t("gui.machines.progress_elapsed"), fmtElapsed(p.elapsed_sec)));
+  block.querySelector<HTMLElement>('[data-testid="add-machine-progress-detail"]')!.textContent = parts.join(" · ");
+}
+
+/** 秒數 → m:ss（滿一小時 → h:mm:ss）。 */
+function fmtElapsed(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
 function usageMeter(label: string, valueText: string, pct: number, testId: string): HTMLElement {

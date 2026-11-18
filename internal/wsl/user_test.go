@@ -34,8 +34,8 @@ func TestEnsureUserCreatesWhenMissing(t *testing.T) {
 	fr := &fakeRunner{out: map[string]result{
 		"-d Debian1 -u root -- id -u irice":                   {err: errors.New("no such user")},
 		"-d Debian1 -u root -- useradd -m -s /bin/bash irice": {},
-		"-d Debian1 -u root -- usermod -aG sudo irice":         {err: errors.New("no sudo")},
-		"-d Debian1 -u root -- usermod -aG wheel irice":        {err: errors.New("no wheel")},
+		"-d Debian1 -u root -- usermod -aG sudo irice":        {err: errors.New("no sudo")},
+		"-d Debian1 -u root -- usermod -aG wheel irice":       {err: errors.New("no wheel")},
 	}}
 	if err := EnsureUser(context.Background(), fr, "Debian1", "irice"); err != nil {
 		t.Fatal(err)

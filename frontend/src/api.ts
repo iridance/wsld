@@ -100,6 +100,18 @@ export interface OnlineDistro {
   friendly: string;
 }
 
+/** GET /api/machines/install/progress：新增機器（wsl --install）的進度。total=0 表示總大小未知。 */
+export interface InstallProgress {
+  active: boolean;
+  distribution?: string;
+  name?: string;
+  phase?: "preparing" | "downloading" | "installing";
+  downloaded: number;
+  total: number;
+  bytes_per_sec: number;
+  elapsed_sec: number;
+}
+
 export interface Status {
   Distro: string;
   DistroFound: boolean;
@@ -212,6 +224,7 @@ export const api = {
   machines: (signal?: AbortSignal) => call<MachinesResponse>("GET", "/api/machines", undefined, false, signal),
   machineConfig: (name: string) => call<MachineConfig>("GET", `/api/machines/${encodeURIComponent(name)}/config`),
   machinesOnline: () => call<OnlineDistro[]>("GET", "/api/machines/online"),
+  installProgress: () => call<InstallProgress>("GET", "/api/machines/install/progress"),
   installMachine: (distribution: string, name: string) =>
     call<{ ok: boolean; name: string; distribution: string }>("POST", "/api/machines/install", { distribution, name }),
   useMachine: (name: string) => call<{ active: string; ready: boolean }>("POST", `/api/machines/${encodeURIComponent(name)}/use`),

@@ -75,7 +75,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 - GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
 - **0.5**：可「設為目前」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
-- 「新增發行版」執行 `wsl --install -d <name> --no-launch`。安裝完成後：
+- 「新增機器」執行 `wsl --install -d <name> --no-launch`。安裝完成後：
   1. `wsl -d <name>` 進入一次，依提示建立預設使用者；
   2. 設為目前（會自動 bootstrap／寫入該 machine 的 user＋endpoint 並啟動引擎）。
 

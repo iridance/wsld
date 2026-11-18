@@ -122,7 +122,7 @@ func newHarness(t *testing.T, withConfig bool) *harness {
 		"-d Ubuntu-26.04 -- cat /etc/docker/daemon.json":                        `{"hosts":["unix:///var/run/docker.sock","tcp://127.0.0.1:23750"]}`,
 		"-d Ubuntu-26.04 -- loginctl show-user irice --property=Linger --value": "yes\n",
 		"-d Ubuntu-26.04 -- id -un":                                             "irice\n",
-		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750":       "WSLD_API_PORT=23750\n",
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": "WSLD_API_PORT=23750\n",
 	}, errs: map[string]error{}}
 	cfgPath := filepath.Join(h.cfgDir, "config.toml")
 	if withConfig {

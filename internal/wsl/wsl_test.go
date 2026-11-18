@@ -170,8 +170,8 @@ func TestParseOnline(t *testing.T) {
 
 func TestListOnlineAndInstall(t *testing.T) {
 	r := &fakeRunner{out: map[string]result{
-		"--list --online":                              {stdout: "NAME    FRIENDLY NAME\r\nDebian  Debian GNU/Linux\r\n"},
-		"--install -d Debian --no-launch":              {stdout: "Installing: Debian\r\n"},
+		"--list --online":                                {stdout: "NAME    FRIENDLY NAME\r\nDebian  Debian GNU/Linux\r\n"},
+		"--install -d Debian --no-launch":                {stdout: "Installing: Debian\r\n"},
 		"--install -d Debian --name Debian1 --no-launch": {stdout: "Installing: Debian as Debian1\r\n"},
 	}}
 	got, err := ListOnline(context.Background(), r)

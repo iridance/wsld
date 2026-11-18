@@ -109,8 +109,9 @@ func main() {
 		OnOpenURL:      app.onOpenURL,
 		Shell:          gui.HostDistroShell{},
 		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
-		NewEngine: func(c config.Config) gui.Engine { return dockerClient(c) },
-		NewLifecycle: func(c config.Config) gui.Lifecycle { return newMgr(c) },
+		NewEngine:      func(c config.Config) gui.Engine { return dockerClient(c) },
+		NewLifecycle:   func(c config.Config) gui.Lifecycle { return newMgr(c) },
+		InstallProbe:   gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {

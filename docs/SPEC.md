@@ -1,8 +1,8 @@
 # wsld 產品規格（SPEC）
 
-版本：0.8.0（git tag `v0.8.0`）  
-狀態：**0.8.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
-最後更新：2026-09-06
+版本：0.8.1（git tag `v0.8.1`）  
+狀態：**0.8.1 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+最後更新：2026-11-19
 
 ## 1. 問題與目標
 
@@ -208,7 +208,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Images | 列表、移除、清除未使用；使用中不強制刪 |
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
-| Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增發行版 |
+| Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
 | Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System） |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |

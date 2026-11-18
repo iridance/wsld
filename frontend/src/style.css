@@ -362,6 +362,14 @@ pre.conf {
 }
 .field-error { color: var(--bad); font-size: 12px; }
 .field-error[hidden] { display: none; }
+.install-progress { display: grid; gap: 6px; }
+.install-progress[hidden] { display: none; }
+.install-progress-detail { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.install-progress[data-indeterminate="true"] .usage-fill { width: 30% !important; animation: install-indeterminate 1.4s ease-in-out infinite; }
+@keyframes install-indeterminate { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) {
+  .install-progress[data-indeterminate="true"] .usage-fill { animation: none; width: 100% !important; opacity: .45; }
+}
 
 /* ---- 輸入元件（設計稿「Input controls」）：全部自繪，不用瀏覽器預設外觀 -------------- */
 /* 文字欄位外框 .tf：34px、圓角 6、底邊較深；焦點＝藍色底線，錯誤＝紅色底線 */

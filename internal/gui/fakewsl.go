@@ -20,6 +20,8 @@ type FakeWSL struct {
 	online      []wsl.OnlineDistro
 	installed   []string
 	FailInstall bool
+	// InstallHold 非 nil 時 --install 會等到 channel 關閉（測試進行中狀態）。
+	InstallHold chan struct{}
 	procStatN   map[string]int // distro → /proc/stat 讀取次數（交替兩組假資料）
 }
 
@@ -59,7 +61,19 @@ func (f *FakeWSL) Installed() []string {
 }
 
 // Run 實作 wsl.Runner。輸出以 UTF-8 回傳（DecodeOutput 可直接處理）。
-func (f *FakeWSL) Run(_ context.Context, _ io.Reader, args ...string) ([]byte, []byte, error) {
+func (f *FakeWSL) Run(ctx context.Context, _ io.Reader, args ...string) ([]byte, []byte, error) {
+	if len(args) > 0 && args[0] == "--install" {
+		f.mu.Lock()
+		hold := f.InstallHold
+		f.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	joined := strings.Join(args, " ")

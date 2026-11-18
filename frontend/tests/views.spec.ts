@@ -231,7 +231,7 @@ test("Machines: Info opens a right-side drawer with wsl.conf and usage bars", as
   await expect(page.getByTestId("info-cpu-bar")).toHaveAttribute("data-pct", "0");
 });
 
-test("Machines: Add distro lists online distributions and installs the chosen one", async ({ page, request }) => {
+test("Machines: Add machine lists online distributions and installs the chosen one", async ({ page, request }) => {
   await go(page, "machines");
   await page.getByTestId("btn-add-machine").click();
   const dlg = page.getByTestId("add-machine-dialog");
@@ -256,7 +256,7 @@ test("Machines: Add distro lists online distributions and installs the chosen on
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
 });
 
-test("Machines: Add distro disables Cancel while installing", async ({ page }) => {
+test("Machines: Add machine disables Cancel while installing", async ({ page }) => {
   await go(page, "machines");
   await page.getByTestId("btn-add-machine").click();
   const dlg = page.getByTestId("add-machine-dialog");
@@ -278,6 +278,61 @@ test("Machines: Add distro disables Cancel while installing", async ({ page }) =
   release();
   await done;
   await expect(dlg).toBeHidden();
+});
+
+test("Machines: Add machine shows download progress while installing", async ({ page }) => {
+  await go(page, "machines");
+  await expect(page.getByTestId("btn-add-machine")).toContainText(/Add machine|新增機器/);
+  await page.getByTestId("btn-add-machine").click();
+  const dlg = page.getByTestId("add-machine-dialog");
+  await expect(dlg.locator("h2")).toHaveText(/Add machine|新增機器/);
+  await dlg.getByTestId("add-machine-select").selectOption("Ubuntu");
+  const progress = dlg.getByTestId("add-machine-progress");
+  await expect(progress).toBeHidden();
+
+  let snap: Record<string, unknown> = { active: true, distribution: "Ubuntu", name: "Ubuntu", phase: "preparing", downloaded: 0, total: 0, bytes_per_sec: 0, elapsed_sec: 3 };
+  await page.route("**/api/machines/install/progress", (route) => route.fulfill({ json: snap }));
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route("**/api/machines/install", async (route) => {
+    await gate;
+    await route.continue();
+  });
+
+  const done = dlg.getByTestId("add-machine-install").click();
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute("data-phase", "preparing");
+  await expect(progress).toHaveAttribute("data-indeterminate", "true");
+  await expect(dlg.getByTestId("add-machine-progress-detail")).toContainText("0:03");
+
+  // 已知總大小：百分比、已下載／總量、速度、經過時間
+  snap = { ...snap, phase: "downloading", downloaded: 90 * 1024 * 1024, total: 180 * 1024 * 1024, bytes_per_sec: 240 * 1024, elapsed_sec: 75 };
+  await expect(progress).toHaveAttribute("data-phase", "downloading");
+  await expect(progress).toHaveAttribute("data-pct", "50");
+  await expect(progress).not.toHaveAttribute("data-indeterminate", "true");
+  const detail = dlg.getByTestId("add-machine-progress-detail");
+  await expect(detail).toContainText("90.0 MB / 180.0 MB");
+  await expect(detail).toContainText("240.0 KB/s");
+  await expect(detail).toContainText("1:15");
+
+  // 總大小未知：不定進度，仍顯示已下載量
+  snap = { ...snap, total: 0 };
+  await expect(progress).toHaveAttribute("data-indeterminate", "true");
+  await expect(detail).toContainText("90.0 MB");
+  await expect(detail).not.toContainText("/ 180.0 MB");
+
+  snap = { ...snap, phase: "installing", downloaded: 180 * 1024 * 1024, total: 180 * 1024 * 1024, elapsed_sec: 130 };
+  await expect(progress).toHaveAttribute("data-phase", "installing");
+  await expect(dlg.getByTestId("add-machine-progress-label")).toHaveText(/Registering|註冊/);
+
+  release();
+  await done;
+  await expect(dlg).toBeHidden();
+  // 下次開啟對話框時進度區塊應已重置
+  await page.getByTestId("btn-add-machine").click();
+  await expect(dlg.getByTestId("add-machine-progress")).toBeHidden();
 });
 
 test("Machines: Remove distro uses trash icon, requires typing the name, and unregisters the WSL distro", async ({ page }) => {

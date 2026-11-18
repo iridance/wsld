@@ -290,6 +290,12 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
 		return
 	}
+	done, ok := s.trackInstall(r.Context(), dist, local)
+	if !ok {
+		writeErr(w, http.StatusConflict, "conflict", errors.New("another distro install is in progress"))
+		return
+	}
+	defer done()
 	if err := wsl.Install(r.Context(), s.WSL, dist, local); err != nil {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return

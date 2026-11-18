@@ -85,11 +85,16 @@ type Server struct {
 	NewLifecycle func(cfg config.Config) Lifecycle
 	// OnActiveChange 於 active 變更後額外通知（例如 Tray 重繪）。
 	OnActiveChange func(cfg config.Config)
+	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
+	InstallProbe InstallProbe
 
 	startMu   sync.Mutex
 	starting  bool
 	lastStart *lifecycle.Status
 	engineMu  sync.RWMutex
+
+	installOnce sync.Once
+	install     *installTracker
 }
 
 // NewToken 產生隨機 bearer token。
@@ -126,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/machines/online", s.handleMachinesOnline)
 	mux.HandleFunc("GET /api/machines/{name}/config", s.handleMachineConfig)
 	mux.HandleFunc("POST /api/machines/install", s.handleMachineInstall)
+	mux.HandleFunc("GET /api/machines/install/progress", s.handleInstallProgress)
 	mux.HandleFunc("POST /api/machines/{name}/use", s.handleMachineUse)
 	mux.HandleFunc("POST /api/machines/{name}/unmanage", s.handleMachineUnmanage)
 	mux.HandleFunc("POST /api/machines/{name}/unregister", s.handleMachineUnregister)
@@ -438,6 +444,7 @@ func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 	}
 	return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.active_not_ready", am.Distro, am.Distro))
 }
+
 // nextMachineEndpoint 選一個尚未被其他 machine 占用的 loopback 埠（測試／占位補齊用）。
 func nextMachineEndpoint(cfg config.Config) string {
 	return config.EndpointForPort(cfg.NextAPIPort(""))

@@ -206,8 +206,8 @@ func TestStartFailsAPIWhenPingNeverSucceeds(t *testing.T) {
 
 func TestStartBootstrapsWhenDockerUnitMissing(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16(listUbuntuRunning)}},
-		"-d Ubuntu-26.04 -- true": {{}},
+		"--list --verbose":                               {{out: utf16(listUbuntuRunning)}},
+		"-d Ubuntu-26.04 -- true":                        {{}},
 		"-d Ubuntu-26.04 -- systemctl is-system-running": {{out: "running\n"}},
 		"-d Ubuntu-26.04 -- systemctl is-active docker": {
 			{out: "inactive\n", err: &wsl.ExitError{Code: 3}},
@@ -239,8 +239,8 @@ func TestStartBootstrapsWhenDockerUnitMissing(t *testing.T) {
 
 func TestStartDoesNotBootstrapWhenUnitPresentButInactive(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16(listUbuntuRunning)}},
-		"-d Ubuntu-26.04 -- true": {{}},
+		"--list --verbose":                               {{out: utf16(listUbuntuRunning)}},
+		"-d Ubuntu-26.04 -- true":                        {{}},
 		"-d Ubuntu-26.04 -- systemctl is-system-running": {{out: "running\n"}},
 		"-d Ubuntu-26.04 -- systemctl is-active docker": {
 			{out: "inactive\n", err: &wsl.ExitError{Code: 3}},
@@ -294,7 +294,7 @@ func TestInitPicksUbuntuDetectsUserRunsBundleAndParsesPort(t *testing.T) {
 
 func TestInitPassesBusyPortsFromOtherMachines(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  Debian1 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
+		"--list --verbose":     {{out: utf16("  NAME STATE VERSION\r\n  Debian1 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
 		"-d Debian1 -- id -un": {{out: "bob\n"}},
 		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23751 --busy-ports 23750": {{out: "WSLD_API_PORT=23752\n"}},
 	}}
@@ -316,7 +316,7 @@ func TestInitPassesBusyPortsFromOtherMachines(t *testing.T) {
 
 func TestInitHonoursExplicitDistroUserPort(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  Ubuntu-22.04 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
+		"--list --verbose":                     {{out: utf16("  NAME STATE VERSION\r\n  Ubuntu-22.04 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
 		"-d Ubuntu-22.04 -u root -- id -u bob": {{out: "1000\n"}},
 		"-d Ubuntu-22.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000": {{out: "WSLD_API_PORT=24000\n"}},
 	}}
@@ -336,12 +336,12 @@ func TestInitCreatesUserWhenDefaultIsRoot(t *testing.T) {
 	defer func() { wsl.CurrentUsername = old }()
 
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n* Debian1 Stopped 2\r\n")}},
-		"-d Debian1 -- id -un": {{out: "root\n"}},
-		"-d Debian1 -u root -- id -u irice": {{err: errors.New("no such user")}},
+		"--list --verbose":                                    {{out: utf16("  NAME STATE VERSION\r\n* Debian1 Stopped 2\r\n")}},
+		"-d Debian1 -- id -un":                                {{out: "root\n"}},
+		"-d Debian1 -u root -- id -u irice":                   {{err: errors.New("no such user")}},
 		"-d Debian1 -u root -- useradd -m -s /bin/bash irice": {{}},
-		"-d Debian1 -u root -- usermod -aG sudo irice":         {{}},
-		"-d Debian1 -u root -- usermod -aG wheel irice":        {{err: errors.New("no wheel")}},
+		"-d Debian1 -u root -- usermod -aG sudo irice":        {{}},
+		"-d Debian1 -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
 		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
 	}}
 	var out bytes.Buffer
