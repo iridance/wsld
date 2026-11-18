@@ -41,11 +41,11 @@ async function luminances(loc: Locator): Promise<{ bg: number; fg: number }> {
   });
 }
 
-test("dark theme: shell surfaces (header, side nav, distro card, settings) stay dark with light text", async ({ page }) => {
+test("dark theme: shell surfaces (top bar, distro chip, settings) stay dark with light text", async ({ page }) => {
   await open(page);
   await setTheme(page, "dark");
 
-  for (const id of ["header", "side-nav", "distro-switch", "view-settings"] as const) {
+  for (const id of ["header", "distro-switch", "view-settings"] as const) {
     const lum = await luminances(page.getByTestId(id));
     expect(lum.bg, id).toBeLessThan(0.35);
     expect(lum.fg, id).toBeGreaterThan(0.45);

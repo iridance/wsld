@@ -27,29 +27,27 @@
 ## 版面
 
 ```
-┌ side nav ───────┬ header ─ <頁標題> <摘要> ········· [📁] [>_] [⏻ Start engine*] ┐
-│ ▦ wsld  v…      ├──────────────────────────────────────────┬─────────────────┤
-│ ┌─────────────┐ │ toolbar（搜尋／篩選／prune／Add）          │ info drawer（右）│
-│ │● Ubuntu     │ │ main（目前視圖，卡片底）                   │ 容器／compose／  │
-│ │ Connected   │ │  Containers：列表＋下方 Logs│Terminal 分頁 │ machine 詳情     │
-│ └─────────────┘ │  Images：磁碟用量＋篩選＋列表               │                 │
-│ 資源             │  Volumes／Networks：列表                   │                 │
-│  Containers…    │  Machines：卡片；Settings：分組卡片          │                 │
-│ 系統             │                                            │                 │
-│  Machines       │ ┌ InfoBar（錯誤紅／未就緒黃／結果綠，浮在底部）┐ │                 │
-│  Settings       │ └──────────────────────────────────────────┘ │                 │
-│ ⌂  English ▾    │                                            │                 │
-└─────────────────┴──────────────────────────────────────────┴─────────────────┘
+┌ top bar ────────────────────────────────────────────────────────────────────────────┐
+│ ▦ wsld v… │ ▣Containers ◈Images ⛁Volumes ⚇Networks │ ▭Machines ··· [● Ubuntu · Connected :2375] [⏻ Start engine*] │ [📁][>_] ⚙ │
+├──────────────────────────────────────────────────────────────┬──────────────────────┤
+│ <頁標題> <摘要> ·························· 工具列（搜尋／篩選／prune／Add／Save） │ info drawer（右）    │
+│ （Images：磁碟用量卡片獨佔一列）                                 │ 容器／compose／      │
+│ main（滿寬，卡片底）                                            │ machine 詳情         │
+│  Containers：列表＋下方 Logs│Terminal 分頁                     │                      │
+│  Machines：卡片；Settings：分組卡片（含語言、GitHub）              │                      │
+│ ┌ InfoBar（錯誤紅／未就緒黃／結果綠，浮在底部）┐                  │                      │
+└──────────────────────────────────────────────────────────────┴──────────────────────┘
 ```
 
 外觀依設計稿（Fluent 語彙：圓角 6–8、Mica 底、單一藍色強調色）；色彩 tokens 在 `frontend/src/style.css` 的 `:root`／深色區塊，文字在其底色上 ≥ 4.5:1。狀態一律「形狀＋文字＋顏色」：實心點＝執行中、空心環＝停止、脈動＝處理中。
 
-- **Side nav（滿高）**：品牌標誌（全方格鯨魚，與 `gen_icon.go` 同一張 16 格主格線）＋版本；**發行版卡片**（active distro、引擎狀態點與文字 `status-connection`、已連線時顯示 API 埠；點擊前往 Machines；切換中顯示 Loading）；「資源」Containers／Images／Volumes／Networks、「系統」Machines；底部 Settings、GitHub 圖示、語言下拉（無邊框）。`aria-current="page"`；存 localStorage。切換視圖關閉 Logs／Terminal／Info。
-- **Header**：目前視圖標題＋摘要（Containers：執行中／已停止數；資源頁：項目數，映像含總大小）＋ **有 border** 的 Open folder／Open terminal；**Start engine 只在需要時出現**（未連線、未 init）。**不顯示** API endpoint（tcp）與 Settings。
+- **Top bar（滿寬，0.8 起取代側欄）**：品牌標誌（全方格鯨魚，與 `gen_icon.go` 同一張 16 格主格線）＋版本；**視圖分頁** Containers／Images／Volumes／Networks｜Machines（目前分頁底部藍色指示條、`aria-current="page"`；視窗 < 1100px 時只剩圖示，名稱留在 `title`／文字內容）；右側**發行版晶片**（active distro、引擎狀態點與文字 `status-connection`、已連線時顯示 API 埠；點擊前往 Machines；切換中顯示 Loading）、**需要時才出現**的 Start engine、**有 border** 的 Open folder／Open terminal、Settings 齒輪。視圖存 localStorage；切換視圖關閉 Logs／Terminal／Info。**不顯示** API endpoint（tcp）。
+- **頁標題列**：內容區頂端，目前視圖標題＋摘要（Containers：執行中／已停止數；資源頁：項目數，映像含總大小）與該頁工具列同一列（工具列靠右，窄時換行），省下獨立 header 的高度。
 - **Containers**：工具列搜尋（名稱／映像／compose 服務）＋狀態分段篩選（全部／執行中／已停止，附數量）；名稱下方顯示 docker 狀態描述；開啟 Info 時該列標示選取。Logs／Terminal 面板頂部有分頁可切換同一容器（已停止容器不能開終端）。
 - **Images**：磁碟用量長條（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋分段篩選＋清除未使用。
 - **Machines**：每個發行版一張卡片（狀態、WSL 版本、角色標籤、目前那台顯示 API 端點；設為目前、Info、資料夾、終端、刪除）。
-- **Settings**：「外觀」「行為」兩組 SettingsCard（左標題＋說明、右控制項）。
+- **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「關於」（版本、GitHub）三組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
+- **輸入元件**（設計稿「Input controls」）：全部自繪、不用瀏覽器預設外觀。文字欄位外框 `.tf`（34px、底邊較深；焦點＝藍色底線、錯誤＝紅色底線、停用＝灰底）；數字隱藏原生 spinner，改欄內 −／＋ 與單位，超出 min／max 標錯；下拉 `appearance:none`＋自繪箭頭；搜尋有清除鈕（Esc 亦可）；核取方塊／選項按鈕 18px 以 CSS 畫勾與點；開關 40×20、左側顯示開／關文字；輸入名稱確認在完全相符時顯示綠色勾。鍵盤焦點：小型控制項 2px 外框、文字欄位用底線。
 - **引擎未就緒**：資源列表改顯示「引擎尚未啟動」卡片：啟動引擎按鈕＋由 `/api/status` 推得的檢查清單（找到發行版、執行中、systemd、docker.service、API 可連線）。
 - **InfoBar**：錯誤／未就緒／動作結果浮在內容欄底部，不擠動列表；結果 8 秒後自動消失。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
@@ -59,8 +57,9 @@
 | 區塊 | 行為 | Playwright 覆蓋 |
 |---|---|---|
 | Tray | 狀態列、啟動引擎、開啟主視窗、結束；按 X 縮 Tray | 實機手測 |
-| Header | 頁標題＋摘要＋有 border 的 folder／terminal＋需要時才出現的 Start engine；無 Settings、無 tcp | `list`／`info`／`shell` |
-| Side nav | 品牌＋版本、發行版卡片（引擎狀態，點擊到 Machines）、分組六視圖、GitHub＋語言 | `shell.spec.ts`／`list` |
+| Top bar | 品牌＋版本、五個視圖分頁（窄時只剩圖示）、發行版晶片（引擎狀態，點擊到 Machines）、需要時才出現的 Start engine、有 border 的 folder／terminal、Settings 齒輪；無 tcp | `shell.spec.ts`／`list` |
+| 頁標題列 | 頁標題＋摘要與工具列同一列 | `shell`／`list` |
+| 輸入元件 | 自繪 checkbox／radio／select／number（−／＋）／搜尋清除／開關狀態文字／確認勾 | `inputs.spec.ts` |
 | 按鈕圖示 | 列／compose：無邊框純圖示；**header icon：有 border** | `list`／`groups`／`info` |
 | Containers | Name／Image／State／操作（Start／Stop／Logs／Term／Info／**Remove**）；右側 Info＝summary | `list`／`info` |
 | Info（容器） | Name、ID、Image、State、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels、Restart policy | `info.spec.ts` |
@@ -70,8 +69,8 @@
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
 | Machines | 設為目前、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
-| Settings | 側欄：refresh、exec_shell、tray_autostart、Theme Light／Dark／System | `settings`（搬遷） |
-| i18n | 側欄底部語言下拉＋GitHub 連結 | `list.spec.ts` |
+| Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
+| i18n | Settings「外觀」語言下拉（立即生效） | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 
 ### 破壞性操作的規則
@@ -108,7 +107,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.7.0 → 側欄 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.8.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -146,9 +145,9 @@ FakeEngine 預設資料：容器 web（running）／db（exited）；映像 ngin
 
 Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底已於 Ubuntu-26.04 + WebView2 實測；0.5 項隨實作補）：
 
-1. `dist\wsld-gui.exe` 開啟後標題列「已連線」，列表顯示容器；側欄切視圖。
+1. `dist\wsld-gui.exe` 開啟後標題列「已連線」，列表顯示容器；頂部分頁切視圖。
 2. 按 X → 縮 Tray；Tray「開啟主視窗」可還原；`--tray`／「結束」行為同既有。
-3. Settings（側欄，0.5）→「開機自啟動」toggle → HKCU Run；Theme radio 切換可見。
+3. Settings（頂部齒輪）→「開機自啟動」toggle → HKCU Run；Theme radio 切換可見。
 4. Machines：設為目前、Info（tcp／wsl 設定）、folder／terminal；unregister 需打名稱（0.5）。
 
 ## 圖示與 Windows 資源

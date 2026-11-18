@@ -100,6 +100,49 @@ const iconBtn = (attrs: Record<string, string>, ico: IconName, label: string): H
   return b;
 };
 
+/** 文字欄位外框（設計稿「Input controls」）：邊框／焦點底線／錯誤／停用由 .tf 處理，內層 input 無框。 */
+const textField = (input: HTMLInputElement, ...extra: (Node | string)[]): HTMLElement => {
+  const f = el("span", { class: "tf" }, input, ...extra);
+  if (input.classList.contains("mono")) f.classList.add("mono");
+  return f;
+};
+
+/** 下拉：同文字欄位外框＋自繪箭頭（原生箭頭以 appearance:none 隱藏）。 */
+const selectField = (sel: HTMLSelectElement): HTMLElement => {
+  const chev = icon("chevron-down");
+  chev.classList.add("chev");
+  return el("span", { class: "tf select" }, sel, chev);
+};
+
+/** 數字：隱藏原生 spinner，改為欄內 −／＋ 與單位；超出 min／max 標成錯誤。 */
+const numberField = (input: HTMLInputElement, unit: string): HTMLElement => {
+  const f = el("span", { class: "tf num" });
+  const step = (dir: 1 | -1) => {
+    const label = t(dir > 0 ? "gui.increase" : "gui.decrease");
+    const b = el("button", { type: "button", class: "tf-btn", tabindex: "-1", "aria-label": label, title: label, "data-testid": `${input.dataset.testid ?? "num"}-${dir > 0 ? "inc" : "dec"}` }) as HTMLButtonElement;
+    b.append(icon(dir > 0 ? "plus" : "minus"));
+    b.onclick = () => {
+      if (input.value === "" || !Number.isFinite(Number(input.value))) input.value = input.min || "0";
+      else if (dir > 0) input.stepUp();
+      else input.stepDown();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    return b;
+  };
+  const dec = step(-1);
+  const inc = step(1);
+  const sync = () => {
+    const v = Number(input.value);
+    dec.disabled = input.disabled || (input.min !== "" && v <= Number(input.min));
+    inc.disabled = input.disabled || (input.max !== "" && v >= Number(input.max));
+    f.classList.toggle("is-error", !input.checkValidity());
+  };
+  input.addEventListener("input", sync);
+  f.append(input, el("span", { class: "suffix", "aria-hidden": "true", text: unit }), el("span", { class: "stepper" }, dec, inc));
+  sync();
+  return f;
+};
+
 export class App {
   private st: State;
   private timer?: number;
@@ -448,9 +491,16 @@ export class App {
   private build(): void {
     this.root.innerHTML = "";
     this.root.append(
-      el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }),
+      el("header", { class: "topbar", "data-testid": "header" },
+        el("div", { class: "brand" },
+          brandMark(),
+          el("span", { class: "brand-name", text: t("gui.title") }),
+          el("span", { class: "brand-ver", "data-testid": "status-version", text: `v${this.st.meta.version}` }),
+        ),
+        el("nav", { class: "tabs", "data-testid": "top-nav", "aria-label": "Views" }),
+        el("div", { class: "top-actions", "data-testid": "top-actions" }),
+      ),
       el("div", { class: "shell" },
-        el("header", { "data-testid": "header" }),
         el("div", { class: "body" },
           el("main"),
           el("aside", { class: "info-drawer", "data-testid": "info-drawer", hidden: "" }),
@@ -486,10 +536,10 @@ export class App {
     return { state: "disconnected", text: t("gui.status.disconnected"), dot: "off" };
   }
 
-  /** 頁首：目前視圖標題＋發行版操作（資料夾／終端）＋需要時才出現的 Start engine。
-   *  同時更新側欄頂部的發行版卡片（引擎狀態）。 */
+  /** 頂部列右側：發行版晶片（引擎狀態）＋資料夾／終端＋需要時才出現的 Start engine＋Settings；
+   *  同時更新內容區頂端的頁標題與摘要。 */
   private renderHeader(): void {
-    const h = this.root.querySelector("header")!;
+    const actions = this.root.querySelector<HTMLElement>('[data-testid="top-actions"]')!;
     const ready = this.st.status?.ready === true;
     const switching = this.st.switching;
     const busy = !!switching || this.st.starting;
@@ -511,16 +561,33 @@ export class App {
     termBtn.disabled = !hasDistro;
     termBtn.onclick = () => void this.distroAction("open-terminal");
 
-    const view = VIEWS.find((v) => v.id === this.st.view)!;
-    h.replaceChildren(
-      el("div", { class: "page-head" },
-        el("h1", { "data-testid": "page-title", text: t(view.label) }),
-        el("span", { class: "page-sub", "data-testid": "page-sub", text: this.pageSubtitle() }),
-      ),
-      el("div", { class: "distro-actions", "data-testid": "distro-actions", ...(busy ? { "aria-busy": "true" } : {}) }, folderBtn, termBtn),
+    // Settings 是視圖之一，但放在頂部列最右側的齒輪
+    const settings = VIEWS.find((v) => v.id === "settings")!;
+    const gear = el("button", { type: "button", class: "nav icon-nav", "data-testid": "nav-settings", "data-view": "settings", title: t(settings.label) });
+    if (this.st.view === "settings") gear.setAttribute("aria-current", "page");
+    gear.append(icon(settings.icon), el("span", { class: "label sr-only", text: t(settings.label) }));
+    gear.onclick = () => this.setView("settings");
+
+    actions.replaceChildren(
+      el("div", { "data-testid": "distro-slot" }),
       startBtn,
+      el("span", { class: "top-sep", "aria-hidden": "true" }),
+      el("div", { class: "distro-actions", "data-testid": "distro-actions", ...(busy ? { "aria-busy": "true" } : {}) }, folderBtn, termBtn),
+      gear,
     );
     this.renderDistroSwitch();
+    this.renderPageHead();
+  }
+
+  /** 內容區頂端：目前視圖標題＋摘要（與工具列同一列）。 */
+  private renderPageHead(): void {
+    const head = this.root.querySelector<HTMLElement>('[data-testid="page-head"]');
+    if (!head) return;
+    const view = VIEWS.find((v) => v.id === this.st.view)!;
+    head.replaceChildren(
+      el("h1", { "data-testid": "page-title", text: t(view.label) }),
+      el("span", { class: "page-sub", "data-testid": "page-sub", text: this.pageSubtitle() }),
+    );
   }
 
   /** 頁首副標：容器頁顯示執行中／已停止數量；資源頁顯示項目數（映像含總大小）；未連線時留空。 */
@@ -617,12 +684,10 @@ export class App {
     const port = (this.st.meta.api_endpoint || "").match(/:(\d+)$/)?.[1];
     b.append(
       el("span", { class: `dot ${eng.dot}`, "data-testid": "engine-dot" }),
-      el("span", { class: "distro-text" },
-        el("span", { style: "display:flex;align-items:center;gap:6px;min-width:0" }, ...nameRow),
-        el("span", { class: "distro-status", "data-state": eng.state },
-          el("span", { "data-testid": "status-connection", "data-state": eng.state, text: eng.text }),
-          eng.state === "connected" && port ? ` · :${port}` : "",
-        ),
+      ...nameRow,
+      el("span", { class: "distro-status", "data-state": eng.state },
+        el("span", { "data-testid": "status-connection", "data-state": eng.state, text: eng.text }),
+        eng.state === "connected" && port ? ` · :${port}` : "",
       ),
     );
     b.onclick = () => this.setView("machines");
@@ -669,35 +734,19 @@ export class App {
     n.textContent = this.st.notice ?? "";
   }
 
-  /** 側欄：品牌＋版本、發行版卡片、資源／系統分組、底部設定＋GitHub＋語言。 */
+  /** 頂部分頁：資源（容器／映像／volume／網路）｜系統（Machines）；Settings 齒輪在右側（renderHeader）。
+   *  視窗窄於 1100px 時只剩圖示（CSS），名稱留在 title／文字內容供輔助技術。 */
   private renderNav(): void {
-    const nav = this.root.querySelector<HTMLElement>('[data-testid="side-nav"]')!;
+    const nav = this.root.querySelector<HTMLElement>('[data-testid="top-nav"]')!;
     const item = (v: (typeof VIEWS)[number]) => {
-      const b = el("button", { class: "nav", "data-testid": `nav-${v.id}`, "data-view": v.id });
+      const b = el("button", { type: "button", class: "nav", "data-testid": `nav-${v.id}`, "data-view": v.id, title: t(v.label) });
       if (v.id === this.st.view) b.setAttribute("aria-current", "page");
       b.append(icon(v.icon), el("span", { class: "label", text: t(v.label) }));
       b.onclick = () => this.setView(v.id);
       return b;
     };
     const section = (s: "resources" | "system") => VIEWS.filter((v) => v.section === s).map(item);
-    nav.replaceChildren(
-      el("div", { class: "brand" },
-        brandMark(),
-        el("div", { class: "brand-text" },
-          el("span", { class: "brand-name", text: t("gui.title") }),
-          el("span", { class: "brand-ver", "data-testid": "status-version", text: `v${this.st.meta.version}` }),
-        ),
-      ),
-      el("div", { "data-testid": "distro-slot" }),
-      el("div", { class: "nav-section", text: t("gui.nav.resources") }),
-      ...section("resources"),
-      el("div", { class: "nav-section", text: t("gui.nav.system") }),
-      ...section("system"),
-      el("div", { class: "nav-spacer" }),
-      ...VIEWS.filter((v) => v.section === "foot").map(item),
-      el("div", { class: "side-foot", "data-testid": "side-foot" }, this.githubLink(), this.langSelect()),
-    );
-    this.renderDistroSwitch();
+    nav.replaceChildren(...section("resources"), el("span", { class: "tab-sep", "aria-hidden": "true" }), ...section("system"));
   }
 
   /** 建立目前視圖的骨架（containers／machines 含底部 panel）。 */
@@ -705,21 +754,27 @@ export class App {
     const main = this.root.querySelector("main")!;
     main.dataset.view = this.st.view;
     main.setAttribute("data-testid", `view-${this.st.view}`);
+    // 頁標題＋摘要與工具列同一列（工具列靠右，窄時換行）
+    const pageBar = (toolbar: HTMLElement) => el("div", { class: "page-bar" }, el("div", { class: "page-head", "data-testid": "page-head" }), toolbar);
+    const toolbar = () => el("div", { class: "toolbar", "data-testid": "toolbar" });
     if (this.st.view === "containers") {
       main.replaceChildren(
-        this.containerToolbar(),
+        pageBar(this.containerToolbar()),
         el("div", { class: "list", "data-testid": "container-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
     } else if (this.st.view === "machines") {
       main.replaceChildren(
-        el("div", { class: "toolbar", "data-testid": "toolbar" }),
+        pageBar(toolbar()),
         el("div", { class: "list", "data-testid": "machines-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
+    } else if (this.st.view === "images") {
+      main.replaceChildren(pageBar(toolbar()), el("div", { class: "disk-slot", "data-testid": "disk-slot" }), el("div", { class: "list", "data-testid": "images-list" }));
     } else {
-      main.replaceChildren(el("div", { class: "toolbar", "data-testid": "toolbar" }), el("div", { class: "list", "data-testid": `${this.st.view}-list` }));
+      main.replaceChildren(pageBar(toolbar()), el("div", { class: "list", "data-testid": `${this.st.view}-list` }));
     }
+    this.renderPageHead();
     this.renderViewBody();
   }
 
@@ -746,10 +801,10 @@ export class App {
     }
   }
 
-  /** 側欄底部 GitHub 圖示：開啟官方 repo（經後端 BrowserOpenURL／系統瀏覽器）。 */
+  /** Settings「關於」的 GitHub 連結：開啟官方 repo（經後端 BrowserOpenURL／系統瀏覽器）。 */
   private githubLink(): HTMLElement {
     const a = el("a", {
-      class: "github-link",
+      class: "button-link",
       href: "https://github.com/iridance/wsld",
       target: "_blank",
       rel: "noopener noreferrer",
@@ -757,7 +812,7 @@ export class App {
       "aria-label": t("gui.github"),
       title: t("gui.github"),
     }) as HTMLAnchorElement;
-    a.append(icon("github"));
+    a.append(icon("github"), "GitHub");
     a.onclick = (e) => {
       e.preventDefault();
       void api.openRepo().catch((err) => {
@@ -768,16 +823,16 @@ export class App {
     return a;
   }
 
-  /** 側欄左下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
+  /** Settings「外觀」的語言切換：立即寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
   private langSelect(): HTMLElement {
-    const sel = el("select", { "data-testid": "lang-select", "aria-label": t("gui.lang"), class: "lang" }) as HTMLSelectElement;
+    const sel = el("select", { "data-testid": "lang-select", id: "settings-lang" }) as HTMLSelectElement;
     for (const [v, label] of [["en", "English"], ["zh-TW", "繁體中文"]]) {
       const o = el("option", { value: v, text: label }) as HTMLOptionElement;
       o.selected = v === this.st.meta.lang;
       sel.append(o);
     }
     sel.onchange = () => void this.switchLang(sel.value);
-    return el("label", { class: "lang-wrap" }, sel);
+    return selectField(sel);
   }
 
   private async switchLang(lang: string): Promise<void> {
@@ -901,10 +956,27 @@ export class App {
       spellcheck: "false",
     }) as HTMLInputElement;
     search.value = this.st.ctQuery;
+    const clear = el("button", { type: "button", class: "tf-btn", "data-testid": "ct-search-clear", "aria-label": t("gui.search.clear"), title: t("gui.search.clear") }) as HTMLButtonElement;
+    clear.append(icon("close"));
+    const syncClear = () => (clear.hidden = !search.value);
     search.oninput = () => {
       this.st.ctQuery = search.value;
+      syncClear();
       this.renderList();
     };
+    const reset = () => {
+      search.value = "";
+      search.dispatchEvent(new Event("input"));
+      search.focus();
+    };
+    clear.onclick = reset;
+    search.onkeydown = (e) => {
+      if (e.key === "Escape" && search.value) {
+        e.preventDefault();
+        reset();
+      }
+    };
+    syncClear();
     const seg = el("div", { class: "segmented", role: "group", "data-testid": "ct-filter" });
     for (const f of CT_FILTERS) {
       const b = el("button", { type: "button", "data-testid": `ct-filter-${f.id}`, "data-filter": f.id });
@@ -914,7 +986,9 @@ export class App {
       };
       seg.append(b);
     }
-    const searchBox = el("label", { class: "search" }, icon("search"), search);
+    const lead = icon("search");
+    lead.classList.add("lead");
+    const searchBox = el("label", { class: "tf search" }, lead, search, clear);
     return el("div", { class: "toolbar", "data-testid": "toolbar" }, searchBox, seg);
   }
 
@@ -943,7 +1017,7 @@ export class App {
     const sub = this.root.querySelector<HTMLElement>('[data-testid="page-sub"]');
     if (sub) sub.textContent = this.pageSubtitle();
     // 引擎未就緒時搜尋／篩選沒有意義；保留空間（visibility）避免列表跳動
-    const bar = this.root.querySelector<HTMLElement>('main[data-view="containers"] > [data-testid="toolbar"]');
+    const bar = this.root.querySelector<HTMLElement>('main[data-view="containers"] [data-testid="toolbar"]');
     if (bar) bar.style.visibility = this.st.status && this.st.status.ready !== true ? "hidden" : "";
   }
 
@@ -1300,10 +1374,10 @@ export class App {
         this.renderImages();
       },
     );
-    const kids: Node[] = [];
-    if (ready && this.st.images.length) kids.push(this.diskUsage(this.st.images));
-    kids.push(seg, el("span", { class: "spacer" }), prune);
-    bar.replaceChildren(...kids);
+    bar.replaceChildren(seg, prune);
+    // 磁碟用量在標題列下方獨佔一列
+    const disk = this.root.querySelector<HTMLElement>('[data-testid="disk-slot"]');
+    disk?.replaceChildren(...(ready && this.st.images.length ? [this.diskUsage(this.st.images)] : []));
 
     if (!ready || this.st.images.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty.images")));
@@ -1724,8 +1798,8 @@ export class App {
     const form = el(
       "form",
       { method: "dialog", class: "add-machine-form" },
-      el("label", {}, t("gui.machines.select"), sel),
-      el("label", {}, t("gui.machines.name"), name),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.select") }), selectField(sel)),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.name") }), textField(name)),
       err,
       el("div", { class: "row" }, cancel, install),
     );
@@ -1810,11 +1884,19 @@ export class App {
     const d = el("dialog", { "data-testid": "confirm-dialog" }) as HTMLDialogElement;
     const typed = el("input", {
       type: "text",
+      class: "mono",
       "data-testid": "confirm-typed",
       autocomplete: "off",
       spellcheck: "false",
-      hidden: "",
     }) as HTMLInputElement;
+    const match = icon("check");
+    match.classList.add("match");
+    match.setAttribute("data-testid", "confirm-match");
+    // 外框跟著 input 顯示／隱藏；名稱完全相符時顯示綠色勾
+    const typedField = textField(typed, match);
+    typedField.classList.add("confirm-field");
+    typedField.setAttribute("data-testid", "confirm-typed-field");
+    typedField.hidden = true;
     const ok = btn({ class: "primary danger", type: "button", "data-testid": "confirm-ok" }, "trash", t("gui.confirm"));
     const cancel = btn({ type: "button", "data-testid": "confirm-cancel" }, "close", t("gui.cancel"));
     ok.onclick = () => {
@@ -1830,8 +1912,9 @@ export class App {
     typed.oninput = () => {
       const need = typed.dataset.require || "";
       if (need) ok.disabled = typed.value !== need;
+      typedField.classList.toggle("matched", !!need && typed.value === need);
     };
-    d.append(el("p", { "data-testid": "confirm-text" }), typed, el("div", { class: "row" }, cancel, ok));
+    d.append(el("p", { "data-testid": "confirm-text" }), typedField, el("div", { class: "row" }, cancel, ok));
     return d;
   }
 
@@ -1840,14 +1923,16 @@ export class App {
     d.querySelector('[data-testid="confirm-text"]')!.textContent = text;
     const typed = d.querySelector<HTMLInputElement>('[data-testid="confirm-typed"]')!;
     const ok = d.querySelector<HTMLButtonElement>('[data-testid="confirm-ok"]')!;
+    const typedField = d.querySelector<HTMLElement>('[data-testid="confirm-typed-field"]')!;
     typed.value = "";
+    typedField.classList.remove("matched");
     if (requireType) {
-      typed.hidden = false;
+      typedField.hidden = false;
       typed.dataset.require = requireType;
       typed.placeholder = requireType;
       ok.disabled = true;
     } else {
-      typed.hidden = true;
+      typedField.hidden = true;
       delete typed.dataset.require;
       typed.placeholder = "";
       ok.disabled = false;
@@ -1871,10 +1956,9 @@ export class App {
     const list = this.root.querySelector<HTMLElement>('[data-testid="settings-list"]');
     const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
     if (!list || !bar) return;
-    bar.replaceChildren(); // 頁首已有標題
     const c = this.st.meta.config;
     const interval = el("input", { type: "number", min: "1", max: "3600", "data-testid": "settings-refresh", value: String(c.refresh_interval_sec) }) as HTMLInputElement;
-    const shell = el("input", { type: "text", "data-testid": "settings-exec-shell", placeholder: "bash", value: c.exec_shell || "" }) as HTMLInputElement;
+    const shell = el("input", { type: "text", class: "mono", "data-testid": "settings-exec-shell", placeholder: "bash → sh", spellcheck: "false", value: c.exec_shell || "" }) as HTMLInputElement;
 
     const auto = el("button", {
       type: "button",
@@ -1885,9 +1969,12 @@ export class App {
     }) as HTMLButtonElement;
     auto.setAttribute("aria-label", t("gui.settings.autostart"));
     auto.disabled = !this.st.meta.autostart_supported;
+    // 狀態文字（開／關）放在開關左側，不只靠顏色
+    const autoState = el("span", { class: "switch-state", "data-testid": "settings-autostart-state", "aria-hidden": "true", text: t(c.tray_autostart ? "gui.on" : "gui.off") });
     auto.onclick = () => {
       const on = auto.getAttribute("aria-checked") !== "true";
       auto.setAttribute("aria-checked", on ? "true" : "false");
+      autoState.textContent = t(on ? "gui.on" : "gui.off");
     };
 
     const themeVal = c.theme || "system";
@@ -1900,7 +1987,7 @@ export class App {
       const id = `settings-theme-${v}`;
       const radio = el("input", { type: "radio", name: "settings-theme", value: v, id, "data-testid": id }) as HTMLInputElement;
       radio.checked = themeVal === v;
-      themeRadios.append(el("label", { class: "radio", for: id }, radio, t(key)));
+      themeRadios.append(el("label", { class: "check", for: id }, radio, t(key)));
     }
 
     const save = btn({ class: "primary", "data-testid": "settings-save" }, "save", t("gui.save"));
@@ -1924,7 +2011,11 @@ export class App {
       el("div", { class: "set-row" }, el("div", { class: "set-text" }, label, el("span", { class: "set-hint", text: hint })), el("div", { class: "set-control" }, control));
     interval.id = "settings-refresh";
     shell.id = "settings-exec-shell";
+    // Save 在頁標題列右側（工具列）
+    bar.replaceChildren(save);
     list.classList.add("cards");
+    const brand = brandMark();
+    brand.removeAttribute("data-testid");
     list.replaceChildren(
       el(
         "form",
@@ -1932,14 +2023,25 @@ export class App {
         el("section", { class: "set-group" },
           el("h2", { text: t("gui.settings.group.look") }),
           row(el("span", { id: "settings-theme-label", text: t("gui.settings.theme") }), t("gui.settings.theme_hint"), themeRadios),
+          row(el("label", { for: "settings-lang", text: t("gui.lang") }), t("gui.settings.lang_hint"), this.langSelect()),
         ),
         el("section", { class: "set-group" },
           el("h2", { text: t("gui.settings.group.behave") }),
-          row(el("span", { "data-testid": "settings-autostart-label", text: t("gui.settings.autostart") }), t("gui.settings.auto_hint"), auto),
-          row(el("label", { for: "settings-refresh", text: t("gui.settings.refresh") }), t("gui.settings.refresh_hint"), interval),
-          row(el("label", { for: "settings-exec-shell", text: t("gui.settings.exec_shell") }), t("gui.settings.shell_hint"), shell),
+          row(el("span", { "data-testid": "settings-autostart-label", text: t("gui.settings.autostart") }), t("gui.settings.auto_hint"), el("span", { class: "switch" }, autoState, auto)),
+          row(el("label", { for: "settings-refresh", text: t("gui.settings.refresh") }), t("gui.settings.refresh_hint"), numberField(interval, t("gui.unit.sec"))),
+          row(el("label", { for: "settings-exec-shell", text: t("gui.settings.exec_shell") }), t("gui.settings.shell_hint"), textField(shell)),
         ),
-        el("div", { class: "row settings-actions" }, save),
+        el("section", { class: "set-group" },
+          el("h2", { text: t("gui.settings.group.about") }),
+          el("div", { class: "set-row", "data-testid": "settings-about" },
+            brand,
+            el("div", { class: "set-text" },
+              el("span", {}, `${t("gui.title")} `, el("span", { class: "muted", text: `v${this.st.meta.version}` })),
+              el("span", { class: "set-hint", text: t("gui.about.desc") }),
+            ),
+            el("div", { class: "set-control" }, this.githubLink()),
+          ),
+        ),
       ),
     );
   }

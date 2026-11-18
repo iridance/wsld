@@ -5,9 +5,9 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("side panel lists the six views with large icons; Containers is active by default", async ({ page }) => {
+test("top bar lists the six views with large icons; Containers is active by default", async ({ page }) => {
   await open(page);
-  const nav = page.getByTestId("side-nav");
+  const nav = page.getByTestId("header");
   await expect(nav).toBeVisible();
   const items: [string, string, string][] = [
     ["nav-containers", "containers", "Containers"],
@@ -28,7 +28,11 @@ test("side panel lists the six views with large icons; Containers is active by d
   await expect(page.getByTestId("view-containers")).toBeVisible();
   const navBox = await nav.boundingBox();
   const viewBox = await page.getByTestId("view-containers").boundingBox();
-  expect(navBox!.x).toBeLessThan(viewBox!.x); // 側欄在左
+  expect(navBox!.y + navBox!.height).toBeLessThanOrEqual(viewBox!.y); // 導覽在上
+  expect(Math.round(viewBox!.x)).toBe(0); // 內容滿寬
+  // 資源分頁在 top-nav，Settings 是右側齒輪（文字只給輔助技術）
+  await expect(page.getByTestId("top-nav").getByTestId("nav-machines")).toBeVisible();
+  await expect(page.getByTestId("top-actions").getByTestId("nav-settings").locator(".label")).toHaveClass(/sr-only/);
 });
 
 test("clicking a nav item switches the view and the active marker", async ({ page }) => {
@@ -54,26 +58,40 @@ test("switching views closes an open logs panel", async ({ page }) => {
   await expect(page.getByTestId("panel")).toBeHidden();
 });
 
-test("layout: side nav spans the full height on the left; header sits on top of the content column; no footer", async ({ page }) => {
+test("layout: top bar spans the full width; content uses the whole window width; no side nav or footer", async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 640 });
   await open(page);
   const header = (await page.getByTestId("header").boundingBox())!;
-  const nav = (await page.getByTestId("side-nav").boundingBox())!;
-  expect(nav.x).toBe(0);
-  expect(Math.round(nav.y)).toBe(0);
-  expect(Math.round(nav.height)).toBe(640);
+  const view = (await page.getByTestId("view-containers").boundingBox())!;
+  expect(Math.round(header.x)).toBe(0);
   expect(Math.round(header.y)).toBe(0);
-  expect(Math.round(header.x)).toBe(Math.round(nav.x + nav.width));
+  expect(Math.round(header.width)).toBe(1000);
+  expect(Math.round(view.y)).toBe(Math.round(header.y + header.height));
+  expect(Math.round(view.width)).toBe(1000);
+  await expect(page.getByTestId("side-nav")).toHaveCount(0);
   await expect(page.getByTestId("status-bar")).toHaveCount(0);
-  // 頁首顯示目前視圖名稱
+  // 頁標題在內容區頂端，與工具列同一列
   await expect(page.getByTestId("page-title")).toHaveText("Containers");
+  const title = (await page.getByTestId("page-title").boundingBox())!;
+  const search = (await page.getByTestId("ct-search").boundingBox())!;
+  expect(Math.abs(title.y + title.height / 2 - (search.y + search.height / 2))).toBeLessThan(12);
   await page.getByTestId("nav-images").click();
   await expect(page.getByTestId("page-title")).toHaveText("Images");
 });
 
-test("side nav top shows the brand mark and the active distro with engine state; clicking it opens Machines", async ({ page }) => {
+test("narrow window: tabs collapse to icons but keep their names", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 640 });
   await open(page);
-  const nav = page.getByTestId("side-nav");
+  const tab = page.getByTestId("nav-images");
+  await expect(tab.locator(".label")).toBeHidden();
+  await expect(tab).toHaveAttribute("title", "Images");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(tab.locator(".label")).toBeVisible();
+});
+
+test("top bar shows the brand mark and the active distro with engine state; clicking it opens Machines", async ({ page }) => {
+  await open(page);
+  const nav = page.getByTestId("header");
   await expect(nav.getByTestId("brand-mark")).toBeVisible();
   const sw = nav.getByTestId("distro-switch");
   await expect(sw.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
@@ -84,14 +102,12 @@ test("side nav top shows the brand mark and the active distro with engine state;
   await expect(page.getByTestId("view-machines")).toBeVisible();
 });
 
-test("language dropdown has no border but still looks clickable", async ({ page }) => {
+test("language select lives in Settings and is drawn by wsld (no native arrow)", async ({ page }) => {
   await open(page);
+  await expect(page.getByTestId("lang-select")).toHaveCount(0);
+  await page.getByTestId("nav-settings").click();
   const sel = page.getByTestId("lang-select");
-  const style = await sel.evaluate((e) => {
-    const cs = getComputedStyle(e);
-    return { border: cs.borderStyle, cursor: cs.cursor, bg: cs.backgroundColor };
-  });
-  expect(style.border).toBe("none");
-  expect(style.cursor).toBe("pointer");
-  expect(style.bg).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+  await expect(sel).toBeVisible();
+  expect(await sel.evaluate((e) => getComputedStyle(e).appearance)).toBe("none");
+  await expect(sel.locator("xpath=..").locator("svg.chev")).toBeVisible();
 });

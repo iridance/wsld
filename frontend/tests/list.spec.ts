@@ -5,18 +5,16 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("side nav carries distro, connection, version, github and language; header carries the page title and distro actions", async ({ page }) => {
+test("top bar carries distro, connection and version; Settings carries github and language; page title sits in the content", async ({ page }) => {
   await open(page);
-  const nav = page.getByTestId("side-nav");
+  const nav = page.getByTestId("header");
   await expect(nav.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
   await expect(nav.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
   await expect(nav.getByTestId("status-version")).toHaveText("vtesthost");
-  const gh = nav.getByTestId("status-github");
-  await expect(gh).toHaveAttribute("href", "https://github.com/iridance/wsld");
-  await expect(gh.locator("svg.ico")).toHaveAttribute("data-icon", "github");
-  await expect(nav.getByTestId("lang-select")).toBeVisible();
+  await expect(nav.getByTestId("status-github")).toHaveCount(0);
+  await expect(nav.getByTestId("lang-select")).toHaveCount(0);
   const header = page.getByTestId("header");
-  await expect(header.getByTestId("page-title")).toHaveText("Containers");
+  await expect(page.getByTestId("view-containers").getByTestId("page-title")).toHaveText("Containers");
   await expect(header.getByTestId("btn-open-folder")).toBeVisible();
   await expect(header.getByTestId("status-endpoint")).toHaveCount(0);
   await expect(header.getByTestId("btn-settings")).toHaveCount(0);
@@ -30,6 +28,13 @@ test("side nav carries distro, connection, version, github and language; header 
   // 不再有「顯示已停止」與手動刷新
   await expect(page.getByTestId("chk-show-all")).toHaveCount(0);
   await expect(page.getByTestId("btn-refresh")).toHaveCount(0);
+  await page.getByTestId("nav-settings").click();
+  const about = page.getByTestId("settings-about");
+  const gh = about.getByTestId("status-github");
+  await expect(gh).toHaveAttribute("href", "https://github.com/iridance/wsld");
+  await expect(gh.locator("svg.ico")).toHaveAttribute("data-icon", "github");
+  await expect(about).toContainText("vtesthost");
+  await expect(page.getByTestId("view-settings").getByTestId("lang-select")).toBeVisible();
 });
 
 test("layout: list fills the content column down to the window bottom (banner hidden)", async ({ page }) => {
@@ -59,11 +64,11 @@ test("layout: notice floats at the bottom of the content column without shifting
 
   const listAfter = await page.getByTestId("images-list").boundingBox();
   const noticeBox = await notice.boundingBox();
-  const nav = await page.getByTestId("side-nav").boundingBox();
+  const header = await page.getByTestId("header").boundingBox();
   expect(listAfter).not.toBeNull();
   expect(noticeBox).not.toBeNull();
-  // 疊在右欄底部（不蓋側欄），不推擠列表
-  expect(noticeBox!.x).toBeGreaterThanOrEqual(nav!.x + nav!.width);
+  // 疊在內容底部（不蓋頂部列），不推擠列表
+  expect(noticeBox!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
   expect(640 - (noticeBox!.y + noticeBox!.height)).toBeLessThanOrEqual(24);
   expect(Math.round(listAfter!.y)).toBe(Math.round(listBefore!.y));
   expect(Math.round(listAfter!.height)).toBe(Math.round(listBefore!.height));
@@ -193,8 +198,9 @@ test("refresh pauses on blur and resumes on focus", async ({ page }) => {
   await expect.poll(async () => (await st()).refreshCount).toBeGreaterThan(count);
 });
 
-test("defaults to English; the side-nav language switch changes labels and persists", async ({ page }) => {
+test("defaults to English; the Settings language switch changes labels and persists", async ({ page }) => {
   await open(page);
+  await page.getByTestId("nav-settings").click();
   await expect(page).toHaveTitle("wsld");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");

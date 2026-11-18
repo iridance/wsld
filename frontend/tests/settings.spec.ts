@@ -5,7 +5,7 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("settings side nav shows radio theme and autostart toggle left-aligned", async ({ page }) => {
+test("settings page shows radio theme and autostart toggle left-aligned", async ({ page }) => {
   await open(page);
   await page.getByTestId("nav-settings").click();
   await expect(page.getByTestId("view-settings")).toBeVisible();
