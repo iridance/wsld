@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.8.1（git tag `v0.8.1`）  
-狀態：**0.8.1 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.8.2（git tag `v0.8.2`）  
+狀態：**0.8.2 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-19
 
 ## 1. 問題與目標

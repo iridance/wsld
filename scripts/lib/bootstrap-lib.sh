@@ -60,24 +60,31 @@ wsld_detect_distro_id() {
   sed -n 's/^ID=//p' "$f" | tr -d '"' | head -1
 }
 
-# $1 = os-release 路徑。stdout = debian | arch；不支援則 unknown 且 exit 1。
+# $1 = os-release 路徑。stdout = debian | arch | suse；不支援則 unknown 且 exit 1。
+# 先看 ID，再以 ID_LIKE 判斷衍生版。
 wsld_distro_family() {
-  local id
-  id="$(wsld_detect_distro_id "$@" || true)"
-  case "$id" in
-    ubuntu|debian)
-      echo debian
-      return 0
-      ;;
-    arch|archlinux|manjaro|endeavouros)
-      echo arch
-      return 0
-      ;;
-    *)
-      echo unknown
-      return 1
-      ;;
-  esac
+  local f="${1:-/etc/os-release}" id like
+  id="$(wsld_detect_distro_id "$f" || true)"
+  like=""
+  [ -r "$f" ] && like="$(sed -n 's/^ID_LIKE=//p' "$f" | tr -d '"' | head -1)"
+  for cand in $id $like; do
+    case "$cand" in
+      ubuntu|debian)
+        echo debian
+        return 0
+        ;;
+      arch|archlinux|manjaro|endeavouros)
+        echo arch
+        return 0
+        ;;
+      opensuse*|suse|sles|sled|sle-micro)
+        echo suse
+        return 0
+        ;;
+    esac
+  done
+  echo unknown
+  return 1
 }
 
 # dockerd 在 PATH 上即視為引擎已安裝（跨 apt／pacman）。
@@ -218,11 +225,15 @@ wsld_validate_loopback_hosts() {
 }
 
 # systemd drop-in：清掉 -H fd://，改由 daemon.json 決定 hosts。
+# $1 = family（debian|arch|suse）。suse 的 containerd.service 與 docker.service 互斥（Conflicts=），
+# dockerd 須自行管理 containerd，故不帶 --containerd。
 wsld_render_systemd_override() {
+  local exec='/usr/bin/dockerd --containerd=/run/containerd/containerd.sock'
+  [ "${1:-}" = "suse" ] && exec='/usr/bin/dockerd'
   printf '%s\n' \
     '[Service]' \
     'ExecStart=' \
-    'ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock'
+    "ExecStart=$exec"
 }
 
 # --- wsl.conf ------------------------------------------------------------

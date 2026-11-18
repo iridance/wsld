@@ -172,6 +172,23 @@ test("Start engine failure surfaces the not-ready message", async ({ page, reque
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "disconnected");
 });
 
+test("Start engine failure stays in the banner across refresh polls (also on Machines)", async ({ page, request }) => {
+  await engine(request, "down");
+  await lifecycleBroken(request);
+  await open(page);
+  await page.getByTestId("btn-start-engine").click();
+  await expect(page.getByTestId("error-banner")).toContainText("systemd");
+  const st = () => page.evaluate(() => (window as unknown as { __wsld: { state(): { refreshCount: number } } }).__wsld.state());
+  const count = (await st()).refreshCount;
+  await expect.poll(async () => (await st()).refreshCount, { timeout: 10_000 }).toBeGreaterThan(count + 1);
+  await expect(page.getByTestId("error-banner")).toContainText("systemd");
+
+  await page.getByTestId("nav-machines").click();
+  const c2 = (await st()).refreshCount;
+  await expect.poll(async () => (await st()).refreshCount, { timeout: 10_000 }).toBeGreaterThan(c2 + 1);
+  await expect(page.getByTestId("error-banner")).toContainText("systemd");
+});
+
 async function lifecycleBroken(request: Parameters<typeof engine>[0]) {
   await request.post("/__test/lifecycle/broken");
 }

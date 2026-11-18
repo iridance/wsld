@@ -52,6 +52,17 @@ func TestPingUnreachableIsErrUnreachable(t *testing.T) {
 	}
 }
 
+func TestEmptyEndpointIsNotInitialized(t *testing.T) {
+	c := New("", time.Second)
+	err := c.Ping(context.Background())
+	if !errors.Is(err, ErrUnreachable) || !strings.Contains(err.Error(), "not initialized") || strings.Contains(err.Error(), ":0") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := c.ListContainers(context.Background(), true); !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("list: %v", err)
+	}
+}
+
 func TestNewAcceptsTCPScheme(t *testing.T) {
 	c := New("tcp://127.0.0.1:23750", time.Second)
 	if c.base != "http://127.0.0.1:23750" {

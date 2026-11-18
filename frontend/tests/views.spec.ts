@@ -250,8 +250,8 @@ test("Machines: Add machine lists online distributions and installs the chosen o
   await dlg.getByTestId("add-machine-install").click();
   await expect(dlg).toBeHidden();
   await expect(page.getByTestId("notice")).toContainText("Debian1 installed");
-  await expect(page.getByTestId("notice")).toContainText("wsl -d Debian1");
-  await expect(page.getByTestId("notice")).toContainText("set it as current");
+  await expect(page.getByTestId("notice")).not.toContainText("wsl -d");
+  await expect(page.getByTestId("notice")).toContainText("Set it as current");
   await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]')).toBeVisible();
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wsld Phase 1：在 WSL2（Ubuntu/Debian 或 Arch）內安裝 rootful Docker，
+# wsld Phase 1：在 WSL2（Ubuntu/Debian、Arch 或 openSUSE）內安裝 rootful Docker，
 # 讓 dockerd 同時監聽 unix socket 與 tcp://127.0.0.1:<port>（只綁 loopback），
 # 並啟用 systemd／linger，供 Windows 端 wsld / wsld-gui 使用。
 #
@@ -40,8 +40,8 @@ wsld_is_wsl || die "此腳本僅支援在 WSL2 發行版內執行（uname -r 未
 DISTRO_ID="$(wsld_detect_distro_id || true)"
 FAMILY="$(wsld_distro_family || true)"
 case "$FAMILY" in
-  debian|arch) ;;
-  *) die "目前僅支援 Ubuntu/Debian 或 Arch 系發行版（偵測到: ${DISTRO_ID:-unknown}）" 3 ;;
+  debian|arch|suse) ;;
+  *) die "目前僅支援 Ubuntu/Debian、Arch 或 openSUSE 系發行版（偵測到: ${DISTRO_ID:-unknown}）" 5 ;;
 esac
 
 id "$WSLD_USER" >/dev/null 2>&1 || die "使用者不存在: $WSLD_USER" 2
@@ -100,6 +100,13 @@ install_docker_arch() {
   run $SUDO pacman -Sy --noconfirm --needed "${pkgs[@]}"
 }
 
+install_docker_suse() {
+  log "安裝 Docker（zypper 官方套件）"
+  pkgs=(docker docker-buildx)
+  [ "$WSLD_INSTALL_COMPOSE" = "1" ] && pkgs+=(docker-compose)
+  run $SUDO zypper --non-interactive --gpg-auto-import-keys install --no-recommends "${pkgs[@]}"
+}
+
 ensure_compose_debian() {
   if [ "$WSLD_INSTALL_COMPOSE" = "1" ] && ! docker compose version >/dev/null 2>&1; then
     log "補安裝 docker-compose-plugin"
@@ -115,16 +122,25 @@ ensure_compose_arch() {
   fi
 }
 
+ensure_compose_suse() {
+  if [ "$WSLD_INSTALL_COMPOSE" = "1" ] && ! docker compose version >/dev/null 2>&1; then
+    log "補安裝 docker-compose"
+    run $SUDO zypper --non-interactive --gpg-auto-import-keys install --no-recommends docker-compose
+  fi
+}
+
 if ! wsld_docker_engine_installed; then
   case "$FAMILY" in
     debian) install_docker_debian ;;
     arch) install_docker_arch ;;
+    suse) install_docker_suse ;;
   esac
 else
   log "Docker 引擎已安裝，略過安裝"
   case "$FAMILY" in
     debian) ensure_compose_debian ;;
     arch) ensure_compose_arch ;;
+    suse) ensure_compose_suse ;;
   esac
 fi
 
@@ -175,7 +191,7 @@ else
     $SUDO cp /etc/docker/daemon.json /etc/docker/daemon.json.wsld.bak
   fi
   printf '%s\n' "$DAEMON_JSON" | $SUDO tee /etc/docker/daemon.json >/dev/null
-  wsld_render_systemd_override | $SUDO tee /etc/systemd/system/docker.service.d/wsld-override.conf >/dev/null
+  wsld_render_systemd_override "$FAMILY" | $SUDO tee /etc/systemd/system/docker.service.d/wsld-override.conf >/dev/null
 fi
 
 # ---------------------------------------------------------------- 5. 啟動服務 + linger

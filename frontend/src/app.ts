@@ -58,6 +58,8 @@ interface State {
   networks: Network[];
   machines?: MachinesResponse;
   lastError?: string;
+  /** 最近一次「啟動引擎／設為目前」失敗的原因；引擎就緒前輪詢不覆蓋，避免真正原因被「無法連線 API」蓋掉 */
+  bringUpError?: string;
   notice?: string;
   starting: boolean;
   /** 正在切換的 target distro 名稱；有值時 header 顯示 Loading／Switching */
@@ -222,11 +224,12 @@ export class App {
       const status = await api.status(signal);
       if (signal.aborted || gen !== this.refreshGen) return;
       this.st.status = status;
+      if (status.ready) this.st.bringUpError = undefined;
       if (this.st.view === "machines" || this.st.view === "settings") {
         // WSL 清單／設定不依賴 Docker 引擎
         if (this.st.view === "machines") this.st.machines = await api.machines(signal);
         if (signal.aborted || gen !== this.refreshGen) return;
-        this.st.lastError = undefined;
+        this.st.lastError = this.st.starting ? undefined : this.st.bringUpError;
       } else if (status.ready) {
         await this.loadView(signal);
         if (signal.aborted || gen !== this.refreshGen) return;
@@ -238,7 +241,7 @@ export class App {
         this.st.volumes = [];
         this.st.networks = [];
         // 用 i18n 前綴；細節走 status.APIError（renderBanner 會拼成「前綴 — 細節」）
-        this.st.lastError = t("gui.error.api");
+        this.st.lastError = this.st.bringUpError ?? t("gui.error.api");
       }
     } catch (e) {
       if (signal.aborted || gen !== this.refreshGen) return;
@@ -287,6 +290,7 @@ export class App {
   private async startEngine(): Promise<void> {
     this.st.starting = true;
     this.st.lastError = undefined;
+    this.st.bringUpError = undefined;
     this.renderHeader();
     this.renderBanner();
     this.renderViewBody(); // Machines 列顯示 Starting…
@@ -297,7 +301,7 @@ export class App {
       setMessages(this.st.meta.messages);
       await this.loadView();
     } catch (e) {
-      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.st.lastError = this.st.bringUpError = e instanceof ApiError ? e.message : String(e);
     } finally {
       this.st.starting = false;
       this.renderAll();
@@ -1683,6 +1687,7 @@ export class App {
     if (this.st.switching) return;
     this.st.switching = name;
     this.st.lastError = undefined;
+    this.st.bringUpError = undefined;
     this.renderHeader();
     this.renderBanner();
     this.renderViewBody(); // 鎖住其他「設為目前」
@@ -1694,7 +1699,7 @@ export class App {
       this.notify(fmt(t("gui.machines.used"), name));
       await this.refresh();
     } catch (e) {
-      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.st.lastError = this.st.bringUpError = e instanceof ApiError ? e.message : String(e);
     } finally {
       this.st.switching = undefined;
       this.renderAll();
@@ -1837,7 +1842,7 @@ export class App {
       try {
         await api.installMachine(dist, nm);
         d.close();
-        this.notify(fmt(t("gui.machines.installed"), nm, nm));
+        this.notify(fmt(t("gui.machines.installed"), nm));
         await this.refresh();
       } catch (e) {
         err.textContent = e instanceof ApiError ? e.message : String(e);

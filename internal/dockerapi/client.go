@@ -45,7 +45,10 @@ type Client struct {
 	timeout time.Duration
 }
 
-// New 建立 client。endpoint 可為 tcp://host:port 或 http://host:port。
+// errNoEndpoint：machine 尚未 init（config 無 api_endpoint）時所有請求直接回此錯誤，不去撥 127.0.0.1:0。
+var errNoEndpoint = fmt.Errorf("%w: machine not initialized yet (no api_endpoint); press Start engine", ErrUnreachable)
+
+// New 建立 client。endpoint 可為 tcp://host:port 或 http://host:port；空字串表示尚未 init。
 func New(endpoint string, timeout time.Duration) *Client {
 	base := strings.TrimSuffix(endpoint, "/")
 	if strings.HasPrefix(base, "tcp://") {
@@ -71,6 +74,9 @@ func (c *Client) BaseURL() string { return c.base }
 
 // hostPort 回傳 base 的 host:port（供 hijack 用）。
 func (c *Client) hostPort() (string, error) {
+	if c.base == "" {
+		return "", errNoEndpoint
+	}
 	u, err := url.Parse(c.base)
 	if err != nil {
 		return "", err
@@ -84,6 +90,9 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 
 // doWith 同 do，但可指定 http.Client（longHC 用於必須超過一般 timeout 的請求）。
 func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, q url.Values, body any) (*http.Response, error) {
+	if c.base == "" {
+		return nil, errNoEndpoint
+	}
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -377,6 +386,9 @@ func (c *Client) Logs(ctx context.Context, id string, opts LogsOptions) (io.Read
 		q.Set("follow", "1")
 	} else {
 		q.Set("follow", "0")
+	}
+	if c.base == "" {
+		return nil, errNoEndpoint
 	}
 	u := c.base + "/containers/" + url.PathEscape(id) + "/logs?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

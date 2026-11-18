@@ -164,6 +164,14 @@ SCRIPT
   [[ "$output" == *$'ExecStart=\n'* ]]
   [[ "$output" == *"ExecStart=/usr/bin/dockerd"* ]]
   [[ "$output" != *"-H fd://"* ]]
+  [[ "$output" == *"--containerd=/run/containerd/containerd.sock"* ]]
+}
+
+@test "render_systemd_override for suse lets dockerd manage containerd" {
+  run wsld_render_systemd_override suse
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'ExecStart=\nExecStart=/usr/bin/dockerd'* ]]
+  [[ "$output" != *"--containerd"* ]]
 }
 
 # ---------- wsl.conf ----------
@@ -252,7 +260,7 @@ SCRIPT
   [ "$output" = "ubuntu" ]
 }
 
-@test "distro_family maps ubuntu/debian to debian and arch* to arch" {
+@test "distro_family maps debian/arch/suse families (ID then ID_LIKE)" {
   printf 'ID=ubuntu\n' > "$TMPD/os-release"
   run wsld_distro_family "$TMPD/os-release"
   [ "$status" -eq 0 ]
@@ -272,6 +280,20 @@ SCRIPT
   run wsld_distro_family "$TMPD/os-release"
   [ "$status" -eq 0 ]
   [ "$output" = "arch" ]
+
+  printf 'NAME="openSUSE Tumbleweed"\nID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "suse" ]
+
+  printf 'ID="opensuse-leap"\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$output" = "suse" ]
+
+  printf 'ID=pop\nID_LIKE="ubuntu debian"\n' > "$TMPD/os-release"
+  run wsld_distro_family "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "debian" ]
 
   printf 'ID=fedora\n' > "$TMPD/os-release"
   run wsld_distro_family "$TMPD/os-release"

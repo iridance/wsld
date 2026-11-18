@@ -331,14 +331,10 @@ func (a *guiApp) relabelTray() {
 // dockerClient 依 config 建立 Docker client。
 // api_endpoint 為空（占位／未 init）時不得退回預設 23750，否則會誤連其他 distro 的引擎。
 func dockerClient(c config.Config) *dockerapi.Client {
-	ep := c.APIEndpoint
-	if ep == "" {
-		// 無效 scheme → Ping／List 皆失敗，UI 顯示未就緒而非舊列表
-		ep = "tcp://127.0.0.1:0"
-	}
 	to := time.Duration(c.APITimeoutSec) * time.Second
 	if to <= 0 {
 		to = time.Duration(config.DefaultAPITimeoutSec) * time.Second
 	}
-	return dockerapi.New(ep, to)
+	// 空 endpoint（尚未 init）→ 所有請求回「machine not initialized」，UI 顯示未就緒而非舊列表
+	return dockerapi.New(c.APIEndpoint, to)
 }

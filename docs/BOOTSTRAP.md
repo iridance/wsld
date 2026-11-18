@@ -1,6 +1,6 @@
 # Bootstrap（Phase 1）
 
-把一台 Windows 11 從零帶到「WSL2（Ubuntu/Debian 或 Arch）內有 rootful Docker，且 API 只綁 `127.0.0.1:23750`」。
+把一台 Windows 11 從零帶到「WSL2（Ubuntu/Debian、Arch 或 openSUSE）內有 rootful Docker，且 API 只綁 `127.0.0.1:23750`」。
 兩支腳本都冪等，可重複執行。
 
 ## 步驟
@@ -33,11 +33,11 @@ bash scripts/02-bootstrap-docker.sh --dry-run
 
 | 步驟 | 動作 | 冪等行為 |
 |---|---|---|
-| 0 | 檢查 WSL2 核心、Ubuntu/Debian／Arch、使用者存在 | 不符則 exit 3 |
+| 0 | 檢查 WSL2 核心、發行版系列（Ubuntu/Debian／Arch／openSUSE，先看 `ID` 再看 `ID_LIKE`）、使用者存在 | 非 WSL2 exit 3；不支援的系列 exit 5；使用者不存在 exit 2 |
 | 1 | `/etc/wsl.conf` 寫入 `[boot] systemd=true` | 已存在則略過；新寫入時要求 `wsl --shutdown` 後重跑（exit 3） |
-| 2 | Debian：官方 apt 安裝 docker-ce…；Arch：`pacman` 安裝 `docker`／`docker-compose`／`docker-buildx` | 已安裝則略過 |
+| 2 | Debian：官方 apt 安裝 docker-ce…；Arch：`pacman` 安裝 `docker`／`docker-compose`／`docker-buildx`；openSUSE：`zypper` 安裝 `docker`／`docker-compose`／`docker-buildx` | 已安裝則略過 |
 | 3 | `usermod -aG docker <user>` | 已在群組則略過 |
-| 4 | 選埠：從 `--port` 起遞增找空埠；寫 `/etc/docker/daemon.json`（`hosts` = unix socket + `tcp://127.0.0.1:<port>`）與 systemd drop-in 清掉 `-H fd://` | 既有 daemon.json 已是同埠或 dockerd 正在監聽則沿用；含其他設定時先備份 `.wsld.bak` |
+| 4 | 選埠：從 `--port` 起遞增找空埠；寫 `/etc/docker/daemon.json`（`hosts` = unix socket + `tcp://127.0.0.1:<port>`）與 systemd drop-in 清掉 `-H fd://`（openSUSE 的 `containerd.service` 與 docker 互斥，drop-in 不帶 `--containerd`，由 dockerd 自管 containerd） | 既有 daemon.json 已是同埠或 dockerd 正在監聽則沿用；含其他設定時先備份 `.wsld.bak` |
 | 5 | `systemctl enable --now docker`、`loginctl enable-linger <user>` | — |
 | 6 | 驗證 `docker info`、`curl http://127.0.0.1:<port>/_ping` == `OK`、確認未綁非 loopback | 失敗 exit 4 |
 

@@ -400,6 +400,19 @@ func TestInitBootstrapExit3MapsToNotReady(t *testing.T) {
 	}
 }
 
+func TestInitBootstrapExit5MapsToUnsupported(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose":          {{out: utf16(listUbuntuRunning)}},
+		"-d Ubuntu-26.04 -- id -un": {{out: "irice\n"}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "[wsld] ERROR: ...", err: &wsl.ExitError{Code: 5}}},
+	}}
+	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
+	_, err := m.Init(context.Background(), InitOptions{})
+	if !errors.Is(err, ErrNotReady) || strings.Contains(err.Error(), "wsl --shutdown") || !strings.Contains(err.Error(), "openSUSE") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestParseBootstrapPort(t *testing.T) {
 	if p, ok := ParseBootstrapPort("x\nWSLD_API_PORT=23752\r\ny"); !ok || p != 23752 {
 		t.Fatalf("got %d %v", p, ok)

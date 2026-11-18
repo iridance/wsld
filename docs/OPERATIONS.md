@@ -56,6 +56,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 | `wsl.exe 不可用` | WSL 功能未啟用 | 以系統管理員執行 `scripts\01-enable-wsl.ps1`，重開機（之後 Extra Setup 會一鍵＋重開接續） |
 | `systemd 未啟用` | `/etc/wsl.conf` 缺 `[boot] systemd=true` | bootstrap 會寫入；之後需 `wsl --shutdown` 再進 distro |
 | `bootstrap prerequisites not met`（exit 3） | systemd 剛啟用尚未生效 | `wsl --shutdown` → 重開 distro → `wsld init` |
+| `不是支援的發行版系列`（exit 5） | distro 不是 Ubuntu/Debian、Arch、openSUSE 系 | 改用支援的發行版 |
 | `API 無回應` 但 `docker.service 運作中` | `daemon.json` hosts 沒有 `tcp://127.0.0.1:<port>`，或埠與 config 不一致 | 對照 `daemon.json` 與 `config.toml`；`wsld init` 可重寫 |
 | `有服務監聽但不是 Docker` | 埠被其他程式占用 | 重跑 `wsld init` 自動換埠 |
 | GUI 顯示「請先執行 wsld init」 | `%APPDATA%\wsld\config.toml` 不存在 | `wsld init` |
@@ -75,9 +76,8 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 - GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
 - **0.5**：可「設為目前」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
-- 「新增機器」執行 `wsl --install -d <name> --no-launch`。安裝完成後：
-  1. `wsl -d <name>` 進入一次，依提示建立預設使用者；
-  2. 設為目前（會自動 bootstrap／寫入該 machine 的 user＋endpoint 並啟動引擎）。
+- 「新增機器」執行 `wsl --install -d <name> --no-launch`。安裝完成後直接「設為目前」：若 distro 只有 root，會依 Windows 使用者名稱建立 Linux 使用者，接著 bootstrap（安裝 Docker）、寫入該 machine 的 user＋endpoint 並啟動引擎。支援 Ubuntu/Debian、Arch、openSUSE 系。
+- 「啟動引擎」或「設為目前」失敗時，banner 保留失敗原因直到引擎就緒，不會被輪詢的「無法連線 Docker API」蓋掉。
 
 ## 已知限制
 

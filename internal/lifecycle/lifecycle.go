@@ -312,6 +312,8 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_exit3", d.Name))
 		case 4:
 			return cfg, fmt.Errorf("%w: %s", ErrAPI, i18n.T("lc.init_exit4", d.Name))
+		case 5:
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_unsupported", d.Name))
 		default:
 			return cfg, errors.New(i18n.T("lc.init_failed", err))
 		}
