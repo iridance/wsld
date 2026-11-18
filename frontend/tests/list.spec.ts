@@ -5,20 +5,25 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-test("header carries distro and connection badge; footer carries version, github and language", async ({ page }) => {
+test("side nav carries distro, connection, version, github and language; header carries the page title and distro actions", async ({ page }) => {
   await open(page);
-  const header = page.getByTestId("header");
-  await expect(header.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
-  await expect(header.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
-  await expect(header.getByTestId("status-endpoint")).toHaveCount(0);
-  await expect(header.getByTestId("btn-settings")).toHaveCount(0);
-  await expect(page.getByTestId("status-refresh")).toHaveCount(0);
-  const footer = page.getByTestId("status-bar");
-  await expect(footer.getByTestId("status-version")).toHaveText("vtesthost");
-  const gh = footer.getByTestId("status-github");
+  const nav = page.getByTestId("side-nav");
+  await expect(nav.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
+  await expect(nav.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
+  await expect(nav.getByTestId("status-version")).toHaveText("vtesthost");
+  const gh = nav.getByTestId("status-github");
   await expect(gh).toHaveAttribute("href", "https://github.com/iridance/wsld");
   await expect(gh.locator("svg.ico")).toHaveAttribute("data-icon", "github");
-  await expect(footer.getByTestId("lang-select")).toBeVisible();
+  await expect(nav.getByTestId("lang-select")).toBeVisible();
+  const header = page.getByTestId("header");
+  await expect(header.getByTestId("page-title")).toHaveText("Containers");
+  await expect(header.getByTestId("btn-open-folder")).toBeVisible();
+  await expect(header.getByTestId("status-endpoint")).toHaveCount(0);
+  await expect(header.getByTestId("btn-settings")).toHaveCount(0);
+  // 已連線時不佔頁首空間
+  await expect(header.getByTestId("btn-start-engine")).toBeHidden();
+  await expect(page.getByTestId("status-refresh")).toHaveCount(0);
+  await expect(page.getByTestId("status-bar")).toHaveCount(0);
   // 左下角舊資訊已整併到上方
   await expect(page.getByTestId("status-distro")).toHaveCount(0);
   await expect(page.getByTestId("status-api")).toHaveCount(0);
@@ -27,28 +32,25 @@ test("header carries distro and connection badge; footer carries version, github
   await expect(page.getByTestId("btn-refresh")).toHaveCount(0);
 });
 
-test("layout: status bar sticks to the bottom and list fills the rest (banner hidden)", async ({ page }) => {
+test("layout: list fills the content column down to the window bottom (banner hidden)", async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 640 });
   await open(page);
   await expect(page.getByTestId("error-banner")).toBeHidden();
-  const footer = await page.getByTestId("status-bar").boundingBox();
   const list = await page.getByTestId("container-list").boundingBox();
-  expect(footer).not.toBeNull();
   expect(list).not.toBeNull();
-  expect(Math.round(footer!.y + footer!.height)).toBe(640);
-  expect(footer!.height).toBeLessThan(60);
-  expect(list!.height).toBeGreaterThan(400);
+  // 只留內容區 24px 底邊距
+  expect(640 - (list!.y + list!.height)).toBeLessThanOrEqual(32);
+  expect(list!.height).toBeGreaterThan(450);
 });
 
-test("layout: notice pins above the status bar without shifting the list", async ({ page }) => {
+test("layout: notice floats at the bottom of the content column without shifting the list", async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 640 });
   await open(page);
-  const listBefore = await page.getByTestId("container-list").boundingBox();
-  const footerBefore = await page.getByTestId("status-bar").boundingBox();
-  expect(listBefore).not.toBeNull();
-  expect(footerBefore).not.toBeNull();
-
   await page.getByTestId("nav-images").click();
+  await expect(page.getByTestId("image-row").first()).toBeVisible();
+  const listBefore = await page.getByTestId("images-list").boundingBox();
+  expect(listBefore).not.toBeNull();
+
   await page.getByTestId("btn-rm-image-bbb222bbb222").click();
   await page.getByTestId("confirm-ok").click();
   const notice = page.getByTestId("notice");
@@ -56,50 +58,37 @@ test("layout: notice pins above the status bar without shifting the list", async
   await expect(notice).toContainText("redis:7");
 
   const listAfter = await page.getByTestId("images-list").boundingBox();
-  const footerAfter = await page.getByTestId("status-bar").boundingBox();
   const noticeBox = await notice.boundingBox();
+  const nav = await page.getByTestId("side-nav").boundingBox();
   expect(listAfter).not.toBeNull();
-  expect(footerAfter).not.toBeNull();
   expect(noticeBox).not.toBeNull();
-  // footer 不因 notice 上移；notice 貼在 status bar 上方
-  expect(Math.round(footerAfter!.y)).toBe(Math.round(footerBefore!.y));
-  expect(Math.round(noticeBox!.y + noticeBox!.height)).toBe(Math.round(footerAfter!.y));
-  // 列表區不被 notice 擠壓（高度仍接近滿版）
-  expect(listAfter!.height).toBeGreaterThan(350);
+  // 疊在右欄底部（不蓋側欄），不推擠列表
+  expect(noticeBox!.x).toBeGreaterThanOrEqual(nav!.x + nav!.width);
+  expect(640 - (noticeBox!.y + noticeBox!.height)).toBeLessThanOrEqual(24);
+  expect(Math.round(listAfter!.y)).toBe(Math.round(listBefore!.y));
+  expect(Math.round(listAfter!.height)).toBe(Math.round(listBefore!.height));
 });
 
-test("layout: not-ready banner pins above the status bar without shifting the list", async ({ page, request }) => {
+test("layout: not-ready banner floats at the bottom without shifting the list", async ({ page, request }) => {
   await page.setViewportSize({ width: 1000, height: 640 });
-  await open(page);
-  const listBefore = await page.getByTestId("container-list").boundingBox();
-  const footerBefore = await page.getByTestId("status-bar").boundingBox();
-  expect(listBefore).not.toBeNull();
-  expect(footerBefore).not.toBeNull();
-
   // use 會自動 init；改以測試鉤子把 active profile 標成未就緒
   expect((await request.post("/__test/active-not-ready")).ok()).toBeTruthy();
-  await page.reload();
-  await expect(page.getByTestId("status-connection")).toBeVisible();
-
+  await open(page);
   await page.getByTestId("nav-machines").click();
   const banner = page.getByTestId("error-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toHaveAttribute("data-kind", "not-ready");
 
-  const listAfter = await page.getByTestId("machines-list").boundingBox();
-  const footerAfter = await page.getByTestId("status-bar").boundingBox();
+  const list = await page.getByTestId("machines-list").boundingBox();
   const toastsBox = await page.getByTestId("toasts").boundingBox();
   const bannerBox = await banner.boundingBox();
-  expect(listAfter).not.toBeNull();
-  expect(footerAfter).not.toBeNull();
+  expect(list).not.toBeNull();
   expect(toastsBox).not.toBeNull();
   expect(bannerBox).not.toBeNull();
-  // footer 不動；toasts（banner ± 成功 notice）整疊貼在 status bar 上方
-  expect(Math.round(footerAfter!.y)).toBe(Math.round(footerBefore!.y));
-  expect(Math.round(toastsBox!.y + toastsBox!.height)).toBe(Math.round(footerAfter!.y));
-  expect(bannerBox!.y).toBeGreaterThan(footerAfter!.y - 120);
-  // 列表高度不被 banner 擠壓（與切換前接近）
-  expect(Math.abs(listAfter!.height - listBefore!.height)).toBeLessThan(80);
+  // toasts 整疊貼在視窗底部；列表仍延伸到底（被覆蓋而非擠壓）
+  expect(Math.round(toastsBox!.y + toastsBox!.height)).toBe(640);
+  expect(bannerBox!.y).toBeGreaterThan(640 - 140);
+  expect(640 - (list!.y + list!.height)).toBeLessThanOrEqual(32);
 });
 
 test("lists running and stopped containers together", async ({ page }) => {
@@ -204,7 +193,7 @@ test("refresh pauses on blur and resumes on focus", async ({ page }) => {
   await expect.poll(async () => (await st()).refreshCount).toBeGreaterThan(count);
 });
 
-test("defaults to English; the status-bar language switch changes labels and persists", async ({ page }) => {
+test("defaults to English; the side-nav language switch changes labels and persists", async ({ page }) => {
   await open(page);
   await expect(page).toHaveTitle("wsld");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
@@ -267,4 +256,64 @@ test("header shows the connected WSL distro name next to the connection badge", 
   await open(page);
   await expect(page.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
   await expect(page.getByTestId("header-distro")).toBeVisible();
+});
+
+test("container toolbar: status filter and search narrow the list; header shows the running/stopped summary", async ({ page }) => {
+  await open(page);
+  await expect(row(page, "web")).toBeVisible();
+  await expect(page.getByTestId("page-sub")).toHaveText("1 running · 1 stopped");
+  await expect(page.getByTestId("ct-filter-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("ct-filter-running")).toHaveText("Running 1");
+
+  await page.getByTestId("ct-filter-running").click();
+  await expect(page.getByTestId("ct-filter-running")).toHaveAttribute("aria-pressed", "true");
+  await expect(row(page, "web")).toBeVisible();
+  await expect(row(page, "db")).toHaveCount(0);
+
+  await page.getByTestId("ct-filter-stopped").click();
+  await expect(row(page, "db")).toBeVisible();
+  await expect(row(page, "web")).toHaveCount(0);
+
+  await page.getByTestId("ct-filter-all").click();
+  await page.getByTestId("ct-search").fill("nginx");
+  await expect(row(page, "web")).toBeVisible();
+  await expect(row(page, "db")).toHaveCount(0);
+  // 自動刷新後篩選仍保留
+  await page.evaluate(() => (window as unknown as { __wsld: { refresh(): Promise<void> } }).__wsld.refresh());
+  await expect(row(page, "db")).toHaveCount(0);
+  await expect(page.getByTestId("ct-search")).toHaveValue("nginx");
+
+  await page.getByTestId("ct-search").fill("no-such-thing");
+  await expect(page.getByTestId("empty-filtered")).toBeVisible();
+  await page.getByTestId("ct-search").fill("");
+  await expect(row(page, "db")).toBeVisible();
+});
+
+test("row shows the docker status line under the name; opening Info marks the row as selected", async ({ page }) => {
+  await open(page);
+  await expect(page.getByTestId("ct-status-web")).not.toBeEmpty();
+  await page.getByTestId("btn-info-web").click();
+  await expect(row(page, "web")).toHaveAttribute("aria-selected", "true");
+  await expect(row(page, "db")).not.toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("btn-info-close").click();
+  await expect(row(page, "web")).not.toHaveAttribute("aria-selected", "true");
+});
+
+test("container panel has Logs / Terminal tabs for the same container", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("btn-logs-web").click();
+  const panel = page.getByTestId("panel");
+  await expect(panel).toHaveAttribute("data-kind", "logs");
+  await expect(page.getByTestId("panel-tab-logs")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("panel-tab-term").click();
+  await expect(panel).toHaveAttribute("data-kind", "term");
+  await expect(page.getByTestId("panel-tab-term")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("panel-title")).toContainText("web");
+  await page.getByTestId("panel-tab-logs").click();
+  await expect(panel).toHaveAttribute("data-kind", "logs");
+  await expect(page.getByTestId("logs-content")).toContainText("GET / 200");
+
+  // 已停止的容器不能開終端分頁
+  await page.getByTestId("btn-logs-db").click();
+  await expect(page.getByTestId("panel-tab-term")).toBeDisabled();
 });

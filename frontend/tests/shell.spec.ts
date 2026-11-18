@@ -54,17 +54,34 @@ test("switching views closes an open logs panel", async ({ page }) => {
   await expect(page.getByTestId("panel")).toBeHidden();
 });
 
-test("layout: header on top, footer at the bottom, side nav full height between them", async ({ page }) => {
+test("layout: side nav spans the full height on the left; header sits on top of the content column; no footer", async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 640 });
   await open(page);
   const header = (await page.getByTestId("header").boundingBox())!;
-  const footer = (await page.getByTestId("status-bar").boundingBox())!;
   const nav = (await page.getByTestId("side-nav").boundingBox())!;
-  expect(Math.round(header.y)).toBe(0);
-  expect(Math.round(footer.y + footer.height)).toBe(640);
-  expect(Math.round(nav.y)).toBe(Math.round(header.y + header.height));
-  expect(Math.round(nav.y + nav.height)).toBe(Math.round(footer.y));
   expect(nav.x).toBe(0);
+  expect(Math.round(nav.y)).toBe(0);
+  expect(Math.round(nav.height)).toBe(640);
+  expect(Math.round(header.y)).toBe(0);
+  expect(Math.round(header.x)).toBe(Math.round(nav.x + nav.width));
+  await expect(page.getByTestId("status-bar")).toHaveCount(0);
+  // 頁首顯示目前視圖名稱
+  await expect(page.getByTestId("page-title")).toHaveText("Containers");
+  await page.getByTestId("nav-images").click();
+  await expect(page.getByTestId("page-title")).toHaveText("Images");
+});
+
+test("side nav top shows the brand mark and the active distro with engine state; clicking it opens Machines", async ({ page }) => {
+  await open(page);
+  const nav = page.getByTestId("side-nav");
+  await expect(nav.getByTestId("brand-mark")).toBeVisible();
+  const sw = nav.getByTestId("distro-switch");
+  await expect(sw.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
+  await expect(sw.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
+  await expect(sw.getByTestId("engine-dot")).toHaveClass(/\bok\b/);
+  await sw.click();
+  await expect(page.getByTestId("nav-machines")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("view-machines")).toBeVisible();
 });
 
 test("language dropdown has no border but still looks clickable", async ({ page }) => {

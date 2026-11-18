@@ -12,7 +12,7 @@ import {
 } from "./api";
 import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
-import { icon, type IconName } from "./icons";
+import { brandMark, icon, type IconName } from "./icons";
 
 type Panel = { kind: "logs"; id: string; name: string; live: boolean; ws?: WebSocket } | { kind: "term"; id: string; name: string; session?: TerminalSession };
 type InfoDrawer =
@@ -22,13 +22,29 @@ type InfoDrawer =
 
 /** 側欄視圖。 */
 export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "settings";
-const VIEWS: { id: View; icon: IconName; label: string }[] = [
-  { id: "containers", icon: "containers", label: "gui.nav.containers" },
-  { id: "images", icon: "images", label: "gui.nav.images" },
-  { id: "volumes", icon: "volumes", label: "gui.nav.volumes" },
-  { id: "networks", icon: "networks", label: "gui.nav.networks" },
-  { id: "machines", icon: "machines", label: "gui.nav.machines" },
-  { id: "settings", icon: "settings", label: "gui.nav.settings" },
+type CtFilter = "all" | "running" | "stopped";
+type ImgKind = "inuse" | "unused" | "dangling" | "unknown";
+type ImgFilter = "all" | "inuse" | "unused" | "dangling";
+const IMG_FILTERS: { id: ImgFilter; label: string }[] = [
+  { id: "all", label: "gui.filter.all" },
+  { id: "inuse", label: "gui.filter.in_use" },
+  { id: "unused", label: "gui.filter.unused" },
+  { id: "dangling", label: "gui.filter.dangling" },
+];
+const CT_FILTERS: { id: CtFilter; label: string }[] = [
+  { id: "all", label: "gui.filter.all" },
+  { id: "running", label: "gui.filter.running" },
+  { id: "stopped", label: "gui.filter.stopped" },
+];
+
+/** section：側欄分組（resources＝Docker 資源、system＝WSL 機器、foot＝底部設定）。 */
+const VIEWS: { id: View; icon: IconName; label: string; section: "resources" | "system" | "foot" }[] = [
+  { id: "containers", icon: "containers", label: "gui.nav.containers", section: "resources" },
+  { id: "images", icon: "images", label: "gui.nav.images", section: "resources" },
+  { id: "volumes", icon: "volumes", label: "gui.nav.volumes", section: "resources" },
+  { id: "networks", icon: "networks", label: "gui.nav.networks", section: "resources" },
+  { id: "machines", icon: "machines", label: "gui.nav.machines", section: "system" },
+  { id: "settings", icon: "settings", label: "gui.nav.settings", section: "foot" },
 ];
 
 interface State {
@@ -51,6 +67,10 @@ interface State {
   info?: InfoDrawer;
   /** 進行中的容器動作（id → 動作），用於即時回饋；docker stop 可能等 10s 寬限期 */
   pending: Record<string, "starting" | "stopping">;
+  /** 容器列表篩選：狀態分段＋名稱／映像搜尋（僅前端，不影響 API） */
+  ctFilter: CtFilter;
+  ctQuery: string;
+  imgFilter: ImgFilter;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
 }
@@ -106,6 +126,9 @@ export class App {
       refreshCount: 0,
       pending: {},
       busy: new Set(),
+      ctFilter: "all",
+      ctQuery: "",
+      imgFilter: "all",
     };
     if (!VIEWS.some((v) => v.id === this.st.view)) this.st.view = "containers";
     this.build();
@@ -210,6 +233,7 @@ export class App {
     this.st.view = v;
     saveJSON(LS_VIEW, v);
     this.renderNav();
+    this.renderHeader();
     this.renderView();
     void this.refresh();
   }
@@ -378,6 +402,7 @@ export class App {
   private openContainerInfo(c: Container): void {
     this.st.info = { kind: "container", id: c.Id, name: name(c) };
     this.renderInfoDrawer();
+    this.renderList(); // 選取標示
     void api.containerInfo(c.Id).then((detail) => {
       if (this.st.info?.kind === "container" && this.st.info.id === c.Id) {
         this.st.info = { ...this.st.info, detail };
@@ -397,8 +422,10 @@ export class App {
   private closeInfo(): void {
     if (!this.st.info) return;
     this.stopMachineUsagePoll();
+    const wasContainer = this.st.info.kind === "container";
     this.st.info = undefined;
     this.renderInfoDrawer();
+    if (wasContainer) this.renderList(); // 取消選取標示
   }
 
   private async saveSettings(s: Settings): Promise<boolean> {
@@ -421,18 +448,19 @@ export class App {
   private build(): void {
     this.root.innerHTML = "";
     this.root.append(
-      el("header", { "data-testid": "header" }),
-      el("div", { class: "body" },
-        el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }),
-        el("main"),
-        el("aside", { class: "info-drawer", "data-testid": "info-drawer", hidden: "" }),
-      ),
-      el("div", { class: "dock", "data-testid": "dock" },
-        el("div", { class: "toasts", "data-testid": "toasts" },
-          el("div", { class: "banner", "data-testid": "error-banner", role: "alert", hidden: "" }),
-          el("div", { class: "notice", "data-testid": "notice", role: "status", hidden: "" }),
+      el("nav", { class: "side", "data-testid": "side-nav", "aria-label": "Views" }),
+      el("div", { class: "shell" },
+        el("header", { "data-testid": "header" }),
+        el("div", { class: "body" },
+          el("main"),
+          el("aside", { class: "info-drawer", "data-testid": "info-drawer", hidden: "" }),
         ),
-        el("footer", { "data-testid": "status-bar" }),
+        el("div", { class: "dock", "data-testid": "dock" },
+          el("div", { class: "toasts", "data-testid": "toasts" },
+            el("div", { class: "banner", "data-testid": "error-banner", role: "alert", hidden: "" }),
+            el("div", { class: "notice", "data-testid": "notice", role: "status", hidden: "" }),
+          ),
+        ),
       ),
       this.buildConfirmDialog(),
       this.buildAddMachineDialog(),
@@ -448,28 +476,30 @@ export class App {
     this.renderNotice();
     this.renderViewBody();
     // Info 抽屜不隨列表輪詢重建；僅 machine 的 CPU／記憶體由 usage poll 就地更新
-    this.renderFooter();
   }
 
+  /** 引擎連線狀態（側欄發行版卡片與 Start engine 共用）。 */
+  private engineState(): { state: "switching" | "starting" | "connected" | "disconnected"; text: string; dot: string } {
+    if (this.st.switching) return { state: "switching", text: t("gui.status.switching"), dot: "warn" };
+    if (this.st.starting) return { state: "starting", text: t("gui.status.starting"), dot: "warn" };
+    if (this.st.status?.ready === true) return { state: "connected", text: t("gui.status.connected"), dot: "ok" };
+    return { state: "disconnected", text: t("gui.status.disconnected"), dot: "off" };
+  }
+
+  /** 頁首：目前視圖標題＋發行版操作（資料夾／終端）＋需要時才出現的 Start engine。
+   *  同時更新側欄頂部的發行版卡片（引擎狀態）。 */
   private renderHeader(): void {
     const h = this.root.querySelector("header")!;
     const ready = this.st.status?.ready === true;
     const switching = this.st.switching;
     const busy = !!switching || this.st.starting;
-    const badgeCls = switching || this.st.starting ? "warn" : ready ? "ok" : "bad";
-    const badgeTxt = switching
-      ? t("gui.status.switching")
-      : this.st.starting
-        ? t("gui.status.starting")
-        : ready
-          ? t("gui.status.connected")
-          : t("gui.status.disconnected");
-    const badgeState = switching ? "switching" : this.st.starting ? "starting" : ready ? "connected" : "disconnected";
 
     const startBtn = btn({ class: "primary", "data-testid": "btn-start-engine" }, "power", t("gui.ensure"));
     // 未 init 的 active：即使舊引擎還連得上，也要能按 Start 觸發自動設定
     const needsStart = !ready || this.st.meta.active_ready === false;
     startBtn.disabled = busy || !needsStart;
+    // 已連線就不佔頁首空間；啟動中保留（停用）讓使用者看到進度
+    startBtn.hidden = !needsStart && !busy;
     startBtn.onclick = () => void this.startEngine();
 
     const distro = switching || this.st.status?.Distro || this.st.meta.distro;
@@ -481,20 +511,122 @@ export class App {
     termBtn.disabled = !hasDistro;
     termBtn.onclick = () => void this.distroAction("open-terminal");
 
-    const distroKids: (Node | string)[] = [
-      el("h1", { "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
-    ];
-    if (switching) {
-      distroKids.push(el("span", { class: "header-loading", "data-testid": "header-loading", text: t("gui.status.loading") }));
-    }
-    distroKids.push(folderBtn, termBtn);
-
+    const view = VIEWS.find((v) => v.id === this.st.view)!;
     h.replaceChildren(
-      el("div", { class: "distro-actions", "data-testid": "distro-actions", ...(busy ? { "aria-busy": "true" } : {}) }, ...distroKids),
-      el("span", { class: `badge ${badgeCls}`, "data-testid": "status-connection", "data-state": badgeState, text: badgeTxt }),
-      el("span", { class: "spacer" }),
+      el("div", { class: "page-head" },
+        el("h1", { "data-testid": "page-title", text: t(view.label) }),
+        el("span", { class: "page-sub", "data-testid": "page-sub", text: this.pageSubtitle() }),
+      ),
+      el("div", { class: "distro-actions", "data-testid": "distro-actions", ...(busy ? { "aria-busy": "true" } : {}) }, folderBtn, termBtn),
       startBtn,
     );
+    this.renderDistroSwitch();
+  }
+
+  /** 頁首副標：容器頁顯示執行中／已停止數量；資源頁顯示項目數（映像含總大小）；未連線時留空。 */
+  private pageSubtitle(): string {
+    const ready = this.st.status?.ready === true;
+    switch (this.st.view) {
+      case "containers": {
+        if (!ready) return "";
+        const running = this.st.containers.filter((c) => c.State === "running").length;
+        return fmt(t("gui.ct.summary"), String(running), String(this.st.containers.length - running));
+      }
+      case "images":
+        return ready ? fmt(t("gui.sub.items_size"), String(this.st.images.length), humanSize(this.st.images.reduce((a, im) => a + im.Size, 0))) : "";
+      case "volumes":
+        return ready ? fmt(t("gui.sub.items"), String(this.st.volumes.length)) : "";
+      case "networks":
+        return ready ? fmt(t("gui.sub.items"), String(this.st.networks.length)) : "";
+      case "machines":
+        return this.st.machines?.available ? fmt(t("gui.sub.items"), String(this.st.machines.machines.length)) : "";
+      default:
+        return "";
+    }
+  }
+
+  /** 分段篩選（SegmentedControl）：aria-pressed 標示目前選項。 */
+  private segmented(testId: string, items: { id: string; label: string }[], current: string, pick: (id: string) => void): HTMLElement {
+    const seg = el("div", { class: "segmented", role: "group", "data-testid": testId });
+    for (const it of items) {
+      const b = el("button", { type: "button", "data-testid": `${testId}-${it.id}`, "aria-pressed": String(it.id === current), text: it.label });
+      b.onclick = () => pick(it.id);
+      seg.append(b);
+    }
+    return seg;
+  }
+
+  /** 引擎未就緒時取代空列表：說明＋啟動引擎＋由 status 推得的檢查清單。 */
+  private engineDownState(): HTMLElement {
+    const s = this.st.status;
+    const distro = s?.Distro || this.st.meta.distro || t("gui.title");
+    const starting = this.st.starting;
+    const cta = btn({ class: "primary", "data-testid": "btn-engine-cta" }, "power", starting ? t("gui.status.starting") : t("gui.ensure"));
+    cta.disabled = starting || !!this.st.switching;
+    cta.onclick = () => void this.startEngine();
+    const checks: [string, boolean | undefined, string?][] = [
+      ["gui.check.distro", s?.DistroFound, distro],
+      ["gui.check.running", s?.DistroRunning],
+      ["gui.check.systemd", s?.SystemdActive],
+      ["gui.check.docker", s?.DockerActive],
+      ["gui.check.api", s?.APIReachable, s?.APIEndpoint || this.st.meta.api_endpoint],
+    ];
+    const list = el("ul", { class: "checks", "data-testid": "engine-checks" });
+    for (const [key, ok, detail] of checks) {
+      list.append(
+        el("li", { "data-ok": String(!!ok) },
+          el("span", { class: `dot ${ok ? "ok" : "bad"}`, "aria-hidden": "true" }),
+          el("span", { class: "check-label", text: t(key) }),
+          el("span", { class: "check-detail", text: detail ?? "" }),
+        ),
+      );
+    }
+    return el("div", { class: "engine-down", "data-testid": "engine-down" },
+      el("div", { class: "engine-down-icon", "aria-hidden": "true" }, icon("power")),
+      el("h2", { text: starting ? t("gui.down.starting") : t("gui.down.title") }),
+      el("p", { text: fmt(t("gui.down.body"), distro) }),
+      cta,
+      list,
+    );
+  }
+
+  /** 列表空狀態：引擎未就緒（已取得 status）→ 啟動卡片；否則一般「沒有…」。 */
+  private emptyState(text: string): HTMLElement {
+    if (this.st.status && this.st.status.ready !== true) return this.engineDownState();
+    return el("div", { class: "empty", "data-testid": "empty", text });
+  }
+
+  /** 側欄頂部：目前發行版＋引擎狀態；點擊前往 Machines。 */
+  private renderDistroSwitch(): void {
+    const slot = this.root.querySelector<HTMLElement>('[data-testid="distro-slot"]');
+    if (!slot) return;
+    const switching = this.st.switching;
+    const distro = switching || this.st.status?.Distro || this.st.meta.distro;
+    const eng = this.engineState();
+    const nameRow: (Node | string)[] = [
+      el("span", { class: "distro-name", "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
+    ];
+    if (switching) nameRow.push(el("span", { class: "header-loading", "data-testid": "header-loading", text: t("gui.status.loading") }));
+    const b = el("button", {
+      type: "button",
+      class: "distro-switch",
+      "data-testid": "distro-switch",
+      "aria-label": `${t("gui.nav.machines")}: ${distro || t("gui.title")} — ${eng.text}`,
+      ...(switching || this.st.starting ? { "aria-busy": "true" } : {}),
+    });
+    const port = (this.st.meta.api_endpoint || "").match(/:(\d+)$/)?.[1];
+    b.append(
+      el("span", { class: `dot ${eng.dot}`, "data-testid": "engine-dot" }),
+      el("span", { class: "distro-text" },
+        el("span", { style: "display:flex;align-items:center;gap:6px;min-width:0" }, ...nameRow),
+        el("span", { class: "distro-status", "data-state": eng.state },
+          el("span", { "data-testid": "status-connection", "data-state": eng.state, text: eng.text }),
+          eng.state === "connected" && port ? ` · :${port}` : "",
+        ),
+      ),
+    );
+    b.onclick = () => this.setView("machines");
+    slot.replaceChildren(b);
   }
 
   private async distroAction(action: "open-folder" | "open-terminal"): Promise<void> {
@@ -537,17 +669,35 @@ export class App {
     n.textContent = this.st.notice ?? "";
   }
 
+  /** 側欄：品牌＋版本、發行版卡片、資源／系統分組、底部設定＋GitHub＋語言。 */
   private renderNav(): void {
     const nav = this.root.querySelector<HTMLElement>('[data-testid="side-nav"]')!;
+    const item = (v: (typeof VIEWS)[number]) => {
+      const b = el("button", { class: "nav", "data-testid": `nav-${v.id}`, "data-view": v.id });
+      if (v.id === this.st.view) b.setAttribute("aria-current", "page");
+      b.append(icon(v.icon), el("span", { class: "label", text: t(v.label) }));
+      b.onclick = () => this.setView(v.id);
+      return b;
+    };
+    const section = (s: "resources" | "system") => VIEWS.filter((v) => v.section === s).map(item);
     nav.replaceChildren(
-      ...VIEWS.map((v) => {
-        const b = el("button", { class: "nav", "data-testid": `nav-${v.id}`, "data-view": v.id });
-        if (v.id === this.st.view) b.setAttribute("aria-current", "page");
-        b.append(icon(v.icon), el("span", { class: "label", text: t(v.label) }));
-        b.onclick = () => this.setView(v.id);
-        return b;
-      }),
+      el("div", { class: "brand" },
+        brandMark(),
+        el("div", { class: "brand-text" },
+          el("span", { class: "brand-name", text: t("gui.title") }),
+          el("span", { class: "brand-ver", "data-testid": "status-version", text: `v${this.st.meta.version}` }),
+        ),
+      ),
+      el("div", { "data-testid": "distro-slot" }),
+      el("div", { class: "nav-section", text: t("gui.nav.resources") }),
+      ...section("resources"),
+      el("div", { class: "nav-section", text: t("gui.nav.system") }),
+      ...section("system"),
+      el("div", { class: "nav-spacer" }),
+      ...VIEWS.filter((v) => v.section === "foot").map(item),
+      el("div", { class: "side-foot", "data-testid": "side-foot" }, this.githubLink(), this.langSelect()),
     );
+    this.renderDistroSwitch();
   }
 
   /** 建立目前視圖的骨架（containers／machines 含底部 panel）。 */
@@ -556,7 +706,11 @@ export class App {
     main.dataset.view = this.st.view;
     main.setAttribute("data-testid", `view-${this.st.view}`);
     if (this.st.view === "containers") {
-      main.replaceChildren(el("div", { class: "list", "data-testid": "container-list" }), el("section", { class: "panel", "data-testid": "panel", hidden: "" }));
+      main.replaceChildren(
+        this.containerToolbar(),
+        el("div", { class: "list", "data-testid": "container-list" }),
+        el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
+      );
     } else if (this.st.view === "machines") {
       main.replaceChildren(
         el("div", { class: "toolbar", "data-testid": "toolbar" }),
@@ -592,17 +746,7 @@ export class App {
     }
   }
 
-  private renderFooter(): void {
-    const f = this.root.querySelector<HTMLElement>('[data-testid="status-bar"]')!;
-    f.replaceChildren(
-      el("span", { "data-testid": "status-version", text: `v${this.st.meta.version}` }),
-      this.githubLink(),
-      el("span", { class: "spacer" }),
-      this.langSelect(),
-    );
-  }
-
-  /** Footer GitHub 圖示：開啟官方 repo（經後端 BrowserOpenURL／系統瀏覽器）。 */
+  /** 側欄底部 GitHub 圖示：開啟官方 repo（經後端 BrowserOpenURL／系統瀏覽器）。 */
   private githubLink(): HTMLElement {
     const a = el("a", {
       class: "github-link",
@@ -624,7 +768,7 @@ export class App {
     return a;
   }
 
-  /** 右下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
+  /** 側欄左下角語言切換：寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
   private langSelect(): HTMLElement {
     const sel = el("select", { "data-testid": "lang-select", "aria-label": t("gui.lang"), class: "lang" }) as HTMLSelectElement;
     for (const [v, label] of [["en", "English"], ["zh-TW", "繁體中文"]]) {
@@ -745,17 +889,81 @@ export class App {
     }
   }
 
+  /** 容器工具列：搜尋（名稱／映像／compose 服務）＋狀態分段篩選。只在切換視圖時建立，避免輸入時失焦。 */
+  private containerToolbar(): HTMLElement {
+    const search = el("input", {
+      type: "search",
+      class: "search-input",
+      "data-testid": "ct-search",
+      placeholder: t("gui.search.containers"),
+      "aria-label": t("gui.search.containers"),
+      autocomplete: "off",
+      spellcheck: "false",
+    }) as HTMLInputElement;
+    search.value = this.st.ctQuery;
+    search.oninput = () => {
+      this.st.ctQuery = search.value;
+      this.renderList();
+    };
+    const seg = el("div", { class: "segmented", role: "group", "data-testid": "ct-filter" });
+    for (const f of CT_FILTERS) {
+      const b = el("button", { type: "button", "data-testid": `ct-filter-${f.id}`, "data-filter": f.id });
+      b.onclick = () => {
+        this.st.ctFilter = f.id;
+        this.renderList();
+      };
+      seg.append(b);
+    }
+    const searchBox = el("label", { class: "search" }, icon("search"), search);
+    return el("div", { class: "toolbar", "data-testid": "toolbar" }, searchBox, seg);
+  }
+
+  /** 依目前篩選／搜尋過濾容器。 */
+  private visibleContainers(): Container[] {
+    const q = this.st.ctQuery.trim().toLowerCase();
+    return this.st.containers.filter((c) => {
+      const running = c.State === "running";
+      if (this.st.ctFilter === "running" && !running) return false;
+      if (this.st.ctFilter === "stopped" && running) return false;
+      if (!q) return true;
+      return [name(c), c.Image, c.Labels?.[LABEL_SERVICE] ?? "", c.Labels?.[LABEL_PROJECT] ?? ""].some((s) => s.toLowerCase().includes(q));
+    });
+  }
+
+  /** 分段鈕：標籤附數量、aria-pressed 標示目前篩選。 */
+  private syncFilterButtons(): void {
+    const running = this.st.containers.filter((c) => c.State === "running").length;
+    const counts: Record<CtFilter, number> = { all: this.st.containers.length, running, stopped: this.st.containers.length - running };
+    for (const f of CT_FILTERS) {
+      const b = this.root.querySelector<HTMLButtonElement>(`[data-testid="ct-filter-${f.id}"]`);
+      if (!b) continue;
+      b.textContent = `${t(f.label)} ${counts[f.id]}`;
+      b.setAttribute("aria-pressed", String(this.st.ctFilter === f.id));
+    }
+    const sub = this.root.querySelector<HTMLElement>('[data-testid="page-sub"]');
+    if (sub) sub.textContent = this.pageSubtitle();
+    // 引擎未就緒時搜尋／篩選沒有意義；保留空間（visibility）避免列表跳動
+    const bar = this.root.querySelector<HTMLElement>('main[data-view="containers"] > [data-testid="toolbar"]');
+    if (bar) bar.style.visibility = this.st.status && this.st.status.ready !== true ? "hidden" : "";
+  }
+
   private renderList(): void {
     const list = this.root.querySelector<HTMLElement>('[data-testid="container-list"]');
     if (!list) return;
+    this.syncFilterButtons();
     if (this.st.containers.length === 0) {
-      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty") }));
+      list.replaceChildren(this.emptyState(t("gui.empty")));
+      return;
+    }
+    const shown = this.visibleContainers();
+    if (shown.length === 0) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty-filtered", text: t("gui.empty.filtered") }));
       return;
     }
     const { table, tbody } = this.table("containers", COLS);
-    const groups = groupContainers(this.st.containers);
+    const groups = groupContainers(shown);
     if (!groups) {
-      for (const c of this.st.containers) tbody.append(this.containerRow(c, "", name(c)));
+      for (const c of shown) tbody.append(this.containerRow(c, "", name(c)));
     } else {
       for (const g of groups) {
         const expanded = !this.collapsed.has(g.project);
@@ -834,11 +1042,19 @@ export class App {
 
     const rowAttrs: Record<string, string> = { "data-testid": "container-row", "data-name": n, "data-state": c.State, "data-project": project };
     if (pending) rowAttrs["data-pending"] = pending;
+    // 右側詳情正在顯示這個容器：整列標示為選取
+    if (this.st.info?.kind === "container" && this.st.info.id === c.Id) {
+      rowAttrs.class = "sel";
+      rowAttrs["aria-selected"] = "true";
+    }
     const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
     return el(
       "tr",
       rowAttrs,
-      el("td", { "data-testid": "ct-name", class: project ? "indent" : "", text: display, title: `${n}\n${c.Id}` }),
+      el("td", { class: `name-cell ${project ? "indent" : ""}`.trim() },
+        el("span", { class: "ct-name", "data-testid": "ct-name", text: display, title: `${n}\n${c.Id}` }),
+        el("span", { class: "ct-sub", "data-testid": `ct-status-${n}`, text: c.Status || c.State }),
+      ),
       el("td", { text: c.Image, title: c.Image }),
       el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
       el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, infoBtn, rmBtn),
@@ -875,7 +1091,25 @@ export class App {
     const title = el("strong", { "data-testid": "panel-title", text: `${p.kind === "logs" ? t("gui.logs") : t("gui.terminal")} — ${p.name}` });
     const close = iconBtn({ class: "small", "data-testid": "btn-panel-close" }, "close", t("gui.close"));
     close.onclick = () => this.closePanel();
-    const kids: (Node | string)[] = [title, el("span", { class: "spacer" })];
+    const kids: (Node | string)[] = [title];
+    // 容器面板（有分頁時標題只放名稱，類型由分頁表示）：日誌／終端分頁切換（同一個容器）；machine 終端沒有日誌
+    const c = this.st.containers.find((x) => x.Id === p.id);
+    if (c) {
+      title.textContent = p.name;
+      const tabs = el("div", { class: "tabs", role: "tablist", "data-testid": "panel-tabs" });
+      for (const [kind, ico, label] of [["logs", "logs", t("gui.logs")], ["term", "terminal", t("gui.terminal")]] as const) {
+        const tab = btn({ type: "button", role: "tab", class: "tab", "data-testid": `panel-tab-${kind}`, "aria-selected": String(p.kind === kind) }, ico, label);
+        if (kind === "term" && c.State !== "running") tab.disabled = true;
+        tab.onclick = () => {
+          if (this.st.panel?.kind === kind) return;
+          if (kind === "logs") this.openLogs(c);
+          else this.openTerminal(c);
+        };
+        tabs.append(tab);
+      }
+      kids.push(tabs);
+    }
+    kids.push(el("span", { class: "spacer" }));
     if (p.kind === "logs") {
       const live = el("input", { type: "checkbox", "data-testid": "logs-live-toggle" }) as HTMLInputElement;
       live.checked = p.live;
@@ -1051,18 +1285,43 @@ export class App {
         const rep = await api.pruneImages();
         return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
       });
-    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.images")} · ${this.st.images.length}` }), el("span", { class: "spacer" }), prune);
+
+    const counts: Record<ImgFilter, number> = { all: this.st.images.length, inuse: 0, unused: 0, dangling: 0 };
+    for (const im of this.st.images) {
+      const k = imageKind(im);
+      if (k !== "unknown") counts[k]++;
+    }
+    const seg = this.segmented(
+      "img-filter",
+      IMG_FILTERS.map((f) => ({ id: f.id, label: `${t(f.label)} ${counts[f.id]}` })),
+      this.st.imgFilter,
+      (id) => {
+        this.st.imgFilter = id as ImgFilter;
+        this.renderImages();
+      },
+    );
+    const kids: Node[] = [];
+    if (ready && this.st.images.length) kids.push(this.diskUsage(this.st.images));
+    kids.push(seg, el("span", { class: "spacer" }), prune);
+    bar.replaceChildren(...kids);
 
     if (!ready || this.st.images.length === 0) {
-      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.images") }));
+      list.replaceChildren(this.emptyState(t("gui.empty.images")));
+      return;
+    }
+    const imgs = [...this.st.images]
+      .filter((im) => this.st.imgFilter === "all" || imageKind(im) === this.st.imgFilter)
+      .sort((a, b) => imageName(a).localeCompare(imageName(b)));
+    if (imgs.length === 0) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty-filtered", text: t("gui.empty.filtered_items") }));
       return;
     }
     const { table, tbody } = this.table("images", IMAGE_COLS);
-    const imgs = [...this.st.images].sort((a, b) => imageName(a).localeCompare(imageName(b)));
     for (const im of imgs) {
       const short = shortID(im.Id);
       const nm = imageName(im);
       const ref = nm === "<none>" ? short : nm;
+      const kind = imageKind(im);
       const rm = iconBtn({ "data-testid": `btn-rm-image-${short}`, class: "danger" }, "trash", t("gui.remove"));
       rm.disabled = this.st.busy.has(`image:${ref}`);
       rm.onclick = () =>
@@ -1070,20 +1329,63 @@ export class App {
           await api.removeImage(ref);
           return fmt(t("gui.removed"), ref);
         });
+      const inuse = el("td", {},
+        el("span", { class: `tag ${KIND_TAG[kind]}`, "data-testid": "image-inuse", "data-kind": kind, title: t(KIND_LABEL[kind]), text: im.Containers < 0 ? "–" : String(im.Containers) }),
+      );
       tbody.append(
         el(
           "tr",
-          { "data-testid": "image-row", "data-ref": ref },
-          el("td", { "data-testid": "image-name", text: nm, title: (im.RepoTags ?? []).join("\n") || nm }),
-          el("td", { "data-testid": "image-id", class: "mono", text: short, title: im.Id }),
-          el("td", { "data-testid": "image-size", text: humanSize(im.Size) }),
-          el("td", { text: fmtUnix(im.Created) }),
-          el("td", { "data-testid": "image-inuse", text: im.Containers < 0 ? "–" : String(im.Containers) }),
+          { "data-testid": "image-row", "data-ref": ref, "data-kind": kind },
+          el("td", { "data-testid": "image-name", class: "strong", text: nm, title: (im.RepoTags ?? []).join("\n") || nm }),
+          el("td", { "data-testid": "image-id", class: "mono muted", text: short, title: im.Id }),
+          el("td", { "data-testid": "image-size", class: "num", text: humanSize(im.Size) }),
+          el("td", { class: "muted", text: fmtUnix(im.Created) }),
+          inuse,
           el("td", { class: "actions" }, rm),
         ),
       );
     }
     list.replaceChildren(table);
+  }
+
+  /** 映像磁碟用量：使用中／未使用／懸空（／daemon 未統計）依大小分段，顏色以明度區分。 */
+  private diskUsage(images: Image[]): HTMLElement {
+    const sizes: Record<ImgKind, number> = { inuse: 0, unused: 0, dangling: 0, unknown: 0 };
+    const counts: Record<ImgKind, number> = { inuse: 0, unused: 0, dangling: 0, unknown: 0 };
+    for (const im of images) {
+      const k = imageKind(im);
+      sizes[k] += im.Size;
+      counts[k]++;
+    }
+    const total = Object.values(sizes).reduce((a, b) => a + b, 0) || 1;
+    const order: ImgKind[] = ["inuse", "unused", "dangling", "unknown"];
+    const bar = el("div", { class: "disk-bar", role: "img", "data-testid": "disk-bar" });
+    const legend = el("div", { class: "disk-legend" });
+    const aria: string[] = [];
+    for (const k of order) {
+      if (!counts[k]) continue;
+      const seg = el("span", { class: `disk-seg ${k}`, "data-kind": k });
+      seg.style.width = `${(sizes[k] / total) * 100}%`;
+      bar.append(seg);
+      legend.append(
+        el("span", { class: "disk-key", "data-testid": `disk-${k}` },
+          el("span", { class: `disk-swatch ${k}`, "aria-hidden": "true" }),
+          t(KIND_LABEL[k]),
+          el("strong", { text: humanSize(sizes[k]) }),
+          el("span", { class: "muted", text: `· ${counts[k]}` }),
+        ),
+      );
+      aria.push(`${t(KIND_LABEL[k])} ${humanSize(sizes[k])}`);
+    }
+    bar.setAttribute("aria-label", aria.join(", "));
+    return el("section", { class: "disk-card", "data-testid": "disk-usage", "aria-label": t("gui.disk.title") },
+      el("div", { class: "disk-head" },
+        el("strong", { text: t("gui.disk.title") }),
+        el("span", { class: "muted", "data-testid": "disk-total", text: humanSize(images.reduce((a, im) => a + im.Size, 0)) }),
+      ),
+      bar,
+      legend,
+    );
   }
 
   // ---- Volumes ----------------------------------------------------------------
@@ -1100,10 +1402,10 @@ export class App {
         const rep = await api.pruneVolumes();
         return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
       });
-    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.volumes")} · ${this.st.volumes.length}` }), el("span", { class: "spacer" }), prune);
+    bar.replaceChildren(el("span", { class: "spacer" }), prune);
 
     if (!ready || this.st.volumes.length === 0) {
-      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.volumes") }));
+      list.replaceChildren(this.emptyState(t("gui.empty.volumes")));
       return;
     }
     const { table, tbody } = this.table("volumes", VOLUME_COLS);
@@ -1119,10 +1421,10 @@ export class App {
         el(
           "tr",
           { "data-testid": "volume-row", "data-name": v.Name },
-          el("td", { "data-testid": "volume-name", text: v.Name, title: v.Name }),
+          el("td", { "data-testid": "volume-name", class: "strong", text: v.Name, title: v.Name }),
           el("td", { "data-testid": "volume-driver", text: v.Driver }),
-          el("td", { "data-testid": "volume-mountpoint", class: "mono", text: v.Mountpoint, title: v.Mountpoint }),
-          el("td", { text: fmtISO(v.CreatedAt) }),
+          el("td", { "data-testid": "volume-mountpoint", class: "mono muted", text: v.Mountpoint, title: v.Mountpoint }),
+          el("td", { class: "muted", text: fmtISO(v.CreatedAt) }),
           el("td", { class: "actions" }, rm),
         ),
       );
@@ -1144,10 +1446,10 @@ export class App {
         const rep = await api.pruneNetworks();
         return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
       });
-    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.networks")} · ${this.st.networks.length}` }), el("span", { class: "spacer" }), prune);
+    bar.replaceChildren(el("span", { class: "spacer" }), prune);
 
     if (!ready || this.st.networks.length === 0) {
-      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.networks") }));
+      list.replaceChildren(this.emptyState(t("gui.empty.networks")));
       return;
     }
     const { table, tbody } = this.table("networks", NETWORK_COLS);
@@ -1166,11 +1468,11 @@ export class App {
         el(
           "tr",
           { "data-testid": "network-row", "data-name": n.Name, "data-builtin": String(builtin) },
-          el("td", { "data-testid": "network-name", class: builtin ? "muted" : "", text: n.Name, title: n.Name }),
+          el("td", { "data-testid": "network-name", class: builtin ? "muted" : "strong", text: n.Name, title: n.Name }),
           el("td", { "data-testid": "network-driver", text: n.Driver }),
           el("td", { "data-testid": "network-scope", text: n.Scope }),
-          el("td", { "data-testid": "network-id", class: "mono", text: shortID(n.Id), title: n.Id }),
-          el("td", { text: fmtISO(n.Created) }),
+          el("td", { "data-testid": "network-id", class: "mono muted", text: shortID(n.Id), title: n.Id }),
+          el("td", { class: "muted", text: fmtISO(n.Created) }),
           el("td", { class: "actions" }, rm),
         ),
       );
@@ -1178,18 +1480,19 @@ export class App {
     list.replaceChildren(table);
   }
 
-  // ---- Machines（本機 WSL）----------------------------------------------------
+  // ---- Machines（本機 WSL）：卡片 ---------------------------------------------
 
   private renderMachines(): void {
     const list = this.root.querySelector<HTMLElement>('[data-testid="machines-list"]');
     const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
     if (!list || !bar) return;
+    list.classList.add("cards");
     const m = this.st.machines;
     const removingAny = [...this.st.busy].some((k) => k.startsWith("remove:"));
-    const add = btn({ "data-testid": "btn-add-machine" }, "plus", t("gui.machines.add"));
+    const add = btn({ class: "primary", "data-testid": "btn-add-machine" }, "plus", t("gui.machines.add"));
     add.disabled = !m?.available || this.st.busy.has("install") || removingAny || !!this.st.switching || this.st.starting;
     add.onclick = () => this.openAddMachine();
-    bar.replaceChildren(el("span", { class: "count", text: `${t("gui.nav.machines")} · ${m?.machines.length ?? 0}` }), el("span", { class: "spacer" }), add);
+    bar.replaceChildren(el("span", { class: "spacer" }), add);
 
     if (m && !m.available) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.machines.unavailable") }));
@@ -1199,32 +1502,23 @@ export class App {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.machines") }));
       return;
     }
-    const { table, tbody } = this.table("machines", MACHINE_COLS);
+    const grid = el("div", { class: "machine-grid" });
     for (const d of m.machines) {
       const removing = this.st.busy.has(`remove:${d.name}`);
       const switching = this.st.switching === d.name;
       const starting = this.st.starting && d.active;
       const pending = removing ? "removing" : switching ? "switching" : starting ? "starting" : undefined;
       const locked = !!pending || removingAny || !!this.st.switching || this.st.starting;
-      const actions: HTMLElement[] = [];
-      if (!d.active) {
-        const use = iconBtn({ "data-testid": `btn-machine-use-${d.name}` }, "save", t("gui.machines.use"));
-        use.disabled = locked;
-        use.onclick = () => void this.useMachine(d.name);
-        actions.push(use);
-      }
+      const tools: HTMLElement[] = [];
       const cfg = iconBtn({ "data-testid": `btn-machine-config-${d.name}` }, "info", t("gui.machines.info"));
       cfg.disabled = locked;
       cfg.onclick = () => void this.openMachineInfo(d.name);
-      actions.push(cfg);
       const folder = iconBtn({ "data-testid": `btn-machine-folder-${d.name}` }, "folder", t("gui.machines.folder"));
       folder.disabled = locked;
       folder.onclick = () => void this.distroAction("open-folder");
-      actions.push(folder);
       const term = iconBtn({ "data-testid": `btn-machine-term-${d.name}` }, "terminal", t("gui.machines.terminal"));
       term.disabled = locked;
       term.onclick = () => this.openMachineTerminal(d.name);
-      actions.push(term);
       const rm = iconBtn({ "data-testid": `btn-machine-remove-${d.name}`, class: "danger" }, "trash", t("gui.machines.remove"));
       rm.disabled = locked;
       rm.onclick = () =>
@@ -1240,11 +1534,22 @@ export class App {
           },
           d.name,
         );
-      actions.push(rm);
+      tools.push(cfg, folder, term, rm);
+
+      const footKids: HTMLElement[] = [];
+      if (!d.active) {
+        const use = btn({ "data-testid": `btn-machine-use-${d.name}` }, "save", t("gui.machines.use"));
+        use.disabled = locked;
+        use.onclick = () => void this.useMachine(d.name);
+        footKids.push(use);
+      }
+      footKids.push(el("span", { class: "spacer" }), ...tools);
+
       const flags: HTMLElement[] = [];
       if (d.active) flags.push(el("span", { class: "tag accent", "data-testid": "machine-flag-active", text: t("gui.machines.active"), title: d.api_endpoint || this.st.meta.api_endpoint }));
-      if (d.managed && !d.ready) flags.push(el("span", { class: "tag", "data-testid": "machine-flag-not-ready", text: t("status.not_ready") }));
+      if (d.managed && !d.ready) flags.push(el("span", { class: "tag warn", "data-testid": "machine-flag-not-ready", text: t("status.not_ready") }));
       if (d.default) flags.push(el("span", { class: "tag", "data-testid": "machine-flag-default", text: t("gui.machines.default") }));
+      if (d.managed === false) flags.push(el("span", { class: "tag warn", "data-testid": "machine-flag-unmanaged", text: t("gui.machines.unmanaged") }));
       const stateText =
         pending === "removing"
           ? t("gui.machines.removing")
@@ -1253,26 +1558,39 @@ export class App {
             : pending === "starting"
               ? t("gui.status.starting")
               : d.state;
-      const rowAttrs: Record<string, string> = {
+      const attrs: Record<string, string> = {
+        class: `machine-card${d.active ? " active" : ""}`,
         "data-testid": "machine-row",
         "data-name": d.name,
         "data-state": pending ?? d.state.toLowerCase(),
         "data-active": d.active ? "1" : "0",
+        "aria-label": d.name,
       };
-      if (pending) rowAttrs["data-pending"] = pending;
-      tbody.append(
-        el(
-          "tr",
-          rowAttrs,
-          el("td", { "data-testid": "machine-name", text: d.name, title: d.name }),
-          el("td", {}, el("span", { class: `state ${pending ? "pending" : d.state.toLowerCase()}`, "data-testid": "machine-state", text: stateText })),
-          el("td", { "data-testid": "machine-version", text: String(d.version) }),
-          el("td", { class: "flags" }, ...flags),
-          el("td", { class: "actions" }, ...actions),
+      if (pending) attrs["data-pending"] = pending;
+      const meta: (Node | string)[] = [
+        el("span", { class: `state ${pending ? "pending" : d.state.toLowerCase()}`, "data-testid": "machine-state", text: stateText }),
+        el("span", { class: "muted" }, " · WSL ", el("span", { "data-testid": "machine-version", text: String(d.version) })),
+      ];
+      if (d.active && (d.api_endpoint || this.st.meta.api_endpoint)) {
+        meta.push(el("span", { class: "muted mono", "data-testid": "machine-endpoint", text: ` · ${d.api_endpoint || this.st.meta.api_endpoint}` }));
+      }
+      grid.append(
+        el("article", attrs,
+          el("div", { class: "machine-head" },
+            el("span", { class: "machine-icon", "aria-hidden": "true" }, icon("machines")),
+            el("div", { class: "machine-title" },
+              el("div", { class: "machine-name-row" },
+                el("h2", { class: "machine-name", "data-testid": "machine-name", text: d.name, title: d.name }),
+                ...flags,
+              ),
+              el("div", { class: "machine-meta" }, ...meta),
+            ),
+          ),
+          el("div", { class: "machine-foot" }, ...footKids),
         ),
       );
     }
-    list.replaceChildren(table);
+    list.replaceChildren(grid);
   }
 
   private hardCutActive(): void {
@@ -1553,7 +1871,7 @@ export class App {
     const list = this.root.querySelector<HTMLElement>('[data-testid="settings-list"]');
     const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
     if (!list || !bar) return;
-    bar.replaceChildren(el("span", { class: "count", text: t("gui.settings") }));
+    bar.replaceChildren(); // 頁首已有標題
     const c = this.st.meta.config;
     const interval = el("input", { type: "number", min: "1", max: "3600", "data-testid": "settings-refresh", value: String(c.refresh_interval_sec) }) as HTMLInputElement;
     const shell = el("input", { type: "text", "data-testid": "settings-exec-shell", placeholder: "bash", value: c.exec_shell || "" }) as HTMLInputElement;
@@ -1565,6 +1883,7 @@ export class App {
       "data-testid": "settings-autostart",
       "aria-checked": c.tray_autostart ? "true" : "false",
     }) as HTMLButtonElement;
+    auto.setAttribute("aria-label", t("gui.settings.autostart"));
     auto.disabled = !this.st.meta.autostart_supported;
     auto.onclick = () => {
       const on = auto.getAttribute("aria-checked") !== "true";
@@ -1572,7 +1891,7 @@ export class App {
     };
 
     const themeVal = c.theme || "system";
-    const themeRadios = el("div", { class: "radio-group", "data-testid": "settings-theme", role: "radiogroup", "aria-label": t("gui.settings.theme") });
+    const themeRadios = el("div", { class: "radio-group", "data-testid": "settings-theme", role: "radiogroup", "aria-labelledby": "settings-theme-label" });
     for (const [v, key] of [
       ["light", "gui.settings.theme.light"],
       ["dark", "gui.settings.theme.dark"],
@@ -1600,14 +1919,26 @@ export class App {
         this.notify(t("gui.save"));
       }
     };
+    // SettingsCard：左邊標題＋說明，右邊控制項；分「外觀」「行為」兩組
+    const row = (label: Node, hint: string, control: Node) =>
+      el("div", { class: "set-row" }, el("div", { class: "set-text" }, label, el("span", { class: "set-hint", text: hint })), el("div", { class: "set-control" }, control));
+    interval.id = "settings-refresh";
+    shell.id = "settings-exec-shell";
+    list.classList.add("cards");
     list.replaceChildren(
       el(
         "form",
         { class: "settings-form", "data-testid": "settings-form" },
-        el("label", {}, t("gui.settings.refresh"), interval),
-        el("label", {}, t("gui.settings.exec_shell"), shell),
-        el("div", { class: "settings-row" }, el("span", { "data-testid": "settings-autostart-label", text: t("gui.settings.autostart") }), auto),
-        el("fieldset", { class: "settings-fieldset" }, el("legend", { text: t("gui.settings.theme") }), themeRadios),
+        el("section", { class: "set-group" },
+          el("h2", { text: t("gui.settings.group.look") }),
+          row(el("span", { id: "settings-theme-label", text: t("gui.settings.theme") }), t("gui.settings.theme_hint"), themeRadios),
+        ),
+        el("section", { class: "set-group" },
+          el("h2", { text: t("gui.settings.group.behave") }),
+          row(el("span", { "data-testid": "settings-autostart-label", text: t("gui.settings.autostart") }), t("gui.settings.auto_hint"), auto),
+          row(el("label", { for: "settings-refresh", text: t("gui.settings.refresh") }), t("gui.settings.refresh_hint"), interval),
+          row(el("label", { for: "settings-exec-shell", text: t("gui.settings.exec_shell") }), t("gui.settings.shell_hint"), shell),
+        ),
         el("div", { class: "row settings-actions" }, save),
       ),
     );
@@ -1676,10 +2007,10 @@ interface Col {
 }
 
 const COLS: Col[] = [
-  // 總和 < 預設視窗（1000px − 側欄 96px），避免一開就出現水平捲軸
+  // 總和 < 預設視窗內容寬（1100px − 側欄 232px − 邊距 48px），避免一開就出現水平捲軸
   { key: "name", label: "gui.col.name", def: 220, min: 80, resizable: true },
   { key: "image", label: "gui.col.image", def: 260, min: 80, resizable: true },
-  { key: "state", label: "gui.col.state", def: 100, min: 70, resizable: true },
+  { key: "state", label: "gui.col.state", def: 130, min: 90, resizable: true },
 	{ key: "actions", label: "gui.col.actions", def: 210, min: 180, resizable: false },
 ];
 
@@ -1786,6 +2117,22 @@ function fmt(s: string, ...args: string[]): string {
 function shortID(id: string): string {
   return id.replace(/^sha256:/, "").slice(0, 12);
 }
+
+/** 映像使用狀態：daemon 未計算（Containers = -1）時歸為 unknown，不硬猜。 */
+function imageKind(im: Image): ImgKind {
+  if (im.Containers > 0) return "inuse";
+  if (imageName(im) === "<none>") return "dangling";
+  if (im.Containers < 0) return "unknown";
+  return "unused";
+}
+
+const KIND_LABEL: Record<ImgKind, string> = {
+  inuse: "gui.filter.in_use",
+  unused: "gui.filter.unused",
+  dangling: "gui.filter.dangling",
+  unknown: "gui.filter.unknown",
+};
+const KIND_TAG: Record<ImgKind, string> = { inuse: "accent", unused: "", dangling: "warn", unknown: "" };
 
 function imageName(im: Image): string {
   const tag = im.RepoTags?.[0];

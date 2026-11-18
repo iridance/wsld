@@ -27,25 +27,31 @@
 ## 版面
 
 ```
-┌ header ─ <distro> [📁] [>_] [Connected] ······ [⏻ Start engine] ─┐
-│ banner（錯誤，紅）／notice（動作結果，綠）                          │
-├──────────┬──────────────────────────────────┬────────────────────┤
-│ side nav │ main（目前視圖）                   │ info drawer（右）   │
-│ Containers│  Containers：列表＋下方 Logs／Term │ 容器／compose／     │
-│ Images   │  Images／Volumes／Networks／       │ machine 詳情       │
-│ Volumes  │  Machines／Settings               │                    │
-│ Networks │                                    │                    │
-│ Machines │                                    │                    │
-│ Settings │                                    │                    │
-├──────────┴──────────────────────────────────┴────────────────────┤
-│ footer ─ v…  ⌂ ········································ English ▾ │
-└──────────────────────────────────────────────────────────────────┘
+┌ side nav ───────┬ header ─ <頁標題> <摘要> ········· [📁] [>_] [⏻ Start engine*] ┐
+│ ▦ wsld  v…      ├──────────────────────────────────────────┬─────────────────┤
+│ ┌─────────────┐ │ toolbar（搜尋／篩選／prune／Add）          │ info drawer（右）│
+│ │● Ubuntu     │ │ main（目前視圖，卡片底）                   │ 容器／compose／  │
+│ │ Connected   │ │  Containers：列表＋下方 Logs│Terminal 分頁 │ machine 詳情     │
+│ └─────────────┘ │  Images：磁碟用量＋篩選＋列表               │                 │
+│ 資源             │  Volumes／Networks：列表                   │                 │
+│  Containers…    │  Machines：卡片；Settings：分組卡片          │                 │
+│ 系統             │                                            │                 │
+│  Machines       │ ┌ InfoBar（錯誤紅／未就緒黃／結果綠，浮在底部）┐ │                 │
+│  Settings       │ └──────────────────────────────────────────┘ │                 │
+│ ⌂  English ▾    │                                            │                 │
+└─────────────────┴──────────────────────────────────────────┴─────────────────┘
 ```
 
-- **Header**：active distro 名稱（無 config 時顯示 wsld）＋ **有 border** 的 Open folder／Open terminal、連線徽章、啟動引擎。**不顯示** API endpoint（tcp）與 Settings（分別在 Machines Info／側欄 Settings）。
-- **Side nav**：Containers／Images／Volumes／Networks／Machines／**Settings**；`aria-current="page"`；存 localStorage。上下間距對齊左右間距。切換視圖關閉 Logs／Terminal／Info。
-- **Info drawer（右）**：Containers／Compose／Machines 詳情（見下表）。
-- **Footer**：左版本＋ **GitHub 圖示**（開 `https://github.com/iridance/wsld`）、右語言下拉（無邊框）。
+外觀依設計稿（Fluent 語彙：圓角 6–8、Mica 底、單一藍色強調色）；色彩 tokens 在 `frontend/src/style.css` 的 `:root`／深色區塊，文字在其底色上 ≥ 4.5:1。狀態一律「形狀＋文字＋顏色」：實心點＝執行中、空心環＝停止、脈動＝處理中。
+
+- **Side nav（滿高）**：品牌標誌（全方格鯨魚，與 `gen_icon.go` 同一張 16 格主格線）＋版本；**發行版卡片**（active distro、引擎狀態點與文字 `status-connection`、已連線時顯示 API 埠；點擊前往 Machines；切換中顯示 Loading）；「資源」Containers／Images／Volumes／Networks、「系統」Machines；底部 Settings、GitHub 圖示、語言下拉（無邊框）。`aria-current="page"`；存 localStorage。切換視圖關閉 Logs／Terminal／Info。
+- **Header**：目前視圖標題＋摘要（Containers：執行中／已停止數；資源頁：項目數，映像含總大小）＋ **有 border** 的 Open folder／Open terminal；**Start engine 只在需要時出現**（未連線、未 init）。**不顯示** API endpoint（tcp）與 Settings。
+- **Containers**：工具列搜尋（名稱／映像／compose 服務）＋狀態分段篩選（全部／執行中／已停止，附數量）；名稱下方顯示 docker 狀態描述；開啟 Info 時該列標示選取。Logs／Terminal 面板頂部有分頁可切換同一容器（已停止容器不能開終端）。
+- **Images**：磁碟用量長條（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋分段篩選＋清除未使用。
+- **Machines**：每個發行版一張卡片（狀態、WSL 版本、角色標籤、目前那台顯示 API 端點；設為目前、Info、資料夾、終端、刪除）。
+- **Settings**：「外觀」「行為」兩組 SettingsCard（左標題＋說明、右控制項）。
+- **引擎未就緒**：資源列表改顯示「引擎尚未啟動」卡片：啟動引擎按鈕＋由 `/api/status` 推得的檢查清單（找到發行版、執行中、systemd、docker.service、API 可連線）。
+- **InfoBar**：錯誤／未就緒／動作結果浮在內容欄底部，不擠動列表；結果 8 秒後自動消失。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
 
 ## 功能對照（SPEC §5.5／Roadmap 0.5）
@@ -53,8 +59,8 @@
 | 區塊 | 行為 | Playwright 覆蓋 |
 |---|---|---|
 | Tray | 狀態列、啟動引擎、開啟主視窗、結束；按 X 縮 Tray | 實機手測 |
-| Header | distro＋有 border 的 folder／terminal＋連線徽章＋Start engine；無 Settings、無 tcp | `list`／`info`（隨 0.5 更新） |
-| Side nav | 六視圖（含 Settings）；間距打磨 | `shell.spec.ts` |
+| Header | 頁標題＋摘要＋有 border 的 folder／terminal＋需要時才出現的 Start engine；無 Settings、無 tcp | `list`／`info`／`shell` |
+| Side nav | 品牌＋版本、發行版卡片（引擎狀態，點擊到 Machines）、分組六視圖、GitHub＋語言 | `shell.spec.ts`／`list` |
 | 按鈕圖示 | 列／compose：無邊框純圖示；**header icon：有 border** | `list`／`groups`／`info` |
 | Containers | Name／Image／State／操作（Start／Stop／Logs／Term／Info／**Remove**）；右側 Info＝summary | `list`／`info` |
 | Info（容器） | Name、ID、Image、State、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels、Restart policy | `info.spec.ts` |
@@ -65,7 +71,7 @@
 | Machines | 設為目前、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | 側欄：refresh、exec_shell、tray_autostart、Theme Light／Dark／System | `settings`（搬遷） |
-| i18n | footer 語言下拉＋GitHub 連結 | `list.spec.ts` |
+| i18n | 側欄底部語言下拉＋GitHub 連結 | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 
 ### 破壞性操作的規則
@@ -102,7 +108,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.6.0 → 左下角 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.7.0 → 側欄 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
