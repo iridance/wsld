@@ -15,6 +15,17 @@ Windows                         WSL2
                                 └──────────────────┘
 ```
 
+## 畫面
+
+![wsld-gui：Containers（compose 分組、搜尋／狀態篩選、Logs 面板）](docs/images/gui-containers.png)
+
+<p>
+  <img src="docs/images/gui-machines-dark.png" width="49%" alt="Machines（深色主題）：發行版卡片與右側 Info">
+  <img src="docs/images/gui-settings.png" width="49%" alt="Settings：主題、語言、開機自啟動、刷新間隔、終端 shell">
+</p>
+
+<sub>以 `wsld-gui-testhost`（假後端）截圖；`make readme-shots` 可重新產生。</sub>
+
 ## 快速開始
 
 ### 前置

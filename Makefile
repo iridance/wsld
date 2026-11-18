@@ -5,7 +5,7 @@ export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' | grep . || echo 0.8.0)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui fmt icon winres
+.PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui readme-shots fmt icon winres
 
 test: test-scripts test-go test-ui
 
@@ -47,6 +47,12 @@ test-ui: build-frontend
 	@set -euo pipefail; \
 	  . ./scripts/ensure-playwright-libs.sh; \
 	  cd frontend && npm test
+
+# README 截圖 → docs/images/*.png（testhost 假資料，版號取 frontend/package.json）
+readme-shots: build-frontend
+	@set -euo pipefail; \
+	  . ./scripts/ensure-playwright-libs.sh; \
+	  cd frontend && README_SHOTS=1 npx playwright test tests/readme-shots.spec.ts
 
 test-scripts: lint-scripts test-scripts-bash test-scripts-ps
 
