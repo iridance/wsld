@@ -543,6 +543,59 @@ test("Machines view works while the Docker engine is down", async ({ page, reque
   await expect(page.getByTestId("machine-row")).toHaveCount(2);
 });
 
+test("Machines: Start / Stop a non-primary distro toggles its state without a confirm", async ({ page }) => {
+  await go(page, "machines");
+  const row = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
+  await expect(row).toHaveAttribute("data-state", "stopped");
+  await expect(page.getByTestId("btn-machine-stop-docker-desktop")).toHaveCount(0);
+
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route("**/api/machines/docker-desktop/start", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  const click = page.getByTestId("btn-machine-start-docker-desktop").click();
+  await expect(row).toHaveAttribute("data-pending", "starting");
+  await expect(row.getByTestId("machine-state")).toHaveText("Starting…");
+  release();
+  await click;
+  await expect(row).toHaveAttribute("data-state", "running");
+  await expect(page.getByTestId("btn-machine-start-docker-desktop")).toHaveCount(0);
+
+  await page.getByTestId("btn-machine-stop-docker-desktop").click();
+  await expect(page.getByTestId("confirm-dialog")).toBeHidden();
+  await expect(row).toHaveAttribute("data-state", "stopped");
+  // 非主要 distro 不影響引擎
+  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
+});
+
+test("Machines: Stopping the primary distro confirms, disconnects the engine; Start brings it back", async ({ page }) => {
+  await go(page, "machines");
+  const row = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
+  await expect(row).toHaveAttribute("data-state", "running");
+
+  // 取消 → 不停止
+  await page.getByTestId("btn-machine-stop-Ubuntu-26.04").click();
+  await expect(page.getByTestId("confirm-dialog")).toBeVisible();
+  await expect(page.getByTestId("confirm-text")).toContainText("primary distro");
+  await page.getByTestId("confirm-cancel").click();
+  await expect(row).toHaveAttribute("data-state", "running");
+
+  await page.getByTestId("btn-machine-stop-Ubuntu-26.04").click();
+  await expect(page.getByTestId("confirm-ok")).toHaveText("Stop distro");
+  await page.getByTestId("confirm-ok").click();
+  await expect(row).toHaveAttribute("data-state", "stopped");
+  await expect(page.getByTestId("status-connection")).not.toHaveAttribute("data-state", "connected");
+  await expect(page.getByTestId("btn-start-engine")).toBeEnabled();
+
+  await page.getByTestId("btn-machine-start-Ubuntu-26.04").click();
+  await expect(row).toHaveAttribute("data-state", "running");
+  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 10_000 });
+});
+
 test("Machines: Terminal opens bottom panel exec session like containers", async ({ page }) => {
   await open(page);
   await page.getByTestId("nav-machines").click();

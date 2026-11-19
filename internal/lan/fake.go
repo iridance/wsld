@@ -30,6 +30,8 @@ type FakeHost struct {
 	AllowErr error
 	// AllowCalls 記錄 AllowApp 的呼叫次數。
 	AllowCalls int
+	// AllowHold 非 nil 時 AllowApp 等到它關閉才繼續（模擬使用者還沒回應 UAC）。
+	AllowHold chan struct{}
 }
 
 // ConfigPath 實作 Host。
@@ -87,7 +89,17 @@ func (f *FakeHost) AppFirewall(context.Context, string) (FirewallState, error) {
 }
 
 // AllowApp 實作 Host：成功後狀態變為 FirewallAllowed。
-func (f *FakeHost) AllowApp(context.Context, string) error {
+func (f *FakeHost) AllowApp(ctx context.Context, _ string) error {
+	f.mu.Lock()
+	hold := f.AllowHold
+	f.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.AllowCalls++

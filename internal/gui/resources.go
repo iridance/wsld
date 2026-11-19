@@ -398,6 +398,69 @@ func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// findDistro 驗證名稱並在 wsl --list 中找到 distro；找不到時已寫好錯誤回應。
+func (s *Server) findDistro(w http.ResponseWriter, r *http.Request) (wsl.Distro, bool) {
+	name := r.PathValue("name")
+	if !wsl.ValidDistroName(name) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
+		return wsl.Distro{}, false
+	}
+	if s.WSL == nil {
+		writeErr(w, http.StatusNotImplemented, "error", errors.New("wsl unavailable"))
+		return wsl.Distro{}, false
+	}
+	list, err := wsl.ListDistros(r.Context(), s.WSL)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "error", err)
+		return wsl.Distro{}, false
+	}
+	d, ok := wsl.FindDistro(list, name)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", errors.New("distro not found: "+name))
+		return wsl.Distro{}, false
+	}
+	return d, true
+}
+
+// handleMachineStart 啟動 distro（wsl -d <name> -- true）。已納管的 distro 由 systemd 自動帶起 docker.service。
+func (s *Server) handleMachineStart(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.findDistro(w, r)
+	if !ok {
+		return
+	}
+	if err := wsl.Wake(r.Context(), s.WSL, d.Name); err != nil {
+		writeErr(w, http.StatusBadGateway, "error", err)
+		return
+	}
+	if fl, ok := s.life().(*FakeLifecycle); ok && fl.Engine != nil && strings.EqualFold(d.Name, s.cfg().Active) {
+		fl.Engine.SetDown(false) // testhost：主要 distro 開機 → 引擎跟著起來
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMachineStop 停止 distro（wsl --terminate）。已納管的先 systemctl stop docker，讓容器正常結束。
+func (s *Server) handleMachineStop(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.findDistro(w, r)
+	if !ok {
+		return
+	}
+	if !strings.EqualFold(d.State, "Running") {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if _, managed := s.cfg().FindMachine(d.Name); managed {
+		_ = wsl.StopDocker(r.Context(), s.WSL, d.Name)
+	}
+	if err := wsl.Terminate(r.Context(), s.WSL, d.Name); err != nil {
+		writeErr(w, http.StatusBadGateway, "error", err)
+		return
+	}
+	if fl, ok := s.life().(*FakeLifecycle); ok && fl.Engine != nil && strings.EqualFold(d.Name, s.cfg().Active) {
+		fl.Engine.SetDown(true) // testhost：主要 distro 停止 → 引擎斷線
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleMachineUnmanage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cfg := s.cfg()

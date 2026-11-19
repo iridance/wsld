@@ -93,7 +93,7 @@ wsld-gui.exe --tray    # 只留系統匣
 2. 用 WSL Remote 開發比較順。
 3. 盡量別跟 Docker Desktop 雙引擎混著玩。
 4. API 預設 **23750**（占用會換），只聽 `127.0.0.1`。
-5. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：到 GUI Settings › 網路開啟「區網存取」，或執行 `wsld lan on`。wsld-gui 會在內網 IP 轉發容器的 published 埠，開啟時會跳一次 UAC，替 wsld-gui 加入防火牆規則（私人＋公用網路、只接受同網段；規則綁定 exe 位置，搬移後需在設定頁重新授權）。只在 wsld-gui 執行時有效（含系統匣），API 不轉發。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
+5. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：到 GUI Settings › 網路開啟「區網存取」，或執行 `wsld lan on`。wsld-gui 會在內網 IP 轉發容器的 published 埠。wsld-gui 啟動時若尚未通過 Windows 防火牆會跳一次 UAC 加入規則（私人＋公用網路、只接受同網段；規則綁定 exe 位置，搬移後會再問一次），開關本身只改設定。只在 wsld-gui 執行時有效（含系統匣），API 不轉發。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
 
 ## 開發
 

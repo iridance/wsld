@@ -196,6 +196,15 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 		if !found {
 			return nil, []byte("There is no distribution with the supplied name."), &wsl.ExitError{Code: 1}
 		}
+		if strings.HasSuffix(joined, "-- true") {
+			// wsl.Wake：真實 wsl.exe 執行任何命令都會把 distro 開起來
+			for i := range f.distros {
+				if strings.EqualFold(f.distros[i].Name, name) {
+					f.distros[i].State = "Running"
+				}
+			}
+			return nil, nil, nil
+		}
 		if strings.HasSuffix(joined, "-- cat /etc/wsl.conf") {
 			conf, ok := f.confs[name]
 			if !ok {

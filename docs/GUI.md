@@ -45,11 +45,11 @@
 - **頁標題列**：內容區頂端，目前視圖標題＋摘要（Containers：執行中／已停止數；資源頁：項目數，映像含總大小）與該頁工具列同一列（工具列靠右，窄時換行），省下獨立 header 的高度。
 - **Containers**：工具列搜尋（名稱／映像／compose 服務）＋狀態分段篩選（全部／執行中／已停止，附數量）；名稱下方顯示 docker 狀態描述；開啟 Info 時該列標示選取。Logs／Terminal 面板頂部有分頁可切換同一容器（已停止容器不能開終端）。
 - **Images**：磁碟用量長條（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋分段篩選＋清除未使用。
-- **Machines**：每個發行版一張卡片（狀態、WSL 版本、角色標籤、目前那台顯示 API 端點；設為主要、Info、資料夾、終端、刪除）。
+- **Machines**：每個發行版一張卡片（狀態、WSL 版本、角色標籤、目前那台顯示 API 端點；設為主要、**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止主要發行版前會確認（Docker 與容器一併停止）。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
-  - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）→ wsld-gui 立即在內網 IP 監聽。回應的 `firewall` 為 `missing`／`blocked` 時，前端接著 `POST /api/lan/firewall`（UAC 以 `wsld-gui.exe --allow-firewall` 提權加規則），成功顯示「已加入防火牆規則」。
-  - 防火牆列 `settings-lan-firewall`（`data-state`＝allowed／missing／blocked／unknown；只在開啟且非 mirrored 時顯示）。未授權或被封鎖時顯示 `settings-lan-fw-warn` 與「授權防火牆」`settings-lan-fw-allow`；取消 UAC（409 `canceled`）的原因顯示在 error banner，警告與按鈕保留可重試。
+  - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）→ wsld-gui 立即在內網 IP 監聽；只改設定，不提權。防火牆授權在 wsld-gui 啟動時請求（`Server.EnsureFirewall`：`firewall` 為 `missing`／`blocked` 時以 UAC 執行 `wsld-gui.exe --allow-firewall`；一般啟動在 DOM ready、`--tray` 在第一次顯示視窗，每次執行一次）。
+  - 沒有獨立的防火牆列。`GET /api/lan` 一律回報 `firewall`（與開關無關）與 `firewall_pending`（UAC 等待中）。區網存取開啟、非 mirrored 且未授權／被封鎖／等待中時顯示 `settings-lan-fw-warn`（`data-state`＝missing／blocked／pending）與「授權防火牆」`settings-lan-fw-allow`（`POST /api/lan/firewall`；等待中停用，前端每 1.5 秒重查）；取消 UAC（409 `canceled`）的原因顯示在 error banner，警告與按鈕保留可重試。
   - 狀態文字 `settings-lan-status`：查詢中／關閉／正在轉發 N 個位址／沒有 published 埠／有位址無法監聽／mirrored 阻擋／還原中。設定頁不列位址。
   - 偵測到 0.9.0 的 mirrored 模式時顯示 `settings-lan-mirrored` 與「還原 NAT」`settings-lan-restore`：
     - 流程：確認框（確定鈕「還原 NAT」，非 danger）→ `POST /api/lan/restore-nat` → UAC → `wsl --shutdown` → 等 API 埠釋放 → 啟動引擎。
@@ -81,7 +81,7 @@
 | Start／Stop／Remove | pending 回饋；Remove 可含 running（確認會停） | `list`（Remove 隨 0.5） |
 | Logs／Exec | tail 100；Live；xterm exec | `panels.spec.ts` |
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
-| Machines | 設為主要、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5） |
+| Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
 | Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
@@ -105,7 +105,7 @@
 | `GET /api/images`、`DELETE /api/images/{ref}[?force=1]`、`POST /api/images/prune` | 映像 |
 | `GET /api/volumes`、`DELETE /api/volumes/{name}[?force=1]`、`POST /api/volumes/prune` | volume |
 | `GET /api/networks`、`DELETE /api/networks/{id}`、`POST /api/networks/prune` | 網路（內建 bridge／host／none 不可刪） |
-| `GET /api/machines`、…／config、…／online、install、**use／unmanage／unregister**、用量摘要（0.5） | WSL 發行版與多 distro |
+| `GET /api/machines`、…／config、…／online、install、**use／start／stop／unmanage／unregister**、用量摘要（0.5） | WSL 發行版與多 distro |
 | `GET|PUT /api/settings`（含 theme）、`GET /api/doctor`、`POST /api/window/{hide|show|quit}` | 設定、診斷、視窗 |
 
 錯誤格式 `{"error","code"}`，`code` ∈ `not_ready`(503)／`api`(502)／`not_found`(404)／`conflict`(409)／`usage`(400)／`error`。

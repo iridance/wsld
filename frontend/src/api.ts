@@ -166,8 +166,10 @@ export interface LANStatus {
   forwards: LANForward[];
   /** WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT） */
   mirrored: boolean;
-  /** wsld-gui.exe 的 Windows 防火牆對內授權；區網存取關閉時為空字串 */
+  /** wsld-gui.exe 的 Windows 防火牆對內授權（wsld-gui 啟動時請求，與區網存取開關無關） */
   firewall: "allowed" | "missing" | "blocked" | "unknown" | "";
+  /** 正在等使用者回應防火牆的 UAC（啟動時的請求或設定頁按鈕） */
+  firewall_pending?: boolean;
 }
 
 export class ApiError extends Error {
@@ -259,6 +261,8 @@ export const api = {
       { distribution, name, user, password },
     ),
   useMachine: (name: string) => call<{ active: string; ready: boolean }>("POST", `/api/machines/${encodeURIComponent(name)}/use`),
+  startMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/start`),
+  stopMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/stop`),
   unmanageMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unmanage`),
   unregisterMachine: (name: string, confirm: string) =>
     call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unregister`, { confirm }),

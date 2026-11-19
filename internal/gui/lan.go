@@ -24,8 +24,11 @@ type LANStatus struct {
 	Forwards []lan.Forward `json:"forwards"`
 	// Mirrored 表示 WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT 才能轉發）。
 	Mirrored bool `json:"mirrored"`
-	// Firewall 是 wsld-gui.exe 的防火牆對內授權狀態（allowed／missing／blocked／unknown）；區網存取關閉時不查詢（空字串）。
+	// Firewall 是 wsld-gui.exe 的防火牆對內授權狀態（allowed／missing／blocked／unknown）。
+	// 授權屬於 app 層級（wsld-gui 啟動時請求），與區網存取開關無關，因此一律查詢。
 	Firewall lan.FirewallState `json:"firewall"`
+	// FirewallPending 表示正在等使用者回應防火牆的 UAC（啟動時的請求或設定頁按鈕）。
+	FirewallPending bool `json:"firewall_pending"`
 }
 
 // SyncLAN 依設定與執行中容器更新轉發：關閉時全部停止；引擎查不到容器時維持現狀。
@@ -93,10 +96,9 @@ func (s *Server) lanStatus(ctx context.Context) LANStatus {
 		if l, err := s.LAN.Legacy(ctx); err == nil {
 			st.Mirrored = l.Mirrored
 		}
-		if st.Enabled {
-			st.Firewall = s.LAN.Firewall(ctx)
-		}
+		st.Firewall = s.LAN.Firewall(ctx)
 	}
+	st.FirewallPending = s.fwPending.Load()
 	return st
 }
 
@@ -137,7 +139,7 @@ func (s *Server) handlePutLAN(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "error", err)
 		return
 	}
-	// 立即監聽：Windows 防火牆的「允許私人／公用網路」視窗會在第一次監聽時跳出
+	// 只改設定並立即監聽；防火牆規則在 wsld-gui 啟動時已請求（EnsureFirewall），這裡不提權
 	s.SyncLAN(r.Context())
 	writeJSON(w, http.StatusOK, s.lanStatus(r.Context()))
 }
@@ -188,7 +190,34 @@ func (s *Server) handleLANOpen(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// EnsureFirewall 在 wsld-gui 啟動時呼叫：wsld-gui.exe 尚未通過 Windows 防火牆（missing／blocked）時以 UAC 加入對內允許規則。
+// 已允許或無法查詢（unknown）時不做事。之後開啟區網存取只需改設定，不再提權。
+func (s *Server) EnsureFirewall(ctx context.Context) error {
+	if s.LAN == nil {
+		return nil
+	}
+	switch s.LAN.Firewall(ctx) {
+	case lan.FirewallMissing, lan.FirewallBlocked:
+		return s.allowFirewall(ctx)
+	}
+	return nil
+}
+
+// allowFirewall 以 UAC 加入規則；同一時間只跑一個（等待期間 /api/lan 回報 firewall_pending）。
+func (s *Server) allowFirewall(ctx context.Context) error {
+	s.fwMu.Lock()
+	defer s.fwMu.Unlock()
+	// 排隊等待期間可能已由另一個請求授權完成
+	if s.LAN.Firewall(ctx) == lan.FirewallAllowed {
+		return nil
+	}
+	s.fwPending.Store(true)
+	defer s.fwPending.Store(false)
+	return s.LAN.AllowFirewall(ctx)
+}
+
 // handleAllowFirewall：以 UAC 替 wsld-gui.exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段）。
+// 啟動時的請求被取消後，設定頁以此重試。
 func (s *Server) handleAllowFirewall(w http.ResponseWriter, r *http.Request) {
 	if !s.lanAvailable(w) {
 		return
@@ -196,7 +225,7 @@ func (s *Server) handleAllowFirewall(w http.ResponseWriter, r *http.Request) {
 	// 等使用者回應 UAC；不綁 request context
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := s.LAN.AllowFirewall(ctx); err != nil {
+	if err := s.allowFirewall(ctx); err != nil {
 		if errors.Is(err, lan.ErrUACCanceled) {
 			writeErr(w, http.StatusConflict, "canceled", errors.New(i18n.T("gui.lan.fw.canceled")))
 			return

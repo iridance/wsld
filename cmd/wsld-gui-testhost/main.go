@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -83,7 +84,10 @@ func main() {
 		_ = os.Remove(lanConfigPath + ".wsld.bak")
 		lanHost.Set(func(h *lan.FakeHost) {
 			h.Rules, h.FirewallErr, h.RemoveCalls = 0, nil, 0
-			h.AppState, h.AllowErr, h.AllowCalls = "", nil, 0
+			if h.AllowHold != nil {
+				close(h.AllowHold)
+			}
+			h.AppState, h.AllowErr, h.AllowCalls, h.AllowHold = "", nil, 0, nil
 		})
 		lanMu.Lock()
 		lanBusy = map[int]bool{}
@@ -227,8 +231,9 @@ func main() {
 		}
 		ok(w)
 	})
-	// /__test/lan?mirrored=1&fail=1&busy=8080&fw=missing&fwfail=1：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用、
-	// wsld-gui 尚未通過防火牆（missing／blocked）、加入防火牆規則時取消 UAC。
+	// /__test/lan?mirrored=1&fail=1&busy=8080&fw=missing&fwfail=1&fwhold=1&startup=1：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用、
+	// wsld-gui 尚未通過防火牆（missing／blocked）、加入防火牆規則時取消 UAC、UAC 尚未回應（fwhold=0 放行）、
+	// wsld-gui 啟動時的防火牆請求（startup=1，於背景執行 EnsureFirewall）。
 	mux.HandleFunc("POST /__test/lan", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("mirrored") == "1" {
@@ -251,11 +256,25 @@ func main() {
 			case "0":
 				h.AllowErr = nil
 			}
+			switch q.Get("fwhold") {
+			case "1":
+				if h.AllowHold == nil {
+					h.AllowHold = make(chan struct{})
+				}
+			case "0":
+				if h.AllowHold != nil {
+					close(h.AllowHold)
+					h.AllowHold = nil
+				}
+			}
 		})
 		if p, err := strconv.Atoi(q.Get("busy")); err == nil {
 			lanMu.Lock()
 			lanBusy[p] = true
 			lanMu.Unlock()
+		}
+		if q.Get("startup") == "1" {
+			go func() { _ = srv.EnsureFirewall(context.Background()) }()
 		}
 		ok(w)
 	})

@@ -363,3 +363,77 @@ func TestMachineUseUnmanageUnregister(t *testing.T) {
 		t.Fatal("profile should be gone")
 	}
 }
+
+func TestMachineStartStop(t *testing.T) {
+	e := newEnv(t, "")
+	fw := NewFakeWSL()
+	e.s.WSL = fw
+	state := func(name string) string {
+		t.Helper()
+		_, b := e.req(t, http.MethodGet, "/api/machines", "")
+		var mr MachinesResponse
+		_ = json.Unmarshal(b, &mr)
+		for _, m := range mr.Machines {
+			if m.Name == name {
+				return m.State
+			}
+		}
+		t.Fatalf("machine %q not listed: %s", name, b)
+		return ""
+	}
+
+	// 非主要 distro：啟動 → Running、停止 → Stopped，不影響引擎
+	resp, b := e.req(t, http.MethodPost, "/api/machines/docker-desktop/start", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("start = %d %s", resp.StatusCode, b)
+	}
+	if s := state("docker-desktop"); s != "Running" {
+		t.Fatalf("after start = %q", s)
+	}
+	resp, b = e.req(t, http.MethodPost, "/api/machines/docker-desktop/stop", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop = %d %s", resp.StatusCode, b)
+	}
+	if s := state("docker-desktop"); s != "Stopped" {
+		t.Fatalf("after stop = %q", s)
+	}
+	if e.engine.Down {
+		t.Fatal("stopping a non-primary distro must not take the engine down")
+	}
+	// 已停止再停止：冪等
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/docker-desktop/stop", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop again = %d", resp.StatusCode)
+	}
+
+	// 主要 distro：停止 → 引擎斷線；啟動 → 引擎回來
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/stop", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop primary = %d", resp.StatusCode)
+	}
+	if s := state("Ubuntu-26.04"); s != "Stopped" || !e.engine.Down {
+		t.Fatalf("after stop primary: state=%q down=%v", s, e.engine.Down)
+	}
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/start", "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("start primary = %d", resp.StatusCode)
+	}
+	if s := state("Ubuntu-26.04"); s != "Running" || e.engine.Down {
+		t.Fatalf("after start primary: state=%q down=%v", s, e.engine.Down)
+	}
+
+	// 錯誤：不存在 → 404；名稱不合法 → 400；沒有 WSL → 501
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/Nope/start", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing = %d", resp.StatusCode)
+	}
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/bad%20name/stop", "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid = %d", resp.StatusCode)
+	}
+	e.s.WSL = nil
+	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/start", "")
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("no wsl = %d", resp.StatusCode)
+	}
+}

@@ -1767,8 +1767,9 @@ export class App {
     for (const d of m.machines) {
       const removing = this.st.busy.has(`remove:${d.name}`);
       const switching = this.st.switching === d.name;
-      const starting = this.st.starting && d.active;
-      const pending = removing ? "removing" : switching ? "switching" : starting ? "starting" : undefined;
+      const starting = (this.st.starting && d.active) || this.st.busy.has(`power-on:${d.name}`);
+      const stopping = this.st.busy.has(`power-off:${d.name}`);
+      const pending = removing ? "removing" : switching ? "switching" : starting ? "starting" : stopping ? "stopping" : undefined;
       const locked = !!pending || removingAny || !!this.st.switching || this.st.starting;
       const tools: HTMLElement[] = [];
       const cfg = iconBtn({ "data-testid": `btn-machine-config-${d.name}` }, "info", t("gui.machines.info"));
@@ -1795,7 +1796,13 @@ export class App {
           },
           d.name,
         );
-      tools.push(cfg, folder, term, rm);
+      const running = d.state.toLowerCase() === "running";
+      const power = running
+        ? iconBtn({ "data-testid": `btn-machine-stop-${d.name}` }, "stop", t("gui.machines.stop"))
+        : iconBtn({ "data-testid": `btn-machine-start-${d.name}` }, "play", t("gui.machines.start"));
+      power.disabled = locked;
+      power.onclick = () => void this.machinePower(d.name, running ? "off" : "on", d.active);
+      tools.push(power, cfg, folder, term, rm);
 
       const footKids: HTMLElement[] = [];
       if (!d.active) {
@@ -1818,7 +1825,9 @@ export class App {
             ? t("gui.status.switching")
             : pending === "starting"
               ? t("gui.status.starting")
-              : d.state;
+              : pending === "stopping"
+                ? t("gui.ct.stopping")
+                : d.state;
       const attrs: Record<string, string> = {
         class: `machine-card${d.active ? " active" : ""}`,
         "data-testid": "machine-row",
@@ -1852,6 +1861,26 @@ export class App {
       );
     }
     list.replaceChildren(grid);
+  }
+
+  /** 啟動／停止 distro。停止主要 distro 會連帶停掉 Docker，先確認。 */
+  private async machinePower(name: string, to: "on" | "off", primary: boolean): Promise<void> {
+    if (to === "off" && primary) {
+      const ok = await this.confirm(t("gui.machines.stop_primary_prompt"), undefined, { label: t("gui.machines.stop"), icon: "stop" });
+      if (!ok) return;
+    }
+    const key = `power-${to}:${name}`;
+    this.st.busy.add(key);
+    this.renderViewBody();
+    let err: string | undefined;
+    try {
+      await (to === "on" ? api.startMachine(name) : api.stopMachine(name));
+    } catch (e) {
+      err = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      this.st.busy.delete(key);
+    }
+    await this.refreshKeeping(err);
   }
 
   private hardCutActive(): void {
@@ -2332,7 +2361,7 @@ export class App {
     if (this.st.view === "settings") this.renderViewBody();
   }
 
-  /** 開／關區網存取：立即生效（wsld-gui 開始在內網 IP 監聽）。開啟時若 wsld-gui 尚未通過防火牆，接著請求 UAC 加入規則。 */
+  /** 開／關區網存取：只寫設定並立即生效（wsld-gui 開始在內網 IP 監聽）。防火牆授權在 wsld-gui 啟動時已請求，這裡不提權。 */
   private async setLAN(enabled: boolean): Promise<void> {
     this.st.lanApplying = "toggle";
     this.renderViewBody();
@@ -2346,16 +2375,11 @@ export class App {
     } finally {
       this.st.lanApplying = undefined;
     }
-    const fw = this.st.lan?.firewall;
-    if (ok && enabled && (fw === "missing" || fw === "blocked")) {
-      await this.allowFirewall();
-      return;
-    }
     if (ok) this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
     this.renderViewBody();
   }
 
-  /** 以 UAC 替 wsld-gui.exe 加入 Windows 防火牆的對內允許規則（私人＋公用網路、僅同網段）。 */
+  /** 重試防火牆授權（啟動時的 UAC 被取消時）：以 UAC 替 wsld-gui.exe 加入對內允許規則（私人＋公用網路、僅同網段）。 */
   private async allowFirewall(): Promise<void> {
     this.st.lanApplying = "firewall";
     this.st.lastError = undefined;
@@ -2402,6 +2426,16 @@ export class App {
     this.renderViewBody(); // 輪詢刷新不重建設定頁，還原完成要自己重繪
   }
 
+  /** 啟動時的防火牆 UAC 還在等使用者回應：留在設定頁時每 1.5 秒重查，回應後更新提示。 */
+  private lanPendingTimer?: number;
+  private pollLANWhilePending(): void {
+    if (this.lanPendingTimer !== undefined) return;
+    this.lanPendingTimer = window.setTimeout(() => {
+      this.lanPendingTimer = undefined;
+      if (this.st.view === "settings" && !this.st.lanApplying) void this.loadLAN();
+    }, 1500);
+  }
+
   private lanSection(row: (label: Node, hint: string, control: Node) => HTMLElement): HTMLElement {
     const s = this.st.lan;
     if (!s && !this.st.lanLoading && !this.st.lanApplying) void this.loadLAN();
@@ -2429,18 +2463,16 @@ export class App {
     else if (s) statusText = t("gui.lan.status.on").replace("%d", String(okForwards.length));
     const status = el("span", { "data-testid": "settings-lan-status", text: statusText });
 
-    const rows: HTMLElement[] = [];
+    // 防火牆授權在 wsld-gui 啟動時請求；這裡只在區網存取開啟、授權仍不足時提示並提供重試
     const extra: HTMLElement[] = [];
     const fw = s?.enabled && !s.mirrored ? s.firewall : "";
-    if (fw || applying === "firewall") {
-      const fwText = applying === "firewall" ? t("gui.lan.fw.allowing") : t(`gui.lan.fw.${fw}`);
-      const fwStatus = el("span", { "data-testid": "settings-lan-firewall", "data-state": fw, class: fw === "missing" || fw === "blocked" ? "warn-text" : "", text: fwText });
-      rows.push(row(el("span", { text: t("gui.settings.lan_fw") }), t("gui.settings.lan_fw_hint"), fwStatus));
-    }
-    if ((fw === "missing" || fw === "blocked") && applying !== "firewall") {
-      const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-fw-warn", role: "note" }, el("p", { text: t("gui.lan.fw.warn") }));
+    const fwWaiting = applying === "firewall" || !!s?.firewall_pending;
+    if (s?.firewall_pending && applying !== "firewall") this.pollLANWhilePending();
+    if (s?.enabled && !s.mirrored && (fwWaiting || fw === "missing" || fw === "blocked")) {
+      const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-fw-warn", "data-state": fwWaiting ? "pending" : fw, role: "note" },
+        el("p", { text: t(fwWaiting ? "gui.lan.fw.allowing" : "gui.lan.fw.warn") }));
       const allow = btn({ type: "button", "data-testid": "settings-lan-fw-allow" }, "shield", t("gui.lan.fw.allow"));
-      allow.disabled = !!applying;
+      allow.disabled = !!applying || fwWaiting;
       allow.onclick = () => void this.allowFirewall();
       box.append(el("div", {}, allow));
       extra.push(box);
@@ -2457,7 +2489,6 @@ export class App {
       el("h2", { text: t("gui.settings.group.network") }),
       row(el("span", { "data-testid": "settings-lan-label", text: t("gui.settings.lan") }), t("gui.settings.lan_hint"), el("span", { class: "switch" }, state, toggle)),
       row(el("span", { text: t("gui.settings.lan_status") }), t("gui.settings.lan_status_hint"), status),
-      ...rows,
       ...extra,
     );
   }

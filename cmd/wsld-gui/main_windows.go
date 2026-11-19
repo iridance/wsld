@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -106,7 +107,7 @@ func main() {
 	exe, _ = filepath.Abs(exe)
 	auto := gui.PlatformAutostart("wsld", fmt.Sprintf(`"%s" --tray`, exe))
 
-	app := &guiApp{si: si}
+	app := &guiApp{si: si, startHidden: startHidden}
 	srv := &gui.Server{
 		Engine:         engine,
 		Life:           life,
@@ -161,6 +162,7 @@ func main() {
 		HideWindowOnClose: true, // 關閉 → 縮到系統匣；Tray「結束」才真正離開
 		AssetServer:       &assetserver.Options{Assets: frontend.Dist(), Middleware: mw},
 		OnStartup:         app.startup,
+		OnDomReady:        app.domReady,
 		OnShutdown:        app.shutdown,
 		Windows: &windows.Options{
 			WebviewUserDataPath: filepath.Join(filepath.Dir(cfgPath), "webview2"),
@@ -187,6 +189,9 @@ type guiApp struct {
 	trayQuit   *systray.MenuItem
 	lastState  string // 最近一次 tray 狀態鍵（gui.status.*），語系切換時重套
 	quitting   atomic.Bool
+
+	startHidden bool
+	fwOnce      sync.Once // 每次啟動只請求一次防火牆授權
 }
 
 func (a *guiApp) startup(ctx context.Context) {
@@ -195,9 +200,32 @@ func (a *guiApp) startup(ctx context.Context) {
 		a.si.WatchShow(ctx, func() {
 			wruntime.WindowShow(ctx)
 			wruntime.WindowUnminimise(ctx)
+			a.ensureFirewall()
 		})
 	}
 	go a.runTray()
+}
+
+// domReady：一般啟動時視窗已顯示，接著請求防火牆授權（--tray 啟動則等使用者第一次打開視窗）。
+func (a *guiApp) domReady(context.Context) {
+	if !a.startHidden {
+		a.ensureFirewall()
+	}
+}
+
+// ensureFirewall 在本次啟動第一次顯示視窗時，若 wsld-gui.exe 尚未通過 Windows 防火牆就跳 UAC 加入規則。
+// 放在視窗出現後：UAC 以 wsld-gui 視窗為父視窗；登入時以 --tray 自動啟動不會突然跳出 UAC。
+// 取消 UAC 不再重問（本次執行期間）；設定頁 › 網路會顯示警告與「授權防火牆」按鈕。
+func (a *guiApp) ensureFirewall() {
+	a.fwOnce.Do(func() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := a.srv.EnsureFirewall(ctx); err != nil && !errors.Is(err, lan.ErrUACCanceled) {
+				log.Printf("firewall: %v", err)
+			}
+		}()
+	})
 }
 
 func (a *guiApp) shutdown(context.Context) {
@@ -277,6 +305,7 @@ func (a *guiApp) trayReady() {
 			case <-open.ClickedCh:
 				wruntime.WindowShow(a.ctx)
 				wruntime.WindowUnminimise(a.ctx)
+				a.ensureFirewall()
 			case <-start.ClickedCh:
 				go func() {
 					a.setTray("gui.status.starting")

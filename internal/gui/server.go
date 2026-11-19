@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -100,6 +101,9 @@ type Server struct {
 
 	lanMu sync.Mutex // 序列化區網轉發同步（背景迴圈與 API 共用）
 
+	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC（啟動時的請求與設定頁按鈕共用）
+	fwPending atomic.Bool
+
 	installOnce sync.Once
 	install     *installTracker
 }
@@ -141,6 +145,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/machines/install/progress", s.handleInstallProgress)
 	mux.HandleFunc("GET /api/machines/install/defaults", s.handleInstallDefaults)
 	mux.HandleFunc("POST /api/machines/{name}/use", s.handleMachineUse)
+	mux.HandleFunc("POST /api/machines/{name}/start", s.handleMachineStart)
+	mux.HandleFunc("POST /api/machines/{name}/stop", s.handleMachineStop)
 	mux.HandleFunc("POST /api/machines/{name}/unmanage", s.handleMachineUnmanage)
 	mux.HandleFunc("POST /api/machines/{name}/unregister", s.handleMachineUnregister)
 	mux.HandleFunc("GET /api/machines/{name}/exec", s.handleMachineExec)

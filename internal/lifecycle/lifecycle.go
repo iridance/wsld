@@ -94,7 +94,9 @@ func (m *Manager) Status(ctx context.Context) Status {
 			st.DistroVersion = d.Version
 		}
 	}
-	if st.DistroFound {
+	// 只在 distro 已執行時探測 systemd／docker：對停止中的 distro 跑 wsl -d 會把它喚醒，
+	// GUI 每幾秒輪詢一次 → 使用者停止的 distro 會立刻被叫醒。
+	if st.DistroRunning {
 		st.SystemdActive = m.systemdActive(ctx)
 		if st.SystemdActive {
 			st.DockerActive = m.dockerActive(ctx)

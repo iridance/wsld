@@ -131,6 +131,19 @@ func TestStatusDistroMissingStopsEarly(t *testing.T) {
 	}
 }
 
+func TestStatusStoppedDistroIsNotWoken(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose": {{out: utf16(listUbuntuStopped)}},
+	}}
+	st := newMgr(fr, &fakePinger{errs: []error{dockerapi.ErrUnreachable}}).Status(context.Background())
+	if !st.DistroFound || st.DistroRunning || st.SystemdActive || st.DockerActive {
+		t.Fatalf("status = %+v", st)
+	}
+	if fr.called("-d Ubuntu-26.04") {
+		t.Fatal("Status must not run commands in a stopped distro (that would wake it)")
+	}
+}
+
 func TestStatusDegradedSystemdCountsAsActive(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose": {{out: utf16(listUbuntuRunning)}},

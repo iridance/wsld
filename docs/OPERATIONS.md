@@ -12,7 +12,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 | GUI | 開 `wsld-gui.exe`，按「啟動引擎」；或 Tray 選單「啟動引擎」 |
 | 登入自啟 | 設定 →「開機自啟動」toggle（HKCU Run 值 `wsld`，預設關）。Tray 起來後仍需按一次「啟動引擎」，預設不會自動拉起 dockerd |
 
-`wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。
+`wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。`wsld status` 與 GUI 的狀態輪詢只在 distro 已執行時才查 systemd／docker，不會把停止中的 distro 叫醒。
 
 `loginctl enable-linger` 已由 bootstrap 開啟，避免最後一個 WSL 終端關閉時 systemd user session 被回收；但 **WSL VM 本身**閒置關機不在此控制範圍，這是 WSL 的行為。
 
@@ -46,9 +46,10 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 - **開啟**：GUI 的 Settings › 網路 › 區網存取（立即生效），或 `wsld lan on`（寫入 `config.toml` 的 `lan_access = true`）。
   - **wsld-gui** 會在這台電腦的每個內網 IPv4 上，替執行中容器的 published TCP 埠監聽，並把連線轉到 `127.0.0.1:<埠>`（WSL localhost 轉發）。每 3 秒依容器清單同步：新埠自動加入，停掉的容器自動關閉。
-  - **防火牆**：GUI 開啟時若 wsld-gui 尚未通過 Windows 防火牆，會跳一次 **UAC**（顯示的是 wsld-gui 本身），替 wsld-gui.exe 加入對內允許規則 `wsld-gui (LAN access)`（群組 `wsld`）：TCP、**私人＋公用網路**、遠端位址限 **LocalSubnet**（只接受同網段設備）。同時停用針對這個 exe 的對內封鎖規則（例如在 Windows 視窗按過取消）。
-    - 規則綁定 exe 的完整路徑：搬移或改名 wsld-gui.exe 後要重新授權（設定頁會顯示「未授權」與「授權防火牆」按鈕）。
-    - 取消 UAC：區網存取仍為開啟，但其他設備會被防火牆擋下，設定頁顯示警告與重試按鈕。
+  - **防火牆**：wsld-gui **啟動時**（第一次顯示視窗；`--tray` 自動啟動則等第一次打開視窗）若尚未通過 Windows 防火牆，會跳一次 **UAC**（顯示的是 wsld-gui 本身），替 wsld-gui.exe 加入對內允許規則 `wsld-gui (LAN access)`（群組 `wsld`）：TCP、**私人＋公用網路**、遠端位址限 **LocalSubnet**（只接受同網段設備）。同時停用針對這個 exe 的對內封鎖規則（例如在 Windows 視窗按過取消）。
+    - 開關「區網存取」只改設定（`lan_access`）並立即監聽，不提權。
+    - 規則綁定 exe 的完整路徑：搬移或改名 wsld-gui.exe 後，下次啟動會再請求一次。
+    - 取消 UAC：本次執行不再重問；區網存取開啟時設定頁顯示警告與「授權防火牆」重試按鈕。
     - 授權狀態以防火牆 COM API（`HNetCfg.FwPolicy2`）讀取，不需提權。判定「已允許」：該 exe 的啟用中對內允許規則（TCP 或任何協定）合起來涵蓋私人與公用；有啟用中的封鎖規則則判定「已封鎖」。
   - WSL 維持 NAT：不改 `.wslconfig`、不重啟 WSL、不影響其他發行版。
 - **只在 wsld-gui 執行時有效**（縮到系統匣也算）。只用 CLI 不會轉發。
@@ -62,7 +63,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
   - `wsld lan status`（可加 `--json`）會顯示設定與內網 IPv4。
 - **關閉**：GUI 開關，或 `wsld lan off`。轉發會立即（GUI）或在下一次同步時停止。
 - **連不到時**：
-  - 看設定頁 › 網路 › 防火牆是否為「已允許」；否則按「授權防火牆」。從 `\\wsl.localhost\...` 執行開發版時，路徑不同於下載版，需另外授權。
+  - 設定頁 › 網路若出現防火牆警告，按「授權防火牆」。從 `\\wsl.localhost\...` 執行開發版時，路徑不同於下載版，需另外授權。
   - 路由器的 AP／用戶端隔離（例如訪客 Wi-Fi）也會讓設備互相連不到。這不在 wsld 控制範圍內。
 - **0.9.0 遺留的 mirrored 模式**：
   - 0.9.0 以 WSL mirrored 網路＋Hyper-V 防火牆規則實作區網存取。mirrored 模式下容器埠直接佔用 Windows 的埠，轉發器無法監聽。
