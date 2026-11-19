@@ -12,7 +12,7 @@ Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
 Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.4**
-Extra    延後能力（含首次 Setup）           ← 有需求再排
+Extra    延後能力（含首次 Setup、k3s）      ← 有需求再排
 Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-WINUI.md
   6a Rust core + CLI（並行 opt-in）
   6b Rust 橋接 server + testhost
@@ -190,6 +190,66 @@ Extra ≠ 0.5／v2.0 完成條件
 
 **退出條件**：上列完成定義全勾；**不**阻擋 Phase 5／6。
 
+### 本機 Kubernetes（k3s）
+
+**目標**：每台 machine 可選開啟**單節點 k3s**（預設關），以 `--docker` 與該 distro 的 dockerd 共用映像檔：`docker build` 完 k8s 直接可用、不必架 registry；Windows 側 `kubectl` 透過 `127.0.0.1:6443` 連線。不做完整 k8s（kubeadm）／minikube／kind。
+
+> SPEC §1.5 目前把 Kubernetes 列為非目標；本項排入時須同步回寫 SPEC（移出非目標、新增架構小節）。依版號原則屬功能變更（b 位進位）。
+
+#### 評估依據（2026-11-19，實機 Ubuntu-26.04／WSL 6.18）
+
+- cgroup v2（controllers 齊）、systemd 為 PID 1
+- 核心模組：`br_netfilter`、`overlay`、`vxlan`、`ip_vs`、`nf_tables`、`xt_conntrack` 皆可用
+- 資源：該機 WSL 僅 3 GB／4 核；k3s 待機約 0.5～1 GB → 必須 opt-in，並在 doctor 提示
+
+#### 方案選擇
+
+| 方案 | 決定 | 理由 |
+| ---- | ---- | ---- |
+| k3s 原生 + `--docker` | **採用** | 映像檔與 dockerd 共用；systemctl 啟停，與現有 `lifecycle` 管 dockerd 同模式；單一執行檔 |
+| k3d（k3s 跑在 docker 內） | 備案 | 不改動 distro、可多叢集；但映像檔需另外 import／registry，port 需建叢集時決定 |
+| kubeadm／minikube／kind | 不採用 | 過重，或在 WSL 上多一層虛擬化／巢狀，效益不足 |
+
+#### 0. PoC（go/no-go 關卡，先於交付）
+
+- [ ] **node IP 漂移**：WSL NAT 每次重啟 eth0 IP 會變；驗證重開 WSL 後單節點 k3s 仍可用（試 `--node-ip`／`--advertise-address` 綁固定位址、dummy 介面等）
+- [ ] **iptables 共存**：Docker 29 與 k3s（內建 iptables）nft／legacy 後端不衝突；同時跑 docker 容器與 pod，雙方網路皆通
+- [ ] **`--docker` 路徑**：確認當期 k3s 版本仍支援內建 cri-dockerd；本機 `docker build` 的映像可被 pod 以 `imagePullPolicy: Never` 使用
+- [ ] Windows 側 `kubectl --server https://127.0.0.1:6443` 可連（k3s 證書 SAN 預設含 127.0.0.1）
+- [ ] 量測待機記憶體／CPU，訂出 doctor 警告門檻
+
+**go/no-go**：上列皆通過 → 進入交付。node IP 漂移無合理解 → 改評估 k3d 備案，回頭修訂本節。
+
+#### 交付
+
+- Bootstrap：選擇性安裝 k3s（`--docker --disable traefik`）；systemd unit 預設不隨 dockerd 啟動；可完整移除（`k3s-uninstall.sh`）
+- Config：每 machine `k8s = true|false`；**同一時間僅允許一台 machine 開 k3s**（所有 WSL2 distro 共用網路命名空間：6443、flannel CIDR、kube-proxy 規則全 VM 共用）
+- Kubeconfig：匯出到 Windows `%USERPROFILE%\.kube\config`，以 context 名稱 `wsld-<distro>` **合併**（不覆蓋使用者既有 context），server 指 `127.0.0.1:6443`
+- CLI：`wsld k8s on|off|status|reset|kubeconfig`
+- doctor：k3s 健康（`/readyz`）、多台同開衝突、記憶體不足警告、80／443／6443 port 衝突
+- GUI：Settings 開關＋狀態徽章＋Reset；Containers 把 k3s 產生的 `k8s_*` 容器摺成一組（可隱藏）
+- 實作邊界：第一版**不引入 client-go**（降低 binary 大小與 Phase 6 Rust 對齊成本），經 `wsl.exe` 呼叫 systemctl／kubectl 或直接打 `/readyz`
+- 文件：SPEC、OPERATIONS（啟用、重置、移除、與 Docker Desktop k8s 並存）、GUI、README
+
+#### 不做（第一版）
+
+- Pod／Deployment／Service 等 k8s 資源視圖（交給 kubectl／k9s／Lens）
+- 多節點、多叢集、指定 k8s 版本切換
+- Traefik／Ingress 預設啟用（避免與使用者容器搶 80／443；可由使用者自行開）
+- 區網存取轉發 NodePort／LoadBalancer（現有轉發器只看 docker published 埠；列為後續）
+
+#### 完成定義
+
+- [ ] PoC 關卡全過並記錄結論
+- [ ] `wsld k8s on` → `kubectl get nodes` 於 Windows 與 WSL 皆 Ready；`off` 後釋放記憶體與 6443
+- [ ] 重開 WSL／重開機後 `wsld start` 可恢復 k3s（若該 machine 已開）
+- [ ] 第二台 machine 嘗試開啟時明確拒絕並指出目前開啟者
+- [ ] Kubeconfig 合併不破壞既有 context；`reset` 可回到乾淨叢集
+- [ ] 本機 `docker build` 的映像可直接部署為 pod
+- [ ] bats（bootstrap）＋Go 單測（config／cli／doctor）＋Playwright（Settings 開關、Containers 分組）通過
+
+**退出條件**：上列完成定義全勾；**不**阻擋 Phase 6。
+
 ### 其他候選
 
 - [x] 區網存取：0.9.0 以 mirrored＋Hyper-V 防火牆交付；0.10.0 改為 wsld-gui 內建轉發器（Windows 原生防火牆確認、不重啟 WSL），並提供 `wsld lan restore-nat` 還原 mirrored（見 SPEC §4.5）
@@ -335,7 +395,7 @@ Extra ≠ 0.5／v2.0 完成條件
 2. 本機 TCP（23750+，每 managed machine 一埠）
 3. 0.5 = Phase 5；TDD + Playwright
 4. 之後 v2.0 = Rust core + WinUI3（Phase 6a–6f）
-5. Extra 有需求再排（不擋主線；含 Setup／npiperelay 等）
+5. Extra 有需求再排（不擋主線；含 Setup／k3s／npiperelay 等）
 6. 只綁 127.0.0.1
 7. GUI／CLI 共用 core
 
@@ -361,7 +421,7 @@ Extra ≠ 0.5／v2.0 完成條件
 | 0     | 前置 |
 | 1–4   | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放） |
 | 5     | **0.5 主線** |
-| Extra | Setup 一鍵、npiperelay、自動更新、arm64、隔離旗標 |
+| Extra | Setup 一鍵、本機 Kubernetes（k3s）、npiperelay、自動更新、arm64、隔離旗標 |
 | 6a–6b | Rust core／CLI／橋接 server 並行開發（不影響現行發布） |
 | 6c    | go/no-go 關卡：純 Rust WinUI3（`windows-rs`）可行性 |
 | 6d–6e | WinUI3 殼與功能對等 |
