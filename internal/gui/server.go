@@ -132,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/machines/{name}/config", s.handleMachineConfig)
 	mux.HandleFunc("POST /api/machines/install", s.handleMachineInstall)
 	mux.HandleFunc("GET /api/machines/install/progress", s.handleInstallProgress)
+	mux.HandleFunc("GET /api/machines/install/defaults", s.handleInstallDefaults)
 	mux.HandleFunc("POST /api/machines/{name}/use", s.handleMachineUse)
 	mux.HandleFunc("POST /api/machines/{name}/unmanage", s.handleMachineUnmanage)
 	mux.HandleFunc("POST /api/machines/{name}/unregister", s.handleMachineUnregister)

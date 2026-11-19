@@ -362,6 +362,7 @@ pre.conf {
 }
 .field-error { color: var(--bad); font-size: 12px; }
 .field-error[hidden] { display: none; }
+.field-hint { color: var(--muted); font-size: 12px; margin-top: -6px; }
 .install-progress { display: grid; gap: 6px; }
 .install-progress[hidden] { display: none; }
 .install-progress-detail { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }

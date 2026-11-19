@@ -34,14 +34,16 @@ func main() {
 	}
 
 	app := &cli.App{
-		Stdout:     os.Stdout,
-		Stderr:     os.Stderr,
-		ConfigPath: cfgPath,
-		WSL:        wsl.ExecRunner{},
-		Processes:  doctor.WindowsProcesses,
-		Bundle:     scripts.BootstrapBundle(),
-		Exec:       cli.DefaultExec,
-		Version:    version,
+		Stdout:       os.Stdout,
+		Stderr:       os.Stderr,
+		Stdin:        os.Stdin,
+		ReadPassword: cli.TerminalPassword,
+		ConfigPath:   cfgPath,
+		WSL:          wsl.ExecRunner{},
+		Processes:    doctor.WindowsProcesses,
+		Bundle:       scripts.BootstrapBundle(),
+		Exec:         cli.DefaultExec,
+		Version:      version,
 	}
 	code := app.Run(ctx, os.Args[1:])
 	stop()

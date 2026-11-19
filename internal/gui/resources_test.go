@@ -3,6 +3,7 @@ package gui
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/iridance/wsld/internal/config"
@@ -241,6 +242,46 @@ func TestMachinesListConfigOnlineInstall(t *testing.T) {
 	}
 	if !foundCustom {
 		t.Fatalf("after custom install = %+v", m.Machines)
+	}
+	// 帶 user／password：建立使用者、chpasswd（stdin）、寫入 [user] default
+	resp, b = e.req(t, http.MethodPost, "/api/machines/install", `{"distribution":"Debian","name":"Debian2","user":"bob","password":"p:w d"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("install with user = %d %s", resp.StatusCode, b)
+	}
+	var inst struct {
+		User        string `json:"user"`
+		PasswordSet bool   `json:"password_set"`
+	}
+	_ = json.Unmarshal(b, &inst)
+	if inst.User != "bob" || !inst.PasswordSet || strings.Contains(string(b), "p:w d") {
+		t.Fatalf("install with user resp = %s", b)
+	}
+	if pw, ok := w.Password("Debian2", "bob"); !ok || pw != "p:w d" {
+		t.Fatalf("password = %q %v", pw, ok)
+	}
+	if conf := w.Conf("Debian2"); conf != "[user]\ndefault=bob\n" {
+		t.Fatalf("wsl.conf = %q", conf)
+	}
+	resp, b = e.req(t, http.MethodPost, "/api/machines/install", `{"distribution":"Debian","name":"Debian3","user":"carol"}`)
+	_ = json.Unmarshal(b, &inst)
+	if resp.StatusCode != 200 || inst.User != "carol" || inst.PasswordSet {
+		t.Fatalf("install without password = %d %s", resp.StatusCode, b)
+	}
+	if _, ok := w.Password("Debian3", "carol"); ok {
+		t.Fatal("empty password must not call chpasswd")
+	}
+	n := len(w.Installed())
+	for _, bad := range []string{`{"name":"Debian4","user":"Root"}`, `{"name":"Debian4","user":"bob","password":"a\nb"}`} {
+		if resp, _ := e.req(t, http.MethodPost, "/api/machines/install", bad); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s = %d", bad, resp.StatusCode)
+		}
+	}
+	if len(w.Installed()) != n {
+		t.Fatal("invalid user/password must be rejected before installing")
+	}
+	resp, b = e.req(t, http.MethodGet, "/api/machines/install/defaults", "")
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"user":"`) {
+		t.Fatalf("defaults = %d %s", resp.StatusCode, b)
 	}
 	resp, _ = e.req(t, http.MethodPost, "/api/machines/install", `{"name":"bad name"}`)
 	if resp.StatusCode != http.StatusBadRequest {

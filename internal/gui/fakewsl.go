@@ -22,7 +22,9 @@ type FakeWSL struct {
 	FailInstall bool
 	// InstallHold 非 nil 時 --install 會等到 channel 關閉（測試進行中狀態）。
 	InstallHold chan struct{}
-	procStatN   map[string]int // distro → /proc/stat 讀取次數（交替兩組假資料）
+	procStatN   map[string]int               // distro → /proc/stat 讀取次數（交替兩組假資料）
+	users       map[string]map[string]bool   // distro → useradd 建立的使用者
+	passwords   map[string]map[string]string // distro → user → chpasswd 設定的密碼
 }
 
 // NewFakeWSL 建立含 Ubuntu-26.04（Running、預設、systemd）與 docker-desktop（Stopped）的假環境。
@@ -51,6 +53,23 @@ func (f *FakeWSL) Reset() {
 	f.installed = nil
 	f.FailInstall = false
 	f.procStatN = map[string]int{}
+	f.users = map[string]map[string]bool{}
+	f.passwords = map[string]map[string]string{}
+}
+
+// Password 回傳 chpasswd 為 distro 內 user 設定的密碼（測試用）。
+func (f *FakeWSL) Password(distro, user string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pw, ok := f.passwords[distro][user]
+	return pw, ok
+}
+
+// Conf 回傳 distro 的 /etc/wsl.conf 內容（測試用）。
+func (f *FakeWSL) Conf(distro string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.confs[distro]
 }
 
 // Installed 回傳已呼叫 --install 的名稱。
@@ -61,7 +80,7 @@ func (f *FakeWSL) Installed() []string {
 }
 
 // Run 實作 wsl.Runner。輸出以 UTF-8 回傳（DecodeOutput 可直接處理）。
-func (f *FakeWSL) Run(ctx context.Context, _ io.Reader, args ...string) ([]byte, []byte, error) {
+func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
 	if len(args) > 0 && args[0] == "--install" {
 		f.mu.Lock()
 		hold := f.InstallHold
@@ -141,6 +160,13 @@ func (f *FakeWSL) Run(ctx context.Context, _ io.Reader, args ...string) ([]byte,
 		f.distros = out
 		delete(f.confs, name)
 		return nil, nil, nil
+	case len(args) == 2 && args[0] == "--terminate":
+		for i := range f.distros {
+			if strings.EqualFold(f.distros[i].Name, args[1]) {
+				f.distros[i].State = "Stopped"
+			}
+		}
+		return nil, nil, nil
 	case len(args) >= 2 && args[0] == "-d":
 		name := args[1]
 		found := false
@@ -170,6 +196,40 @@ func (f *FakeWSL) Run(ctx context.Context, _ io.Reader, args ...string) ([]byte,
 		}
 		if strings.HasSuffix(joined, "-- cat /proc/meminfo") {
 			return []byte("MemTotal:       8388608 kB\nMemAvailable:   6291456 kB\n"), nil, nil
+		}
+		if strings.HasSuffix(joined, "-- test -e /etc/wsl.conf") {
+			if _, ok := f.confs[name]; !ok {
+				return nil, nil, &wsl.ExitError{Code: 1}
+			}
+			return nil, nil, nil
+		}
+		if strings.HasSuffix(joined, "-- sh -c cat > /etc/wsl.conf") && stdin != nil {
+			b, _ := io.ReadAll(stdin)
+			f.confs[name] = string(b)
+			return nil, nil, nil
+		}
+		if i := strings.Index(joined, "-- id -u "); i >= 0 {
+			u := joined[i+len("-- id -u "):]
+			if !f.users[name][u] {
+				return nil, []byte("id: '" + u + "': no such user"), &wsl.ExitError{Code: 1}
+			}
+			return []byte("1000\n"), nil, nil
+		}
+		if i := strings.Index(joined, "-- useradd -m -s /bin/bash "); i >= 0 {
+			if f.users[name] == nil {
+				f.users[name] = map[string]bool{}
+			}
+			f.users[name][joined[i+len("-- useradd -m -s /bin/bash "):]] = true
+			return nil, nil, nil
+		}
+		if strings.HasSuffix(joined, "-- chpasswd") && stdin != nil {
+			b, _ := io.ReadAll(stdin)
+			u, pw, _ := strings.Cut(strings.TrimRight(string(b), "\n"), ":")
+			if f.passwords[name] == nil {
+				f.passwords[name] = map[string]string{}
+			}
+			f.passwords[name][u] = pw
+			return nil, nil, nil
 		}
 		// systemctl stop docker 等 best-effort 命令
 		return nil, nil, nil

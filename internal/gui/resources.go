@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/i18n"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
@@ -273,6 +275,10 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		// Distribution 為線上目錄名稱（select）；Name 為本機自訂名稱（--name）。
 		Distribution string `json:"distribution"`
 		Name         string `json:"name"`
+		// User／Password：安裝後建立的 Linux 使用者（空 User = 舊行為，留給「設為目前」建立）。
+		// Password 只轉交 chpasswd（stdin），不記錄、不寫入設定。
+		User     string `json:"user"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "usage", err)
@@ -290,6 +296,15 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
 		return
 	}
+	user := strings.TrimSpace(body.User)
+	if user != "" && !wsl.ValidLinuxUsername(user) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New(i18n.T("gui.machines.user_invalid")))
+		return
+	}
+	if !wsl.ValidLinuxPassword(body.Password) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New(i18n.T("gui.machines.password_invalid")))
+		return
+	}
 	done, ok := s.trackInstall(r.Context(), dist, local)
 	if !ok {
 		writeErr(w, http.StatusConflict, "conflict", errors.New("another distro install is in progress"))
@@ -300,7 +315,26 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": local, "distribution": dist})
+	if user != "" {
+		// --no-launch 跳過 OOBE：在此建立使用者、設密碼並設為預設登入者
+		if err := wsl.EnsureUser(r.Context(), s.WSL, local, user, body.Password); err != nil {
+			writeErr(w, http.StatusBadGateway, "error", fmt.Errorf("%s: %w", i18n.T("gui.machines.user_failed", local), err))
+			return
+		}
+		if err := wsl.SetDefaultUser(r.Context(), s.WSL, local, user); err != nil {
+			writeErr(w, http.StatusBadGateway, "error", fmt.Errorf("%s: %w", i18n.T("gui.machines.user_failed", local), err))
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "name": local, "distribution": dist,
+		"user": user, "password_set": user != "" && body.Password != "",
+	})
+}
+
+// handleInstallDefaults 提供新增機器對話框的預設值（Linux 使用者名稱依目前 Windows 使用者）。
+func (s *Server) handleInstallDefaults(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"user": wsl.SuggestLinuxUser()})
 }
 
 func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {

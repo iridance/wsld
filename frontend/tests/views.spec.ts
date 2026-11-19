@@ -246,14 +246,58 @@ test("Machines: Add machine lists online distributions and installs the chosen o
   await sel.selectOption("Debian");
   await expect(dlg.getByTestId("add-machine-name")).toHaveValue("Debian");
   await dlg.getByTestId("add-machine-name").fill("Debian1");
+  await expect(dlg.getByTestId("add-machine-user")).toHaveValue("irice");
+  await dlg.getByTestId("add-machine-password").fill("s3cret pw");
+  // 確認密碼不一致 → 顯示錯誤且不可安裝
+  await dlg.getByTestId("add-machine-password2").fill("s3cret");
+  await expect(dlg.getByTestId("add-machine-password-error")).toBeVisible();
+  await expect(dlg.getByTestId("add-machine-install")).toBeDisabled();
+  await dlg.getByTestId("add-machine-password2").fill("s3cret pw");
+  await expect(dlg.getByTestId("add-machine-password-error")).toBeHidden();
   await expect(dlg.getByTestId("add-machine-install")).toBeEnabled();
   await dlg.getByTestId("add-machine-install").click();
   await expect(dlg).toBeHidden();
   await expect(page.getByTestId("notice")).toContainText("Debian1 installed");
   await expect(page.getByTestId("notice")).not.toContainText("wsl -d");
+  await expect(page.getByTestId("notice")).not.toContainText("no password");
   await expect(page.getByTestId("notice")).toContainText("Set it as current");
   await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]')).toBeVisible();
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
+  const acct = await (await request.get("/__test/wsl/account?distro=Debian1&user=irice")).json();
+  expect(acct.password).toBe("s3cret pw");
+  expect(acct.wsl_conf).toContain("default=irice");
+});
+
+test("Machines: Add machine validates the Linux user and allows an empty password", async ({ page, request }) => {
+  await go(page, "machines");
+  await page.getByTestId("btn-add-machine").click();
+  const dlg = page.getByTestId("add-machine-dialog");
+  await dlg.getByTestId("add-machine-select").selectOption("Debian");
+  await dlg.getByTestId("add-machine-name").fill("Debian5");
+  await expect(dlg.getByTestId("add-machine-password")).toHaveAttribute("type", "password");
+  await expect(dlg.getByTestId("add-machine-password-hint")).toBeVisible();
+
+  for (const bad of ["Root", "root", "1abc", "a b"]) {
+    await dlg.getByTestId("add-machine-user").fill(bad);
+    await expect(dlg.getByTestId("add-machine-user-error")).toBeVisible();
+    await expect(dlg.getByTestId("add-machine-install")).toBeDisabled();
+  }
+  await dlg.getByTestId("add-machine-user").fill("");
+  await expect(dlg.getByTestId("add-machine-install")).toBeDisabled();
+  await dlg.getByTestId("add-machine-user").fill("dev_1");
+  await expect(dlg.getByTestId("add-machine-user-error")).toBeHidden();
+  await expect(dlg.getByTestId("add-machine-install")).toBeEnabled();
+  await dlg.getByTestId("add-machine-install").click();
+  await expect(dlg).toBeHidden();
+  await expect(page.getByTestId("notice")).toContainText("dev_1 has no password");
+  const acct = await (await request.get("/__test/wsl/account?distro=Debian5&user=dev_1")).json();
+  expect(acct.password_set).toBe(false);
+  expect(acct.wsl_conf).toContain("default=dev_1");
+
+  // 重開對話框：密碼欄已清空、帳號回到預設
+  await page.getByTestId("btn-add-machine").click();
+  await expect(dlg.getByTestId("add-machine-password")).toHaveValue("");
+  await expect(dlg.getByTestId("add-machine-user")).toHaveValue("irice");
 });
 
 test("Machines: Add machine disables Cancel while installing", async ({ page }) => {

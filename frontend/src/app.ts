@@ -1783,18 +1783,53 @@ export class App {
       autocomplete: "off",
       spellcheck: "false",
     }) as HTMLInputElement;
+    const user = el("input", {
+      type: "text",
+      class: "mono",
+      "data-testid": "add-machine-user",
+      autocomplete: "off",
+      spellcheck: "false",
+      autocapitalize: "off",
+    }) as HTMLInputElement;
+    const pw = el("input", { type: "password", "data-testid": "add-machine-password", autocomplete: "new-password" }) as HTMLInputElement;
+    const pw2 = el("input", { type: "password", "data-testid": "add-machine-password2", autocomplete: "new-password" }) as HTMLInputElement;
+    const userErr = el("div", { class: "field-error", "data-testid": "add-machine-user-error", hidden: "", text: t("gui.machines.user_invalid") });
+    const pwErr = el("div", { class: "field-error", "data-testid": "add-machine-password-error", hidden: "" });
     const err = el("div", { class: "field-error", "data-testid": "add-machine-error", hidden: "" });
     const progress = installProgressBlock();
     const install = btn({ class: "primary", type: "submit", "data-testid": "add-machine-install" }, "plus", t("gui.machines.install"));
     const cancel = btn({ type: "button", "data-testid": "add-machine-cancel" }, "close", t("gui.cancel"));
+    // 與後端 wsl.ValidLinuxUsername／ValidLinuxPassword 一致
+    const userOk = () => /^[a-z_][a-z0-9_-]{0,31}$/.test(user.value.trim()) && user.value.trim() !== "root";
+    const pwProblem = (): string => {
+      if (/[\r\n\0]/.test(pw.value)) return t("gui.machines.password_invalid");
+      if (pw2.value !== "" && pw.value !== pw2.value) return t("gui.machines.password_mismatch");
+      return "";
+    };
     const syncInstallEnabled = () => {
-      install.disabled = !sel.value.trim() || !name.value.trim() || this.st.busy.has("install");
+      const uBad = user.value.trim() !== "" && !userOk();
+      user.setAttribute("aria-invalid", String(uBad));
+      userErr.hidden = !uBad;
+      const p = pwProblem();
+      pw2.setAttribute("aria-invalid", String(p !== ""));
+      pwErr.textContent = p;
+      pwErr.hidden = p === "";
+      install.disabled =
+        !sel.value.trim() ||
+        !name.value.trim() ||
+        !userOk() ||
+        p !== "" ||
+        pw.value !== pw2.value ||
+        this.st.busy.has("install");
     };
     sel.onchange = () => {
       if (sel.value) name.value = sel.value;
       syncInstallEnabled();
     };
     name.oninput = () => syncInstallEnabled();
+    user.oninput = () => syncInstallEnabled();
+    pw.oninput = () => syncInstallEnabled();
+    pw2.oninput = () => syncInstallEnabled();
     cancel.onclick = () => {
       if (this.st.busy.has("install")) return;
       d.close();
@@ -1807,6 +1842,16 @@ export class App {
       { method: "dialog", class: "add-machine-form" },
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.select") }), selectField(sel)),
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.name") }), textField(name)),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.linux_user") }), textField(user), userErr),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.password") }), textField(pw)),
+      el(
+        "label",
+        { class: "field" },
+        el("span", { class: "field-label", text: t("gui.machines.password_confirm") }),
+        textField(pw2),
+        pwErr,
+      ),
+      el("div", { class: "field-hint", "data-testid": "add-machine-password-hint", text: t("gui.machines.password_hint") }),
       progress,
       err,
       el("div", { class: "row" }, cancel, install),
@@ -1816,11 +1861,12 @@ export class App {
       ev.preventDefault();
       const dist = sel.value.trim();
       const nm = name.value.trim();
-      if (!dist || !nm || this.st.busy.has("install")) return;
+      const usr = user.value.trim();
+      if (!dist || !nm || !userOk() || pwProblem() !== "" || pw.value !== pw2.value || this.st.busy.has("install")) return;
+      const fields = [sel, name, user, pw, pw2];
       install.disabled = true;
       cancel.disabled = true;
-      sel.disabled = true;
-      name.disabled = true;
+      for (const f of fields) f.disabled = true;
       install.querySelector(".label")!.textContent = t("gui.machines.installing");
       err.hidden = true;
       this.st.busy.add("install");
@@ -1840,9 +1886,16 @@ export class App {
       void poll();
       const timer = window.setInterval(poll, 1000);
       try {
-        await api.installMachine(dist, nm);
+        const res = await api.installMachine(dist, nm, usr, pw.value);
+        // 密碼不留在 DOM：成功即清掉
+        pw.value = "";
+        pw2.value = "";
         d.close();
-        this.notify(fmt(t("gui.machines.installed"), nm));
+        this.notify(
+          res.user && !res.password_set
+            ? fmt(t("gui.machines.installed_no_password"), nm, res.user)
+            : fmt(t("gui.machines.installed"), nm),
+        );
         await this.refresh();
       } catch (e) {
         err.textContent = e instanceof ApiError ? e.message : String(e);
@@ -1853,8 +1906,7 @@ export class App {
         progress.hidden = true;
         this.st.busy.delete("install");
         cancel.disabled = false;
-        sel.disabled = false;
-        name.disabled = false;
+        for (const f of fields) f.disabled = false;
         install.querySelector(".label")!.textContent = t("gui.machines.install");
         syncInstallEnabled();
         this.renderViewBody();
@@ -1868,19 +1920,35 @@ export class App {
     const d = this.root.querySelector<HTMLDialogElement>('[data-testid="add-machine-dialog"]')!;
     const sel = d.querySelector<HTMLSelectElement>('[data-testid="add-machine-select"]')!;
     const name = d.querySelector<HTMLInputElement>('[data-testid="add-machine-name"]')!;
+    const user = d.querySelector<HTMLInputElement>('[data-testid="add-machine-user"]')!;
+    const pws = d.querySelectorAll<HTMLInputElement>('[data-testid="add-machine-password"], [data-testid="add-machine-password2"]');
     const err = d.querySelector<HTMLElement>('[data-testid="add-machine-error"]')!;
     const install = d.querySelector<HTMLButtonElement>('[data-testid="add-machine-install"]')!;
     const cancel = d.querySelector<HTMLButtonElement>('[data-testid="add-machine-cancel"]')!;
     err.hidden = true;
     name.value = "";
     name.disabled = true;
+    user.value = "";
+    user.disabled = true;
+    user.setAttribute("aria-invalid", "false");
+    d.querySelector<HTMLElement>('[data-testid="add-machine-user-error"]')!.hidden = true;
+    d.querySelector<HTMLElement>('[data-testid="add-machine-password-error"]')!.hidden = true;
+    for (const p of pws) {
+      p.value = "";
+      p.disabled = true;
+      p.setAttribute("aria-invalid", "false");
+    }
     cancel.disabled = false;
     sel.replaceChildren(el("option", { value: "", text: t("gui.machines.loading") }));
     sel.disabled = true;
     install.disabled = true;
     d.showModal();
     try {
-      const online = await api.machinesOnline();
+      const [online, defaults] = await Promise.all([
+        api.machinesOnline(),
+        api.installDefaults().catch(() => ({ user: "" })),
+      ]);
+      user.value = defaults.user || "";
       const opts = [
         el("option", { value: "", text: t("gui.machines.select_placeholder") }),
         ...online.map((o) =>
@@ -1893,6 +1961,8 @@ export class App {
       sel.replaceChildren(...opts);
       sel.disabled = false;
       name.disabled = false;
+      user.disabled = false;
+      for (const p of pws) p.disabled = false;
       install.disabled = true;
     } catch (e) {
       sel.replaceChildren(el("option", { value: "", text: t("gui.machines.select_placeholder") }));

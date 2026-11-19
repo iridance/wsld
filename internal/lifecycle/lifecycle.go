@@ -193,6 +193,9 @@ type InitOptions struct {
 	NoCompose     bool
 	InstallDistro string // 無 Ubuntu 時要安裝的名稱；空→"Ubuntu"
 	SkipInstall   bool
+	// Password 於需要「新建」Linux 使用者時呼叫，回傳其密碼（空 = 不設，帳號維持無密碼）。
+	// nil 則不詢問。既有使用者的密碼一律不動。
+	Password func(user string) (string, error)
 }
 
 var portRe = regexp.MustCompile(`(?m)^WSLD_API_PORT=(\d+)\s*$`)
@@ -260,8 +263,18 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		}
 	}
 	if needEnsure {
-		if err := wsl.EnsureUser(ctx, m.WSL, d.Name, user); err != nil {
+		pw, creating := "", false
+		if opts.Password != nil && !wsl.UserExists(ctx, m.WSL, d.Name, user) {
+			creating = true
+			if pw, err = opts.Password(user); err != nil {
+				return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_create", d.Name, err))
+			}
+		}
+		if err := wsl.EnsureUser(ctx, m.WSL, d.Name, user, pw); err != nil {
 			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_user_create", d.Name, err))
+		}
+		if creating && pw == "" {
+			m.print(i18n.T("lc.init_user_no_password", user, d.Name, user))
 		}
 	}
 	if user == "" || user == "root" || !wsl.ValidLinuxUsername(user) {

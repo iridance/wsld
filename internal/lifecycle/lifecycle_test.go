@@ -361,6 +361,84 @@ func TestInitCreatesUserWhenDefaultIsRoot(t *testing.T) {
 	}
 }
 
+func TestInitAsksPasswordOnlyWhenCreatingUser(t *testing.T) {
+	old := wsl.CurrentUsername
+	wsl.CurrentUsername = func() (string, error) { return `PC\irice`, nil }
+	defer func() { wsl.CurrentUsername = old }()
+
+	newRunner := func(exists bool) *fakeRunner {
+		idResp := resp{err: errors.New("no such user")}
+		if exists {
+			idResp = resp{out: "1000\n"}
+		}
+		return &fakeRunner{resp: map[string][]resp{
+			"--list --verbose":                                    {{out: utf16("  NAME STATE VERSION\r\n* Debian1 Stopped 2\r\n")}},
+			"-d Debian1 -- id -un":                                {{out: "root\n"}},
+			"-d Debian1 -u root -- id -u irice":                   {idResp},
+			"-d Debian1 -u root -- useradd -m -s /bin/bash irice": {{}},
+			"-d Debian1 -u root -- chpasswd":                      {{}},
+			"-d Debian1 -u root -- usermod -aG sudo irice":        {{}},
+			"-d Debian1 -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
+			"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
+		}}
+	}
+
+	// 新建：詢問一次，密碼經 stdin 給 chpasswd
+	fr := newRunner(false)
+	asked := 0
+	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
+	_, err := m.Init(context.Background(), InitOptions{Distro: "Debian1", Password: func(u string) (string, error) {
+		asked++
+		if u != "irice" {
+			t.Fatalf("asked for %q", u)
+		}
+		return "hunter2", nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 {
+		t.Fatalf("asked = %d", asked)
+	}
+	var chp string
+	for _, c := range fr.calls {
+		if strings.HasSuffix(c.args, "-- chpasswd") {
+			chp = c.stdin
+		}
+		if strings.Contains(c.args, "hunter2") {
+			t.Fatalf("password in argv: %s", c.args)
+		}
+	}
+	if chp != "irice:hunter2\n" {
+		t.Fatalf("chpasswd stdin = %q", chp)
+	}
+
+	// 已存在：不詢問、不 chpasswd
+	fr = newRunner(true)
+	m = &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
+	_, err = m.Init(context.Background(), InitOptions{Distro: "Debian1", Password: func(string) (string, error) {
+		t.Fatal("must not ask for existing user")
+		return "", nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.called("chpasswd") || fr.called("useradd") {
+		t.Fatal("existing user must be left alone")
+	}
+
+	// 新建但留空：不 chpasswd，並提示如何補設
+	fr = newRunner(false)
+	var out bytes.Buffer
+	m = &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Output: &out, Sleep: func(time.Duration) {}}
+	if _, err = m.Init(context.Background(), InitOptions{Distro: "Debian1", Password: func(string) (string, error) { return "", nil }}); err != nil {
+		t.Fatal(err)
+	}
+	if fr.called("chpasswd") || !strings.Contains(out.String(), "passwd irice") {
+		t.Fatalf("empty password: chpasswd=%v out=%q", fr.called("chpasswd"), out.String())
+	}
+}
+
 func TestInitExplicitDistroMustExist(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose": {{out: utf16(listUbuntuRunning)}},

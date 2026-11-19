@@ -41,6 +41,8 @@ func main() {
 	life := &gui.FakeLifecycle{Engine: engine, Distro: "Ubuntu-26.04", Endpoint: "tcp://127.0.0.1:23750"}
 	auto := &gui.FakeAutostart{}
 	fwsl := gui.NewFakeWSL()
+	// 新增機器的預設 Linux 帳號固定為 irice（不隨跑測試的 OS 使用者變動）
+	wsl.CurrentUsername = func() (string, error) { return `PC\irice`, nil }
 	defer wsl.BypassSampleSleepForTest()()
 	reset := func() {
 		c := config.Default()
@@ -147,6 +149,12 @@ func main() {
 	mux.HandleFunc("GET /__test/wsl/installed", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(fwsl.Installed())
+	})
+	mux.HandleFunc("GET /__test/wsl/account", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		pw, set := fwsl.Password(q.Get("distro"), q.Get("user"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"password_set": set, "password": pw, "wsl_conf": fwsl.Conf(q.Get("distro"))})
 	})
 	mux.HandleFunc("POST /__test/lang/{lang}", func(w http.ResponseWriter, r *http.Request) {
 		i18n.Set(i18n.Lang(r.PathValue("lang")))

@@ -225,8 +225,13 @@ export const api = {
   machineConfig: (name: string) => call<MachineConfig>("GET", `/api/machines/${encodeURIComponent(name)}/config`),
   machinesOnline: () => call<OnlineDistro[]>("GET", "/api/machines/online"),
   installProgress: () => call<InstallProgress>("GET", "/api/machines/install/progress"),
-  installMachine: (distribution: string, name: string) =>
-    call<{ ok: boolean; name: string; distribution: string }>("POST", "/api/machines/install", { distribution, name }),
+  installDefaults: () => call<{ user: string }>("GET", "/api/machines/install/defaults"),
+  installMachine: (distribution: string, name: string, user: string, password: string) =>
+    call<{ ok: boolean; name: string; distribution: string; user: string; password_set: boolean }>(
+      "POST",
+      "/api/machines/install",
+      { distribution, name, user, password },
+    ),
   useMachine: (name: string) => call<{ active: string; ready: boolean }>("POST", `/api/machines/${encodeURIComponent(name)}/use`),
   unmanageMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unmanage`),
   unregisterMachine: (name: string, confirm: string) =>

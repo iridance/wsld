@@ -41,12 +41,16 @@ type API interface {
 // App 聚合依賴。
 type App struct {
 	Stdout, Stderr io.Writer
-	ConfigPath     string
-	WSL            wsl.Runner
-	NewAPI         func(cfg config.Config) API
-	Processes      func(ctx context.Context) ([]string, error)
-	Dial           func(ctx context.Context, addr string) error
-	Bundle         []byte
+	// Stdin 供 init --password-stdin 讀取新使用者密碼。
+	Stdin io.Reader
+	// ReadPassword 以隱藏輸入詢問密碼（nil 則不詢問；非終端機回 ErrNoTerminal）。
+	ReadPassword func(prompt string) (string, error)
+	ConfigPath   string
+	WSL          wsl.Runner
+	NewAPI       func(cfg config.Config) API
+	Processes    func(ctx context.Context) ([]string, error)
+	Dial         func(ctx context.Context, addr string) error
+	Bundle       []byte
 	// Exec 以繼承的 stdio 執行互動式程式（wsld exec 用）。
 	Exec    func(ctx context.Context, name string, args ...string) error
 	Version string
@@ -207,9 +211,11 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	fs.IntVar(&opts.Port, "port", 0, "starting API port (default 23750)")
 	fs.BoolVar(&opts.NoCompose, "no-compose", false, "skip docker-compose-plugin")
 	fs.BoolVar(&opts.SkipInstall, "skip-install", false, "do not run wsl --install when no Ubuntu exists")
+	pwStdin := fs.Bool("password-stdin", false, "read the password for a newly created Linux user from stdin (first line)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
+	opts.Password = a.newUserPassword(*pwStdin)
 	cfg, err := config.Load(a.ConfigPath)
 	if err != nil {
 		cfg = config.Default()
@@ -559,7 +565,7 @@ func (a *App) bringUp(ctx context.Context, cfg config.Config) (lifecycle.Status,
 	}
 	if needInit {
 		fmt.Fprint(a.Stdout, i18n.T("lc.start_bootstrap", am.Distro))
-		newCfg, err := m.Init(ctx, lifecycle.InitOptions{Distro: am.Distro})
+		newCfg, err := m.Init(ctx, lifecycle.InitOptions{Distro: am.Distro, Password: a.newUserPassword(false)})
 		if err != nil {
 			return lifecycle.Status{}, cfg, err
 		}

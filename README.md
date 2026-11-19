@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.8.2**（tag `v0.8.2`）已交付（支援 openSUSE 系 machine；新增機器後直接「設為目前」即可，自動建立使用者＋安裝 Docker；啟動失敗原因不再被「無法連線 Docker API」蓋掉）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.8.3**（tag `v0.8.3`）已交付（新增機器時可設定 Linux 帳號與密碼，新機器的 sudo 不再因沒有密碼而無法使用；CLI `init` 也會詢問新帳號的密碼）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -97,7 +97,7 @@ wsld-gui.exe --tray    # 只留系統匣
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.8.2；GUI 頂部列 v0.8.2）
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.8.3；GUI 頂部列 v0.8.3）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -106,7 +106,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（**0.8.2** 已交付） |
+| [SPEC](docs/SPEC.md) | 規格（**0.8.3** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |
