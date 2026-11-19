@@ -220,6 +220,28 @@ func Terminate(ctx context.Context, r Runner, distro string) error {
 	return err
 }
 
+// Shutdown 執行 wsl --shutdown（停止所有 distro 與 WSL VM；改 .wslconfig 後需要）。
+func Shutdown(ctx context.Context, r Runner) error {
+	_, stderr, err := r.Run(ctx, nil, "--shutdown")
+	if err != nil {
+		return fmt.Errorf("wsl --shutdown: %w: %s", err, strings.TrimSpace(DecodeOutput(stderr)))
+	}
+	return nil
+}
+
+// NetworkingMode 回傳 distro 內 `wslinfo --networking-mode` 的結果（小寫，例如 nat／mirrored）。
+func NetworkingMode(ctx context.Context, r Runner, distro string) (string, error) {
+	out, _, err := RunIn(ctx, r, distro, "", nil, "wslinfo", "--networking-mode")
+	if err != nil {
+		return "", fmt.Errorf("wslinfo --networking-mode: %w", err)
+	}
+	mode := strings.ToLower(strings.TrimSpace(DecodeOutput(out)))
+	if mode == "" {
+		return "", fmt.Errorf("wslinfo --networking-mode: empty output")
+	}
+	return mode, nil
+}
+
 // Unregister 執行 wsl --unregister <distro>（永久刪除發行版）。
 func Unregister(ctx context.Context, r Runner, distro string) error {
 	if !ValidDistroName(distro) {

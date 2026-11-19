@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.8.3（git tag `v0.8.3`）  
-狀態：**0.8.3 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.9.0（git tag `v0.9.0`）  
+狀態：**0.9.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-19
 
 ## 1. 問題與目標
@@ -68,7 +68,7 @@
 | 列表刷新 | 前景每 3s；縮 Tray／失焦暫停；間隔可設定 |
 | 登入起 Tray | 可選，**預設關閉** |
 | doctor | 標準組（見 §4.7） |
-| 退出碼 | 0／1／2／3／4（見 §4.5） |
+| 退出碼 | 0／1／2／3／4（見 §5.4） |
 | 語系 | 跟隨 Windows；中文→繁中，其餘英；缺譯用英 |
 | 架構 | windows/amd64 only |
 | 授權 | MIT |
@@ -109,7 +109,7 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 - hosts：`unix:///var/run/docker.sock` + `tcp://127.0.0.1:<port>`
 - 預設 port **23750**；衝突則 23751… 並更新 config
 - ensure／systemctl 可用 `wsl -d <distro> -- …`
-- 禁止綁 `0.0.0.0`
+- 禁止綁 `0.0.0.0`（只限 API。容器 published 埠可經「區網存取」開放給內網，見 §4.5）
 
 ### 4.3 Client
 
@@ -124,6 +124,21 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 - `wsl.conf`：`systemd=true`
 - `loginctl enable-linger`：啟用（doctor 會查）
 - **0.5**：可管理多個 distro profile，同一時間一個 active（見 Roadmap Phase 5）
+
+### 4.5 區網存取（LAN access）
+
+- 目標：讓容器 published 埠可從其他設備透過 Windows 內網 IP 連入。
+- 做法：WSL **mirrored** 網路模式，加上 wsld 自己的 Hyper-V 防火牆規則：
+  - 規則名稱：`wsld-lan-tcp`／`wsld-lan-udp`
+  - 只套用在 WSL 的 VMCreatorId
+  - 只對 **Private** 設定檔生效
+- 真實狀態來源是系統本身，不寫入 `config.toml`：
+  - `.wslconfig` 的 `[wsl2] networkingMode`
+  - `wslinfo --networking-mode`
+  - 防火牆規則
+- 開關要 UAC，生效要 `wsl --shutdown`（重啟所有 distro）。CLI／GUI 都要先確認。
+- API 仍只綁 `127.0.0.1`；mirrored 不鏡像 loopback，因此 API 不對外。
+- 需求：Windows build ≥ 22621。
 
 ## 5. 元件規格
 
@@ -187,6 +202,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | `start-ct`／`stop-ct` | 啟停容器 |
 | `doctor` | 見 §5.6 |
 | `exec`（可選對齊 GUI） | 進入容器 shell（策略同 GUI） |
+| `lan on\|off\|status` | 區網存取（§4.5）。`--yes` 直接 `wsl --shutdown` 並重啟 active machine；`status --json` |
 
 **退出碼**：
 
@@ -209,7 +225,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
 | Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
-| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System） |
+| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**Network › LAN access**（§4.5，即時套用：確認 → UAC → 重啟 WSL；狀態、內網 IP、公用網路／版本警告、待重啟時「立即重啟 WSL」） |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |
 | 破壞性操作 | 一律確認；unregister 需輸入名稱；Remove 容器可含 running（會停止） |
@@ -229,6 +245,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 - Docker Desktop 是否在跑（建議勿雙引擎混用）
 - API 埠占用／config 中的 endpoint 說明
 - 提醒：repo 應放在 WSL `$HOME`，非 `C:\`
+- 區網存取（僅已啟用時）：已生效、防火牆規則存在、目前網路非「公用」（Warn，不影響退出碼）
 
 ### 5.7 測試
 

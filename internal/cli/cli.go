@@ -15,6 +15,7 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/doctor"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
 )
@@ -55,6 +56,8 @@ type App struct {
 	Exec    func(ctx context.Context, name string, args ...string) error
 	Version string
 	Lang    i18n.Lang // 空則沿用目前設定
+	// LAN 管理區網存取（wsld lan）；nil 表示不支援。
+	LAN *lan.Manager
 	// PingInterval 覆寫 lifecycle 重試間隔（測試用；0 = 預設）。
 	PingInterval time.Duration
 }
@@ -109,6 +112,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdUnmanage(ctx, rest)
 	case "unregister":
 		err = a.cmdUnregister(ctx, rest)
+	case "lan":
+		err = a.cmdLan(ctx, rest)
 	default:
 		err = fail(ExitUsage, errors.New(i18n.T("cli.unknown_command", cmd)))
 	}
@@ -495,6 +500,7 @@ func (a *App) cmdDoctor(ctx context.Context, args []string) error {
 		API:       a.apiFor(cfg),
 		Processes: a.Processes,
 		Dial:      a.Dial,
+		LAN:       a.lanStatusFunc(),
 	})
 	if *asJSON {
 		type item struct {

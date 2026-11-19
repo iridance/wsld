@@ -15,6 +15,7 @@ import (
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
@@ -100,6 +101,8 @@ type Deps struct {
 	API       Pinger
 	Processes func(ctx context.Context) ([]string, error)  // Windows 程序名；nil 則略過 Desktop 檢查
 	Dial      func(ctx context.Context, addr string) error // TCP 連線探測；nil 用 net.Dialer
+	// LAN 查詢區網存取狀態；nil 則略過。只有在 .wslconfig 設了 mirrored 時才會出現此項。
+	LAN func(ctx context.Context, distro string) (lan.Status, error)
 }
 
 // Run 執行全部檢查。
@@ -228,7 +231,36 @@ func (c *checker) run(ctx context.Context) {
 
 	// 9. desktop
 	c.checkDesktop(ctx, list)
+	// 10. 區網存取（僅已啟用時）
+	c.checkLAN(ctx)
 	c.infoChecks()
+}
+
+// checkLAN：已設定 mirrored 時，確認已生效、防火牆規則存在、目前網路不是「公用」。
+func (c *checker) checkLAN(ctx context.Context) {
+	if c.d.LAN == nil {
+		return
+	}
+	st, err := c.d.LAN(ctx, c.d.Cfg.Distro)
+	if err != nil || !st.Enabled {
+		return
+	}
+	r := Result{ID: "lan", Title: i18n.T("doctor.lan.title"), Level: OK}
+	switch {
+	case st.RestartPending:
+		r.Level, r.Detail, r.Hint = Warn, i18n.T("doctor.lan.pending", st.Effective), i18n.T("doctor.lan.pending_hint")
+	case st.Firewall == lan.FirewallMissing:
+		r.Level, r.Detail, r.Hint = Warn, i18n.T("doctor.lan.firewall"), i18n.T("doctor.lan.firewall_hint")
+	case st.PublicNetwork:
+		r.Level, r.Detail, r.Hint = Warn, i18n.T("doctor.lan.public"), i18n.T("doctor.lan.public_hint")
+	default:
+		addrs := strings.Join(st.Addresses, ", ")
+		if addrs == "" {
+			addrs = "-"
+		}
+		r.Detail = i18n.T("doctor.lan.ok", addrs)
+	}
+	c.add(r)
 }
 
 func (c *checker) checkAPI(ctx context.Context) {

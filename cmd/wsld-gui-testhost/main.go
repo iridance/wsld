@@ -3,7 +3,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -18,6 +20,7 @@ import (
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
@@ -53,11 +56,51 @@ func main() {
 	}
 	reset()
 
+	// 區網存取：.wslconfig 寫在暫存目錄；wsl --shutdown 時把設定模式「生效」。
+	lanDir, err := os.MkdirTemp("", "wsld-testhost-lan")
+	if err != nil {
+		log.Fatal(err)
+	}
+	lanHost := &lan.FakeHost{Dir: lanDir, WinBuild: 26300}
+	var lanMu sync.Mutex
+	lanEffective := lan.ModeNAT
+	lanMgr := &lan.Manager{Host: lanHost, Mode: func(context.Context, string) (string, error) {
+		lanMu.Lock()
+		defer lanMu.Unlock()
+		return lanEffective, nil
+	}}
+	readLANConfig := func() string {
+		p, _ := lanHost.ConfigPath()
+		b, _ := os.ReadFile(p)
+		return string(b)
+	}
+	fwsl.OnShutdown = func() {
+		mode := strings.ToLower(lan.GetKey(readLANConfig(), "wsl2", "networkingMode"))
+		if mode == "" {
+			mode = lan.ModeNAT
+		}
+		lanMu.Lock()
+		lanEffective = mode
+		lanMu.Unlock()
+	}
+	resetLAN := func() {
+		p, _ := lanHost.ConfigPath()
+		_ = os.Remove(p)
+		_ = os.Remove(p + ".wsld.bak")
+		lanHost.Set(func(h *lan.FakeHost) {
+			h.WinBuild, h.Rules, h.NetProfiles, h.FirewallErr, h.FirewallCalls = 26300, 0, nil, nil, nil
+		})
+		lanMu.Lock()
+		lanEffective = lan.ModeNAT
+		lanMu.Unlock()
+	}
+
 	var winMu sync.Mutex
 	var windowActions []string
 
 	srv := &gui.Server{
 		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
+		LAN:        lanMgr,
 		Shell:      gui.FakeDistroShell{},
 		LoadConfig: func() (config.Config, error) { return config.Load(*cfgPath) },
 		SaveConfig: func(c config.Config) error { return config.Save(*cfgPath, c) },
@@ -180,11 +223,39 @@ func main() {
 		}
 		ok(w)
 	})
+	// /__test/lan?build=19045&profile=Public&fail=1：調整假的 Windows 環境。
+	mux.HandleFunc("POST /__test/lan", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		lanHost.Set(func(h *lan.FakeHost) {
+			if b, err := strconv.Atoi(q.Get("build")); err == nil {
+				h.WinBuild = uint32(b)
+			}
+			if p := q.Get("profile"); p != "" {
+				h.NetProfiles = []string{p}
+			}
+			if q.Get("fail") == "1" {
+				h.FirewallErr = errors.New("The operation was canceled by the user.")
+			} else if q.Get("fail") == "0" {
+				h.FirewallErr = nil
+			}
+		})
+		ok(w)
+	})
+	mux.HandleFunc("GET /__test/lan", func(w http.ResponseWriter, r *http.Request) {
+		var calls []bool
+		lanHost.Set(func(h *lan.FakeHost) { calls = append([]bool{}, h.FirewallCalls...) })
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"wslconfig": readLANConfig(), "firewall_calls": calls, "shutdowns": fwsl.Shutdowns(),
+		})
+	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {
 		reset()
+		resetLAN()
 		engine.Reset()
 		fwsl.Reset()
 		life.Broken = false
+		life.ResetStarts()
 		_ = auto.Set(false)
 		i18n.Set(i18n.Lang(*lang))
 		winMu.Lock()

@@ -14,6 +14,7 @@ import (
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
@@ -461,26 +462,5 @@ func readWSLConfigLimits() (memory, processors string) {
 	if err != nil {
 		return "", ""
 	}
-	section := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		t := strings.TrimSpace(line)
-		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
-			continue
-		}
-		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
-			section = strings.ToLower(strings.Trim(t, "[]"))
-			continue
-		}
-		k, v, ok := strings.Cut(t, "=")
-		if !ok || section != "wsl2" {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(k)) {
-		case "memory":
-			memory = strings.TrimSpace(v)
-		case "processors":
-			processors = strings.TrimSpace(v)
-		}
-	}
-	return memory, processors
+	return lan.GetKey(string(data), "wsl2", "memory"), lan.GetKey(string(data), "wsl2", "processors")
 }

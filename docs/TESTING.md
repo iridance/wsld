@@ -18,15 +18,16 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 | 層 | 工具 | 範圍 | 說明 |
 |---|---|---|---|
 | Bootstrap 腳本 | bats、shellcheck、Pester | `scripts/lib/*`、`scripts/tests/*` | 純函式：埠選擇、daemon.json、wsl.conf、參數、`wsl -l -v` 解析 |
-| Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli,gui}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
-| GUI 橋接 | `go test ./internal/gui` | `/api/*` HTTP + WebSocket（token、CORS、logs 串流、exec、images／volumes／networks／machines） | `FakeEngine`／`FakeLifecycle`／`FakeWSL` |
-| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（`list`、`columns`、`groups`、`panels`、`settings`、`shell`、`views`、`info`） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
+| Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli,gui,lan}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
+| GUI 橋接 | `go test ./internal/gui` | `/api/*` HTTP + WebSocket（token、CORS、logs 串流、exec、images／volumes／networks／machines） | `FakeEngine`／`FakeLifecycle`／`FakeWSL`／`lan.FakeHost` |
+| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（`list`、`columns`、`groups`、`panels`、`settings`、`shell`、`views`、`info`、`lan`） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
 | CLI／GUI 端到端 | 手動／CI Windows runner | `dist/wsld.exe`、`dist/wsld-gui.exe` | 見下方「實機驗收」與 `docs/GUI.md` |
 
 ## Go 測試設計
 
 - **`wsl.Runner`**：所有 `wsl.exe` 呼叫走介面；測試以 `fakeRunner` 依 `args` 串接鍵回應（含 UTF-16LE 輸出）。
 - **`dockerapi`**：`httptest.Server` 模擬 Engine API；exec 以 `http.Hijacker` 模擬 101 Upgrade。
+- **`lan.Manager`**：Windows 端副作用（`.wslconfig` 路徑、build、UAC 防火牆、`Get-NetConnectionProfile`、網卡）走 `lan.Host`；測試用 `lan.FakeHost`（`.wslconfig` 寫暫存目錄）。`.wslconfig` 編輯與 PowerShell 腳本是純函式。testhost 以 `/__test/lan` 調整 build／網路設定檔／模擬取消 UAC，`wsl --shutdown` 時讓設定模式生效。
 - **`lifecycle.Manager`**：`Sleep`／`PingInterval` 可注入，避免重試等待。
 - **`doctor.Deps`**：`Processes`（tasklist）與 `Dial`（埠探測）可注入。
 - **`cli.App`**：`NewAPI`、`Exec` 注入；測試斷言退出碼 0／1／2／3／4 與輸出片段。
@@ -45,12 +46,23 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 ## 實機驗收（Windows）
 
 ```bash
-make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.8.3）
+make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.9.0）
 ./dist/wsld.exe init                  # 在 WSL Ubuntu 內安裝 Docker、寫 %APPDATA%\wsld\config.toml
 curl.exe http://127.0.0.1:23750/_ping # OK
 ./dist/wsld.exe status && ./dist/wsld.exe doctor
 DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d --name t -v "$PWD:/app" alpine sleep 600
 ./dist/wsld.exe ps && ./dist/wsld.exe logs t && ./dist/wsld.exe stop-ct t && ./dist/wsld.exe start-ct t
+```
+
+區網存取（需 Windows 11 22H2 以上，以及另一台同網段的設備）：
+
+```bash
+./dist/wsld.exe lan on --yes          # 接受 UAC；會 wsl --shutdown 並重啟 active machine
+./dist/wsld.exe lan status            # effective mode: mirrored、防火牆 present、列出內網 IPv4
+DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d -p 8080:80 nginx:alpine
+# 另一台設備：http://<內網IP>:8080 → nginx 首頁；curl http://<內網IP>:23750/_ping → 必須連不到（API 不對外）
+./dist/wsld.exe doctor                # 出現「區網存取」OK；本機 127.0.0.1:23750 仍可用
+./dist/wsld.exe lan off --yes         # 回到 NAT：另一台設備連不到，本機 127.0.0.1:8080 仍可用
 ```
 
 2026-09-06 於 Ubuntu-26.04（WSL2）實測：Docker CE 29.8.0、Compose v5.5.1、埠 23750、doctor 11 OK。

@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.8.3**（tag `v0.8.3`）已交付（新增機器時可設定 Linux 帳號與密碼，新機器的 sudo 不再因沒有密碼而無法使用；CLI `init` 也會詢問新帳號的密碼）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.9.0**（tag `v0.9.0`）已交付（區網存取：`wsld lan on` 或 Settings › Network 一鍵讓其他設備透過這台電腦的內網 IP 連到容器埠；Docker API 仍只綁 127.0.0.1）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -60,6 +60,7 @@ wsld logs <ct> [--tail 100] [--follow]
 wsld stop-ct <ct> / wsld start-ct <ct>
 wsld exec <ct> [cmd…]
 wsld doctor                # 健康檢查 + 建議
+wsld lan on|off|status     # 區網存取：讓其他設備用這台電腦的內網 IP 連到容器埠
 ```
 
 也可以直接用一般 `docker`：
@@ -92,12 +93,13 @@ wsld-gui.exe --tray    # 只留系統匣
 2. 用 WSL Remote 開發比較順。
 3. 盡量別跟 Docker Desktop 雙引擎混著玩。
 4. API 預設 **23750**（占用會換），只聽 `127.0.0.1`。
+5. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：執行 `wsld lan on`，或到 GUI Settings › Network 開啟「LAN access」。這會把 WSL 切到 mirrored 網路，並開 Hyper-V 防火牆（只限私人網路），需要 UAC 並重啟 WSL。API 仍不對外。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
 
 ## 開發
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.8.3；GUI 頂部列 v0.8.3）
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.9.0；GUI 頂部列 v0.9.0）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -106,7 +108,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（**0.8.3** 已交付） |
+| [SPEC](docs/SPEC.md) | 規格（**0.9.0** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |

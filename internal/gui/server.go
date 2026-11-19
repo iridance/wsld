@@ -23,6 +23,7 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/doctor"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
 )
@@ -85,6 +86,8 @@ type Server struct {
 	NewLifecycle func(cfg config.Config) Lifecycle
 	// OnActiveChange 於 active 變更後額外通知（例如 Tray 重繪）。
 	OnActiveChange func(cfg config.Config)
+	// LAN 管理區網存取（mirrored 網路 + Hyper-V 防火牆）；nil → /api/lan 回 501。
+	LAN *lan.Manager
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
 
@@ -139,6 +142,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/machines/{name}/exec", s.handleMachineExec)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	mux.HandleFunc("GET /api/lan", s.handleGetLAN)
+	mux.HandleFunc("PUT /api/lan", s.handlePutLAN)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
@@ -289,6 +294,7 @@ type Meta struct {
 	APIEndpoint        string            `json:"api_endpoint"`
 	ActiveReady        bool              `json:"active_ready"`
 	AutostartSupported bool              `json:"autostart_supported"`
+	LANSupported       bool              `json:"lan_supported"`
 }
 
 // Settings 是 GUI 可編輯的設定子集。
@@ -332,6 +338,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		APIEndpoint:        c.APIEndpoint,
 		ActiveReady:        ready,
 		AutostartSupported: s.Autostart != nil && !unsupported,
+		LANSupported:       s.LAN != nil,
 	})
 }
 
@@ -840,7 +847,11 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "error", errors.New("doctor unavailable"))
 		return
 	}
-	rep := doctor.Run(r.Context(), doctor.Deps{WSL: s.WSL, Cfg: s.cfg(), API: s.engine(), Processes: s.Processes})
+	deps := doctor.Deps{WSL: s.WSL, Cfg: s.cfg(), API: s.engine(), Processes: s.Processes}
+	if s.LAN != nil {
+		deps.LAN = s.LAN.Status
+	}
+	rep := doctor.Run(r.Context(), deps)
 	type item struct {
 		ID, Title, Level, Detail, Hint string
 	}

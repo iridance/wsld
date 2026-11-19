@@ -560,6 +560,15 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 .set-hint { font-size: 12px; color: var(--muted); }
 .set-control { display: flex; align-items: center; }
 .set-control .tf { width: 240px; max-width: 100%; }
+/* 區網存取：位址清單、警告、待重啟 */
+.lan-addresses { display: flex; flex-direction: column; gap: 2px; font-size: 13px; user-select: text; }
+.lan-status { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lan-warn {
+  display: flex; flex-direction: column; gap: 4px; padding: 10px 18px; border-radius: 6px; font-size: 13px;
+  background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); color: var(--fg);
+}
+.lan-warn p { margin: 0; }
+[data-testid="confirm-text"] { white-space: pre-line; }
 .set-control .tf.num { width: 160px; }
 .set-control .tf.select { width: 200px; }
 .set-row > .brand-mark { width: 34px; height: 20px; }

@@ -4,6 +4,7 @@ import {
   type Container,
   type Image,
   type InstallProgress,
+  type LANStatus,
   type MachinesResponse,
   type Meta,
   type Network,
@@ -73,6 +74,11 @@ interface State {
   /** 容器列表篩選：狀態分段＋名稱／映像搜尋（僅前端，不影響 API） */
   ctFilter: CtFilter;
   ctQuery: string;
+  /** 區網存取狀態（進入設定頁時查詢一次；undefined = 尚未查詢） */
+  lan?: LANStatus;
+  lanLoading?: boolean;
+  /** 套用中（等待 UAC／WSL 重啟） */
+  lanApplying?: boolean;
   imgFilter: ImgFilter;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
@@ -278,6 +284,7 @@ export class App {
     this.closePanel();
     this.closeInfo();
     this.st.view = v;
+    if (v === "settings" && !this.st.lanApplying) this.st.lan = undefined; // 每次進設定頁重新查詢區網狀態
     saveJSON(LS_VIEW, v);
     this.renderNav();
     this.renderHeader();
@@ -2013,11 +2020,18 @@ export class App {
     return d;
   }
 
-  private confirm(text: string, requireType?: string): Promise<boolean> {
+  private confirm(
+    text: string,
+    requireType?: string,
+    okOpts: { label?: string; icon?: IconName; danger?: boolean } = {},
+  ): Promise<boolean> {
     const d = this.root.querySelector<HTMLDialogElement>('[data-testid="confirm-dialog"]')!;
     d.querySelector('[data-testid="confirm-text"]')!.textContent = text;
     const typed = d.querySelector<HTMLInputElement>('[data-testid="confirm-typed"]')!;
     const ok = d.querySelector<HTMLButtonElement>('[data-testid="confirm-ok"]')!;
+    // 確定鈕預設為刪除樣式；非破壞性動作（例如區網存取）可換文字／圖示
+    ok.replaceChildren(icon(okOpts.icon ?? "trash"), el("span", { class: "label", text: okOpts.label ?? t("gui.confirm") }));
+    ok.classList.toggle("danger", okOpts.danger ?? true);
     const typedField = d.querySelector<HTMLElement>('[data-testid="confirm-typed-field"]')!;
     typed.value = "";
     typedField.classList.remove("matched");
@@ -2045,6 +2059,105 @@ export class App {
     const root = document.documentElement;
     if (theme === "system" || !theme) root.removeAttribute("data-theme");
     else root.setAttribute("data-theme", theme);
+  }
+
+  // ---- 區網存取（設定頁「網路」） ---------------------------------------------
+
+  private async loadLAN(): Promise<void> {
+    if (this.st.lanLoading) return;
+    this.st.lanLoading = true;
+    try {
+      this.st.lan = await api.getLAN();
+    } catch (e) {
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.renderBanner();
+    } finally {
+      this.st.lanLoading = false;
+    }
+    if (this.st.view === "settings") this.renderViewBody();
+  }
+
+  /** 開／關區網存取：確認 → UAC → wsl --shutdown → 重新啟動引擎。enabled 不變時只重啟。 */
+  private async applyLAN(enabled: boolean, confirmKey: string): Promise<void> {
+    const okLabel = confirmKey === "gui.lan.confirm_restart" ? t("gui.lan.restart") : t("gui.lan.apply");
+    if (!(await this.confirm(t(confirmKey), undefined, { label: okLabel, icon: "power", danger: false }))) return;
+    this.st.lanApplying = true;
+    this.st.busy.add("lan"); // 暫停輪詢：WSL 重啟期間 API 本來就不通
+    this.st.lastError = undefined;
+    this.renderBanner();
+    this.renderViewBody();
+    let failed = false;
+    try {
+      this.st.lan = await api.putLAN(enabled, true);
+      this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
+    } catch (e) {
+      failed = true;
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      this.st.lanApplying = false;
+      this.st.busy.delete("lan");
+    }
+    if (failed) {
+      // 不立即刷新：設定頁的輪詢會清掉 lastError，使用者看不到失敗原因（例如取消 UAC）
+      this.renderBanner();
+      this.renderViewBody();
+      return;
+    }
+    await this.refresh();
+  }
+
+  private lanSection(row: (label: Node, hint: string, control: Node) => HTMLElement): HTMLElement {
+    const s = this.st.lan;
+    if (!s && !this.st.lanLoading && !this.st.lanApplying) void this.loadLAN();
+    const applying = !!this.st.lanApplying;
+    const on = !!s?.enabled;
+    const toggle = el("button", {
+      type: "button",
+      class: "toggle",
+      role: "switch",
+      "data-testid": "settings-lan",
+      "aria-checked": on ? "true" : "false",
+    }) as HTMLButtonElement;
+    toggle.setAttribute("aria-label", t("gui.settings.lan"));
+    toggle.disabled = !s || !s.supported || applying;
+    const state = el("span", { class: "switch-state", "aria-hidden": "true", text: t(on ? "gui.on" : "gui.off") });
+    toggle.onclick = () => void this.applyLAN(!on, on ? "gui.lan.confirm_off" : "gui.lan.confirm_on");
+
+    let statusKey = "gui.lan.status.loading";
+    if (applying) statusKey = "gui.lan.status.applying";
+    else if (s?.restartPending) statusKey = "gui.lan.status.pending";
+    else if (s && s.enabled) statusKey = "gui.lan.status.on";
+    else if (s) statusKey = "gui.lan.status.off";
+    const status = el("span", { "data-testid": "settings-lan-status", text: t(statusKey) });
+
+    const extra: HTMLElement[] = [];
+    const ready = !!s && s.enabled && !s.restartPending && s.effective === "mirrored" && s.firewall === "present";
+    if (ready && s.addresses.length) {
+      const list = el("div", { class: "lan-addresses mono", "data-testid": "settings-lan-addresses" });
+      for (const ip of s.addresses) list.append(el("span", { text: `http://${ip}:<port>` }));
+      extra.push(row(el("span", { text: t("gui.settings.lan_addresses") }), t("gui.lan.hint.isolation"), list));
+    }
+    const warns: string[] = [];
+    if (s && !s.supported) warns.push(t("gui.lan.warn.unsupported").replace("%d", String(s.build)));
+    if (s?.enabled && s.firewall === "missing") warns.push(t("gui.lan.warn.firewall"));
+    if (s?.enabled && s.publicNetwork) warns.push(t("gui.lan.warn.public"));
+    if (warns.length) {
+      const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-warn", role: "note" });
+      for (const w of warns) box.append(el("p", { text: w }));
+      extra.push(box);
+    }
+    let control: Node = status;
+    if (s?.restartPending && !applying) {
+      const restart = btn({ type: "button", "data-testid": "settings-lan-restart" }, "power", t("gui.lan.restart"));
+      restart.onclick = () => void this.applyLAN(s.enabled, "gui.lan.confirm_restart");
+      control = el("span", { class: "lan-status" }, status, restart);
+    }
+    return el("section", { class: "set-group", "data-testid": "settings-lan-group" },
+      el("h2", { text: t("gui.settings.group.network") }),
+      row(el("span", { "data-testid": "settings-lan-label", text: t("gui.settings.lan") }), t("gui.settings.lan_hint"), el("span", { class: "switch" }, state, toggle)),
+      row(el("span", { text: t("gui.settings.lan_status") }), t("gui.settings.lan_status_hint"), control),
+      ...extra,
+    );
   }
 
   private renderSettings(): void {
@@ -2126,6 +2239,7 @@ export class App {
           row(el("label", { for: "settings-refresh", text: t("gui.settings.refresh") }), t("gui.settings.refresh_hint"), numberField(interval, t("gui.unit.sec"))),
           row(el("label", { for: "settings-exec-shell", text: t("gui.settings.exec_shell") }), t("gui.settings.shell_hint"), textField(shell)),
         ),
+        ...(this.st.meta.lan_supported ? [this.lanSection(row)] : []),
         el("section", { class: "set-group" },
           el("h2", { text: t("gui.settings.group.about") }),
           el("div", { class: "set-row", "data-testid": "settings-about" },

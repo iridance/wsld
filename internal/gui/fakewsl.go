@@ -25,6 +25,16 @@ type FakeWSL struct {
 	procStatN   map[string]int               // distro → /proc/stat 讀取次數（交替兩組假資料）
 	users       map[string]map[string]bool   // distro → useradd 建立的使用者
 	passwords   map[string]map[string]string // distro → user → chpasswd 設定的密碼
+	// OnShutdown 於 wsl --shutdown 時呼叫（testhost 用來模擬 .wslconfig 生效）。
+	OnShutdown func()
+	shutdowns  int
+}
+
+// Shutdowns 回傳 wsl --shutdown 的次數。
+func (f *FakeWSL) Shutdowns() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.shutdowns
 }
 
 // NewFakeWSL 建立含 Ubuntu-26.04（Running、預設、systemd）與 docker-desktop（Stopped）的假環境。
@@ -38,6 +48,7 @@ func NewFakeWSL() *FakeWSL {
 func (f *FakeWSL) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.shutdowns = 0
 	f.distros = []wsl.Distro{
 		{Name: "Ubuntu-26.04", State: "Running", Version: 2, Default: true},
 		{Name: "docker-desktop", State: "Stopped", Version: 2},
@@ -92,6 +103,19 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 				return nil, nil, ctx.Err()
 			}
 		}
+	}
+	if len(args) == 1 && args[0] == "--shutdown" {
+		f.mu.Lock()
+		for i := range f.distros {
+			f.distros[i].State = "Stopped"
+		}
+		f.shutdowns++
+		hook := f.OnShutdown
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		return nil, nil, nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

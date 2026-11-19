@@ -31,6 +31,7 @@ import (
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/host"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
 	"github.com/iridance/wsld/scripts"
@@ -112,6 +113,7 @@ func main() {
 		NewEngine:      func(c config.Config) gui.Engine { return dockerClient(c) },
 		NewLifecycle:   func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:   gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
+		LAN:            lan.NewManager(lan.NewHost(), wsl.ExecRunner{}),
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {

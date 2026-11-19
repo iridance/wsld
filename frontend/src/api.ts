@@ -142,6 +142,21 @@ export interface Meta {
   api_endpoint: string;
   active_ready?: boolean;
   autostart_supported: boolean;
+  lan_supported?: boolean;
+}
+
+/** 區網存取狀態（GET/PUT /api/lan）。 */
+export interface LANStatus {
+  supported: boolean;
+  build: number;
+  configured: string;
+  effective: string;
+  enabled: boolean;
+  restartPending: boolean;
+  firewall: "present" | "missing" | "unknown";
+  profiles: string[];
+  publicNetwork: boolean;
+  addresses: string[];
 }
 
 export class ApiError extends Error {
@@ -245,6 +260,8 @@ export const api = {
     call<string>("GET", `/api/containers/${encodeURIComponent(id)}/logs?tail=${tail}`, undefined, true),
   getSettings: () => call<Settings>("GET", "/api/settings"),
   putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
+  getLAN: () => call<LANStatus>("GET", "/api/lan"),
+  putLAN: (enabled: boolean, restart: boolean) => call<LANStatus>("PUT", "/api/lan", { enabled, restart }),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),

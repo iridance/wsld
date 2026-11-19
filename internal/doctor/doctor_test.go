@@ -10,6 +10,7 @@ import (
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/dockerapi"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
@@ -222,5 +223,44 @@ func TestReportSummaryCounts(t *testing.T) {
 	ok, warn, fail := rep.Counts()
 	if warn != 1 || fail != 0 || ok == 0 {
 		t.Fatalf("counts = %d %d %d", ok, warn, fail)
+	}
+}
+
+func TestLANCheckOnlyWhenEnabled(t *testing.T) {
+	d := deps(healthy(), nil, nil)
+	d.LAN = func(context.Context, string) (lan.Status, error) { return lan.Status{Enabled: false}, nil }
+	if r := find(Run(context.Background(), d), "lan"); r.ID != "missing:lan" {
+		t.Fatalf("lan check must be hidden when disabled: %+v", r)
+	}
+}
+
+func TestLANCheckLevels(t *testing.T) {
+	ready := lan.Status{Enabled: true, Effective: "mirrored", Firewall: lan.FirewallPresent, Addresses: []string{"192.168.1.20"}}
+	cases := []struct {
+		name  string
+		mod   func(*lan.Status)
+		level Level
+		want  string
+	}{
+		{"ok", func(*lan.Status) {}, OK, "192.168.1.20"},
+		{"pending", func(s *lan.Status) { s.Effective, s.RestartPending = "nat", true }, Warn, "wsl --shutdown"},
+		{"firewall", func(s *lan.Status) { s.Firewall = lan.FirewallMissing }, Warn, "wsld lan on"},
+		{"public", func(s *lan.Status) { s.PublicNetwork = true }, Warn, "Private"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := ready
+			c.mod(&st)
+			d := deps(healthy(), nil, nil)
+			d.LAN = func(context.Context, string) (lan.Status, error) { return st, nil }
+			rep := Run(context.Background(), d)
+			r := find(rep, "lan")
+			if r.Level != c.level || !strings.Contains(r.Detail+r.Hint, c.want) {
+				t.Fatalf("got %+v", r)
+			}
+			if rep.ExitCode() != 0 {
+				t.Fatal("LAN warnings must not change the exit code")
+			}
+		})
 	}
 }

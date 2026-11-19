@@ -10,6 +10,7 @@ import (
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/doctor"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 	"github.com/iridance/wsld/scripts"
 )
@@ -43,6 +44,7 @@ func main() {
 		Processes:    doctor.WindowsProcesses,
 		Bundle:       scripts.BootstrapBundle(),
 		Exec:         cli.DefaultExec,
+		LAN:          lan.NewManager(lan.NewHost(), wsl.ExecRunner{}),
 		Version:      version,
 	}
 	code := app.Run(ctx, os.Args[1:])

@@ -734,6 +734,13 @@ func (l *FakeLifecycle) Start(ctx context.Context) (lifecycle.Status, error) {
 	return l.Status(ctx), nil
 }
 
+// ResetStarts 歸零 Start 次數（testhost /__test/reset 用）。
+func (l *FakeLifecycle) ResetStarts() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.starts = 0
+}
+
 // Starts 回傳 Start 被呼叫次數。
 func (l *FakeLifecycle) Starts() int {
 	l.mu.Lock()
