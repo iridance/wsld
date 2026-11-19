@@ -1306,7 +1306,7 @@ export class App {
       rowAttrs["aria-selected"] = "true";
     }
     const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
-    const lanBtn = this.lanButton(c);
+    const browserBtn = this.browserButton(c);
     return el(
       "tr",
       rowAttrs,
@@ -1316,7 +1316,7 @@ export class App {
       ),
       el("td", { text: c.Image, title: c.Image }),
       el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
-      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, ...(lanBtn ? [lanBtn] : []), infoBtn, rmBtn),
+      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, browserBtn, infoBtn, rmBtn),
     );
   }
 
@@ -2283,35 +2283,38 @@ export class App {
     this.st.lanForwards = forwards;
   }
 
-  /** 容器列的「在瀏覽器開啟（區網）」按鈕；區網存取關閉時不顯示（各列一致，圖示對齊）。
-   *  一個位址直接開啟；多個位址（多個 published 埠）跳小選單；沒有位址時停用；全部監聽失敗時紅色並以 title 說明原因。 */
-  private lanButton(c: Container): HTMLButtonElement | null {
-    if (!this.st.lanEnabled) return null;
+  /** 容器列的「在瀏覽器開啟」按鈕；常駐（各列一致，圖示對齊）。
+   *  有成功的區網轉發時開區網位址；否則（區網存取關閉、該容器沒有轉發或轉發失敗）用 http://localhost:<published 埠> 開啟。
+   *  一個位址直接開啟；多個位址（多個 published 埠）跳小選單；沒有位址時停用；區網轉發全部失敗時紅色並以 title 說明原因。 */
+  private browserButton(c: Container): HTMLButtonElement {
     const n = name(c);
-    const mine = this.st.lanForwards.filter((f) => f.container === n);
-    const urls = mine.filter((f) => !f.error).map(lanURL);
+    const mine = this.st.lanEnabled ? this.st.lanForwards.filter((f) => f.container === n) : [];
+    const lanURLs = mine.filter((f) => !f.error).map(lanURL);
     const failed = mine.filter((f) => f.error);
-    let label = t("gui.lan.none_for_ct");
-    if (urls.length) label = fmt(t("gui.lan.open"), urls.join("\n"));
-    else if (failed.length) label = failed.map((f) => `${lanURL(f)} — ${f.error}`).join("\n");
-    const b = iconBtn({ "data-testid": `btn-lan-${n}`, class: failed.length && !urls.length ? "warn" : "" }, "globe", label);
+    const urls = lanURLs.length ? lanURLs : localURLs(c);
+    const lines = [...(urls.length ? [fmt(t("gui.browser.open"), urls.join("\n"))] : [t("gui.browser.none")])];
+    if (!lanURLs.length && failed.length) lines.push(...failed.map((f) => `${t("gui.lan.tag")}: ${lanURL(f)} — ${f.error}`));
+    const b = iconBtn({ "data-testid": `btn-browser-${n}`, class: failed.length && !lanURLs.length ? "warn" : "" }, "globe", lines.join("\n"));
     b.disabled = urls.length === 0;
     b.onclick = (e) => {
       e.stopPropagation();
-      if (urls.length === 1) this.openLANURL(urls[0]);
+      if (urls.length === 1) this.openBrowserURL(urls[0]);
       else this.toggleLANMenu(b, urls);
     };
     return b;
   }
 
-  private openLANURL(url: string): void {
-    void api.openLAN(url).catch((err) => {
+  /** 區網位址經 /api/lan/open、localhost 經 /api/open-local（後端各自驗證）。 */
+  private openBrowserURL(url: string): void {
+    const local = /^http:\/\/localhost:(\d+)$/.exec(url);
+    const p = local ? api.openLocal(Number(local[1])) : api.openLAN(url);
+    void p.catch((err) => {
       this.st.lastError = err instanceof ApiError ? err.message : String(err);
       this.renderBanner();
     });
   }
 
-  /** 多個區網位址時的小選單（掛在按鈕下方；點外面或選一項即關閉）。 */
+  /** 多個位址時的小選單（掛在按鈕下方；點外面或選一項即關閉）。 */
   private toggleLANMenu(anchor: HTMLElement, urls: string[]): void {
     const existing = document.querySelector<HTMLElement>('[data-testid="lan-menu"]');
     existing?.remove();
@@ -2322,7 +2325,7 @@ export class App {
       item.onclick = (e) => {
         e.stopPropagation();
         menu.remove();
-        this.openLANURL(u);
+        this.openBrowserURL(u);
       };
       menu.append(item);
     }
@@ -2850,6 +2853,13 @@ function saveJSON(key: string, v: unknown): void {
 /** 區網轉發的 URL（IPv6 加中括號）。 */
 function lanURL(f: LANForward): string {
   return `http://${f.address.includes(":") ? `[${f.address}]` : f.address}:${f.port}`;
+}
+
+/** 執行中容器已發佈 TCP 埠的 localhost 網址（去重、依埠排序）。 */
+function localURLs(c: Container): string[] {
+  if (c.State !== "running") return [];
+  const ps = new Set((c.Ports ?? []).filter((p) => p.PublicPort && (!p.Type || p.Type === "tcp")).map((p) => p.PublicPort));
+  return [...ps].sort((a, b) => a - b).map((p) => `http://localhost:${p}`);
 }
 
 /** 已發佈埠；dual-stack（0.0.0.0 與 ::）會各回一筆，去重後依對外埠排序。 */

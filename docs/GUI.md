@@ -57,9 +57,10 @@
     - 取消 UAC 等失敗時，原因顯示在 error banner。
   - 進入設定頁時查詢一次狀態（`GET /api/lan`，會先同步轉發）。背景每 3 秒同步轉發（`Server.RunLAN`）。
 - **容器頁的瀏覽器按鈕**：
-  - 開啟區網存取後，每個服務列的動作欄在 Terminal 與 Info 之間多一顆地球圖示按鈕 `btn-lan-<名稱>`（關閉時各列都不顯示，圖示保持對齊）。
-  - 一個區網位址：點擊直接以系統瀏覽器開啟（`POST /api/lan/open`，只接受目前轉發中的位址）。多個位址（多個 published 埠）：跳小選單 `lan-menu`／`lan-menu-item` 選一個，點外面關閉。
-  - 沒有 published 埠：按鈕停用。全部監聽失敗：按鈕停用並標紅（`warn`），原因放在 title。
+  - 每個服務列的動作欄在 Terminal 與 Info 之間常駐一顆地球圖示按鈕 `btn-browser-<名稱>`（各列一致，圖示保持對齊）。
+  - 開啟區網存取且該容器有成功的轉發：開區網位址（`POST /api/lan/open`，只接受目前轉發中的位址）。否則（區網存取關閉、尚未授權防火牆、轉發失敗）：開 `http://localhost:<published 埠>`（`POST /api/open-local`，只接受執行中容器已發佈的 TCP 埠）。
+  - 一個位址：點擊直接以系統瀏覽器開啟。多個位址（多個 published 埠）：跳小選單 `lan-menu`／`lan-menu-item` 選一個，點外面關閉。
+  - 沒有 published 埠或容器已停止：按鈕停用。區網轉發全部失敗：按鈕標紅（`warn`），原因放在 title，點擊改開 localhost。
   - 容器 Info（`info-lan`）與 compose 群組 Info 的服務清單以文字列出位址。
   - 資料來自 `GET /api/lan/forwards`，隨容器清單一起刷新。
 - **輸入元件**（設計稿「Input controls」）：全部自繪、不用瀏覽器預設外觀。文字欄位外框 `.tf`（34px、底邊較深；焦點＝藍色底線、錯誤＝紅色底線、停用＝灰底）；數字隱藏原生 spinner，改欄內 −／＋ 與單位，超出 min／max 標錯；下拉一律用自繪 `dropdown()`（設定頁語言、Add machine 發行版；combobox＋listbox，外框同 `.tf.select`，展開清單也自繪、不用原生 `<select>` 與 OS 彈出清單，目前值以左側強調條＋勾標示，未選時顯示淡色 placeholder，↑↓／Enter／Esc 可操作，對話框內 Esc 只關清單）；搜尋有清除鈕（Esc 亦可）；核取方塊／選項按鈕 18px 以 CSS 畫勾與點；開關 40×20、左側顯示開／關文字；輸入名稱確認在完全相符時顯示綠色勾。鍵盤焦點：小型控制項 2px 外框、文字欄位用底線。
@@ -85,7 +86,7 @@
 | Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
-| Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、防火牆說明對話框（netsh／helper、稍後、等待 UAC、取消 UAC）、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
+| Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、防火牆說明對話框（netsh／helper、稍後、等待 UAC、取消 UAC）、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（常駐；區網關閉時開 localhost、點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
 | i18n | Settings「外觀」語言下拉（立即生效） | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 
@@ -123,7 +124,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.13.0 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.14.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 

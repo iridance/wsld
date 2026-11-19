@@ -166,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
 	mux.HandleFunc("POST /api/open-repo", s.handleOpenRepo)
+	mux.HandleFunc("POST /api/open-local", s.handleOpenLocal)
 	if s.Assets != nil {
 		mux.Handle("/", s.Assets)
 	}
@@ -928,6 +929,49 @@ func (s *Server) handleOpenRepo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": RepoURL})
+}
+
+// LocalURL 是容器 published 埠在本機的網址（WSL localhost 轉發）。
+func LocalURL(port int) string { return "http://localhost:" + strconv.Itoa(port) }
+
+// handleOpenLocal 以系統瀏覽器開啟 http://localhost:<埠>；只接受執行中容器已發佈的 TCP 埠。
+// 區網存取關閉（或該容器沒有區網轉發）時，容器列的瀏覽器按鈕走這裡。
+func (s *Server) handleOpenLocal(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Port int `json:"port"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", err)
+		return
+	}
+	list, err := s.engine().ListContainers(r.Context(), false)
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	allowed := false
+	for _, c := range list {
+		if c.State != "running" {
+			continue
+		}
+		for _, p := range c.Ports {
+			if in.Port > 0 && p.PublicPort == in.Port && (p.Type == "" || p.Type == "tcp") {
+				allowed = true
+			}
+		}
+	}
+	if !allowed {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("not a published container port"))
+		return
+	}
+	url := LocalURL(in.Port)
+	if s.OnOpenURL != nil {
+		if err := s.OnOpenURL(url); err != nil {
+			writeErr(w, http.StatusInternalServerError, "error", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
 // ListenLoopback 在 127.0.0.1 隨機埠啟動 server，回傳 base URL 與關閉函式。

@@ -38,7 +38,8 @@ async function openedURLs(request: APIRequestContext): Promise<string[]> {
 test("network section shows LAN access off by default", async ({ page }) => {
   await open(page);
   await expect(page.locator('[data-testid="container-row"][data-name="web"]')).toBeVisible();
-  await expect(page.getByTestId("btn-lan-web")).toHaveCount(0); // 關閉時不顯示按鈕
+  // 區網關閉時按鈕仍常駐，改用 localhost
+  await expect(page.getByTestId("btn-browser-web")).toHaveAttribute("title", /http:\/\/localhost:8080/);
   await page.getByTestId("nav-settings").click();
   await expect(page.getByTestId("settings-lan-group")).toBeVisible();
   await expect(page.getByTestId("settings-lan-label")).toHaveText("LAN access");
@@ -48,6 +49,37 @@ test("network section shows LAN access off by default", async ({ page }) => {
   await expect(toggle).toBeEnabled();
   await expect(page.getByTestId("settings-lan-status")).toContainText("Off");
   await expect(page.getByTestId("settings-lan-mirrored")).toHaveCount(0);
+});
+
+test("with LAN access off the globe button opens the container on localhost", async ({ page, request }) => {
+  expect((await request.post("/__test/container?name=app&image=node:22&state=running&ports=3000,3001")).ok()).toBeTruthy();
+  await open(page);
+  const row = page.locator('[data-testid="container-row"][data-name="web"]');
+  const btn = row.getByTestId("btn-browser-web");
+  await expect(btn).toBeEnabled();
+  await expect(btn).not.toHaveClass(/warn/);
+  // 位在 Terminal 與 Info 之間
+  const order = await row.locator("td.actions button").evaluateAll((bs) => bs.map((b) => b.getAttribute("data-testid")));
+  expect(order.indexOf("btn-browser-web")).toBe(order.indexOf("btn-term-web") + 1);
+  expect(order.indexOf("btn-info-web")).toBe(order.indexOf("btn-browser-web") + 1);
+  await btn.click();
+  await expect.poll(() => openedURLs(request)).toEqual(["open-url:http://localhost:8080"]);
+
+  // 多個埠：選單列出 localhost 位址
+  await page.getByTestId("btn-browser-app").click();
+  const items = page.getByTestId("lan-menu-item");
+  await expect(items).toHaveText(["localhost:3000", "localhost:3001"]);
+  await items.nth(1).click();
+  await expect.poll(() => openedURLs(request)).toEqual(["open-url:http://localhost:8080", "open-url:http://localhost:3001"]);
+
+  // 沒有 published 埠的容器：按鈕停用（各列圖示對齊）
+  await expect(page.getByTestId("btn-browser-db")).toBeDisabled();
+});
+
+test("a stopped container keeps a disabled globe button", async ({ page, request }) => {
+  expect((await request.post("/api/containers/web/stop")).ok()).toBeTruthy();
+  await open(page);
+  await expect(page.getByTestId("btn-browser-web")).toBeDisabled();
 });
 
 test("turning LAN access on adds a globe button that opens the container in the browser", async ({ page, request }) => {
@@ -68,21 +100,21 @@ test("turning LAN access on adds a globe button that opens the container in the 
 
   await page.getByTestId("nav-containers").click();
   const row = page.locator('[data-testid="container-row"][data-name="web"]');
-  const btn = row.getByTestId("btn-lan-web");
+  const btn = row.getByTestId("btn-browser-web");
   await expect(btn).toBeEnabled();
   await expect(btn).toHaveAttribute("title", /http:\/\/192\.168\.1\.20:8080/);
   // 只是按鈕，名稱欄不再多一行位址
   await expect(row.locator("td.name-cell")).not.toContainText("192.168.1.20");
   // 位在 Terminal 與 Info 之間
   const order = await row.locator("td.actions button").evaluateAll((bs) => bs.map((b) => b.getAttribute("data-testid")));
-  expect(order.indexOf("btn-lan-web")).toBe(order.indexOf("btn-term-web") + 1);
-  expect(order.indexOf("btn-info-web")).toBe(order.indexOf("btn-lan-web") + 1);
+  expect(order.indexOf("btn-browser-web")).toBe(order.indexOf("btn-term-web") + 1);
+  expect(order.indexOf("btn-info-web")).toBe(order.indexOf("btn-browser-web") + 1);
 
   await btn.click();
   await expect.poll(() => openedURLs(request)).toEqual(["open-url:http://192.168.1.20:8080"]);
 
   // 沒有 published 埠的容器：按鈕停用（各列圖示對齊）
-  await expect(page.getByTestId("btn-lan-db")).toBeDisabled();
+  await expect(page.getByTestId("btn-browser-db")).toBeDisabled();
 
   // Info 仍列出區網位址
   await page.getByTestId("btn-info-web").click();
@@ -93,7 +125,7 @@ test("a container with several published ports opens a menu to pick the address"
   expect((await request.post("/__test/container?name=app&image=node:22&state=running&ports=3000,3001")).ok()).toBeTruthy();
   await open(page);
   await enableLAN(page);
-  await page.getByTestId("btn-lan-app").click();
+  await page.getByTestId("btn-browser-app").click();
   const items = page.getByTestId("lan-menu-item");
   await expect(items).toHaveText(["192.168.1.20:3000", "192.168.1.20:3001"]);
   await items.nth(1).click();
@@ -101,36 +133,40 @@ test("a container with several published ports opens a menu to pick the address"
   await expect.poll(() => openedURLs(request)).toEqual(["open-url:http://192.168.1.20:3001"]);
 
   // 點外面關閉選單
-  await page.getByTestId("btn-lan-app").click();
+  await page.getByTestId("btn-browser-app").click();
   await expect(page.getByTestId("lan-menu")).toBeVisible();
   await page.getByTestId("page-title").click();
   await expect(page.getByTestId("lan-menu")).toHaveCount(0);
 });
 
-test("turning LAN access off removes the globe buttons", async ({ page }) => {
+test("turning LAN access off switches the globe buttons back to localhost", async ({ page }) => {
   await open(page);
   await enableLAN(page);
-  await expect(page.getByTestId("btn-lan-web")).toBeVisible();
+  await expect(page.getByTestId("btn-browser-web")).toBeVisible();
   await page.getByTestId("nav-settings").click();
   await page.getByTestId("settings-lan").click();
   await expect(page.getByTestId("settings-lan")).toHaveAttribute("aria-checked", "false");
   await expect(page.getByTestId("settings-lan-status")).toContainText("Off");
   await page.getByTestId("nav-containers").click();
   await expect(page.locator('[data-testid="container-row"][data-name="web"]')).toBeVisible();
-  await expect(page.getByTestId("btn-lan-web")).toHaveCount(0);
+  await expect(page.getByTestId("btn-browser-web")).toHaveAttribute("title", /http:\/\/localhost:8080/);
+  await expect(page.getByTestId("btn-browser-web")).not.toHaveAttribute("title", /192\.168/);
 });
 
-test("a port that cannot be bound turns the globe red with the reason", async ({ page, request }) => {
+test("a port that cannot be bound turns the globe red with the reason and falls back to localhost", async ({ page, request }) => {
   await lanEnv(request, "busy=8080");
   await open(page);
   await page.getByTestId("nav-settings").click();
   await page.getByTestId("settings-lan").click();
   await expect(page.getByTestId("settings-lan-status")).toContainText("could not listen on 1 address");
   await page.getByTestId("nav-containers").click();
-  const btn = page.getByTestId("btn-lan-web");
-  await expect(btn).toBeDisabled();
+  const btn = page.getByTestId("btn-browser-web");
+  await expect(btn).toBeEnabled();
   await expect(btn).toHaveClass(/warn/);
   await expect(btn).toHaveAttribute("title", /Only one usage of each socket address/);
+  await expect(btn).toHaveAttribute("title", /http:\/\/localhost:8080/);
+  await btn.click();
+  await expect.poll(() => openedURLs(request)).toEqual(["open-url:http://localhost:8080"]);
 });
 
 test("no published ports shows the idle status", async ({ page, request }) => {
@@ -243,9 +279,9 @@ test("Not now keeps LAN access on with a paused warning; the button reopens the 
   await expect(warn).toHaveAttribute("data-state", "missing");
   await expect(warn).toContainText("forwarding is paused");
   await expect(warn).toContainText("moving or renaming the file");
-  // 沒有轉發 → 容器列沒有地球按鈕
+  // 沒有轉發 → 容器列的地球按鈕改用 localhost
   await page.getByTestId("nav-containers").click();
-  await expect(page.getByTestId("btn-lan-web")).toHaveCount(0);
+  await expect(page.getByTestId("btn-browser-web")).toHaveAttribute("title", /http:\/\/localhost:8080/);
   await page.getByTestId("nav-settings").click();
 
   await page.getByTestId("settings-lan-fw-allow").click();
@@ -255,7 +291,7 @@ test("Not now keeps LAN access on with a paused warning; the button reopens the 
   await expect(page.getByTestId("settings-lan-fw-warn")).toHaveCount(0);
   expect((await lanState(request)).firewall_allows).toBe(1);
   await page.getByTestId("nav-containers").click();
-  await expect(page.getByTestId("btn-lan-web")).toBeVisible();
+  await expect(page.getByTestId("btn-browser-web")).toHaveAttribute("title", /http:\/\/192\.168\.1\.20:8080/);
 });
 
 test("a blocked wsld-gui is fixed by wsld-gui itself and the dialog says so", async ({ page, request }) => {

@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.13.0（git tag `v0.13.0`）  
-狀態：**0.13.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.14.0（git tag `v0.14.0`）  
+狀態：**0.14.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-19
 
 ## 1. 問題與目標
@@ -233,7 +233,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
 | Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
-| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；未授權防火牆時先顯示說明對話框；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列的地球按鈕以系統瀏覽器開啟區網位址（多埠跳選單），Info 以文字列出 |
+| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；未授權防火牆時先顯示說明對話框；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列常駐地球按鈕，以系統瀏覽器開啟區網位址（區網存取關閉或無轉發時開 `http://localhost:<埠>`；多埠跳選單），Info 以文字列出 |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |
 | 破壞性操作 | 一律確認；unregister 需輸入名稱；Remove 容器可含 running（會停止） |

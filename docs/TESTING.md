@@ -47,7 +47,7 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 ## 實機驗收（Windows）
 
 ```bash
-make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.13.0）
+make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.14.0）
 ./dist/wsld.exe init                  # 在 WSL Ubuntu 內安裝 Docker、寫 %APPDATA%\wsld\config.toml
 curl.exe http://127.0.0.1:23750/_ping # OK
 ./dist/wsld.exe status && ./dist/wsld.exe doctor
@@ -63,7 +63,7 @@ DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d -p 8080:80 nginx:alpine
 # 啟動 wsld-gui（尚未授權時）→ 不跳 UAC；Settings › 網路 › 區網存取 開啟 → 說明對話框 → 繼續 → UAC 顯示「網路命令殼層」（Microsoft Windows，詳細資料有完整 netsh 規則）→ 是；授權前不出現 Windows 安全性警訊
 # 以 wf.msc 替 wsld-gui.exe 加一條對內封鎖規則 → 再授權：對話框說明由 wsld-gui 處理，UAC 顯示 wsld-gui，完成後封鎖規則停用
 # 另一台設備：http://<內網IP>:8080 → nginx 首頁；curl http://<內網IP>:23750/_ping → 必須連不到（API 不轉發）
-# 容器頁 nginx 列出現地球按鈕，點擊以瀏覽器開啟 http://<內網IP>:8080；停掉容器：該位址消失；關閉開關：另一台設備連不到，本機 127.0.0.1:8080 仍可用
+# 區網關閉時容器頁 nginx 列的地球按鈕開 http://localhost:8080；開啟後改開 http://<內網IP>:8080；停掉容器：該位址消失；關閉開關：另一台設備連不到，本機 127.0.0.1:8080 仍可用
 ```
 
 2026-09-06 於 Ubuntu-26.04（WSL2）實測：Docker CE 29.8.0、Compose v5.5.1、埠 23750、doctor 11 OK。

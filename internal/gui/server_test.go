@@ -696,3 +696,28 @@ func TestListenLoopback(t *testing.T) {
 		t.Fatalf("%v %v", err, resp)
 	}
 }
+
+func TestOpenLocalOnlyPublishedPorts(t *testing.T) {
+	e := newEnv(t, "") // 不需要區網支援
+	if resp, b := e.req(t, "POST", "/api/open-local", `{"port":8080}`); resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	if len(e.window) != 1 || e.window[0] != "open-url:http://localhost:8080" {
+		t.Fatalf("window=%v", e.window)
+	}
+	for _, bad := range []string{`{"port":9999}`, `{"port":0}`, `{"port":-1}`, `nope`} {
+		if resp, _ := e.req(t, "POST", "/api/open-local", bad); resp.StatusCode != 400 {
+			t.Fatalf("%s: status %d", bad, resp.StatusCode)
+		}
+	}
+	// 停止後不再接受
+	if resp, b := e.req(t, "POST", "/api/containers/web/stop", ""); resp.StatusCode != 200 {
+		t.Fatalf("stop: %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := e.req(t, "POST", "/api/open-local", `{"port":8080}`); resp.StatusCode != 400 {
+		t.Fatalf("stopped container: status %d", resp.StatusCode)
+	}
+	if len(e.window) != 1 {
+		t.Fatalf("rejected ports must not open: %v", e.window)
+	}
+}

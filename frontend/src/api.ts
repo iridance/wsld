@@ -285,6 +285,7 @@ export const api = {
   allowFirewall: () => call<LANStatus>("POST", "/api/lan/firewall"),
   lanForwards: (signal?: AbortSignal) => call<LANForwards>("GET", "/api/lan/forwards", undefined, false, signal),
   openLAN: (url: string) => call<void>("POST", "/api/lan/open", { url }),
+  openLocal: (port: number) => call<{ url: string }>("POST", "/api/open-local", { port }),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),
