@@ -425,3 +425,27 @@ func writeTemp(t *testing.T, body string) string {
 	}
 	return p
 }
+
+func TestLANAccessRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.Distro, c.User = "Ubuntu-26.04", "irice"
+	c.LANAccess = true
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "lan_access = true") {
+		t.Fatalf("saved:\n%s", b)
+	}
+	got, err := Load(p)
+	if err != nil || !got.LANAccess {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	got.LANAccess = false
+	_ = Save(p, got)
+	b, _ = os.ReadFile(p)
+	if strings.Contains(string(b), "lan_access") {
+		t.Fatalf("false must be omitted:\n%s", b)
+	}
+}

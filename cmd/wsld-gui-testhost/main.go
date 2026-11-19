@@ -3,12 +3,12 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,43 +56,35 @@ func main() {
 	}
 	reset()
 
-	// 區網存取：.wslconfig 寫在暫存目錄；wsl --shutdown 時把設定模式「生效」。
+	// 區網存取：.wslconfig 寫在暫存目錄；轉發器不真的綁 192.168.x.x（改綁 127.0.0.1 隨機埠）。
 	lanDir, err := os.MkdirTemp("", "wsld-testhost-lan")
 	if err != nil {
 		log.Fatal(err)
 	}
-	lanHost := &lan.FakeHost{Dir: lanDir, WinBuild: 26300}
+	lanHost := &lan.FakeHost{Dir: lanDir}
+	lanMgr := &lan.Manager{Host: lanHost, Sleep: func(time.Duration) {}}
 	var lanMu sync.Mutex
-	lanEffective := lan.ModeNAT
-	lanMgr := &lan.Manager{Host: lanHost, Mode: func(context.Context, string) (string, error) {
+	lanBusy := map[int]bool{} // /__test/lan?busy=8080：模擬該埠監聽失敗
+	forwarder := &lan.Forwarder{Listen: func(network, addr string) (net.Listener, error) {
+		_, p, _ := net.SplitHostPort(addr)
+		port, _ := strconv.Atoi(p)
 		lanMu.Lock()
-		defer lanMu.Unlock()
-		return lanEffective, nil
-	}}
-	readLANConfig := func() string {
-		p, _ := lanHost.ConfigPath()
-		b, _ := os.ReadFile(p)
-		return string(b)
-	}
-	fwsl.OnShutdown = func() {
-		mode := strings.ToLower(lan.GetKey(readLANConfig(), "wsl2", "networkingMode"))
-		if mode == "" {
-			mode = lan.ModeNAT
+		busy := lanBusy[port]
+		lanMu.Unlock()
+		if busy {
+			return nil, fmt.Errorf("listen tcp %s: bind: Only one usage of each socket address is normally permitted.", addr)
 		}
-		lanMu.Lock()
-		lanEffective = mode
-		lanMu.Unlock()
-	}
+		return net.Listen("tcp", "127.0.0.1:0")
+	}}
+	lanConfigPath, _ := lanHost.ConfigPath()
 	resetLAN := func() {
-		p, _ := lanHost.ConfigPath()
-		_ = os.Remove(p)
-		_ = os.Remove(p + ".wsld.bak")
-		lanHost.Set(func(h *lan.FakeHost) {
-			h.WinBuild, h.Rules, h.NetProfiles, h.FirewallErr, h.FirewallCalls = 26300, 0, nil, nil, nil
-		})
+		_ = os.Remove(lanConfigPath)
+		_ = os.Remove(lanConfigPath + ".wsld.bak")
+		lanHost.Set(func(h *lan.FakeHost) { h.Rules, h.FirewallErr, h.RemoveCalls = 0, nil, 0 })
 		lanMu.Lock()
-		lanEffective = lan.ModeNAT
+		lanBusy = map[int]bool{}
 		lanMu.Unlock()
+		forwarder.Close()
 	}
 
 	var winMu sync.Mutex
@@ -101,6 +93,7 @@ func main() {
 	srv := &gui.Server{
 		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
 		LAN:        lanMgr,
+		Forwarder:  forwarder,
 		Shell:      gui.FakeDistroShell{},
 		LoadConfig: func() (config.Config, error) { return config.Load(*cfgPath) },
 		SaveConfig: func(c config.Config) error { return config.Save(*cfgPath, c) },
@@ -223,30 +216,35 @@ func main() {
 		}
 		ok(w)
 	})
-	// /__test/lan?build=19045&profile=Public&fail=1：調整假的 Windows 環境。
+	// /__test/lan?mirrored=1&fail=1&busy=8080：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用。
 	mux.HandleFunc("POST /__test/lan", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		if q.Get("mirrored") == "1" {
+			_ = os.WriteFile(lanConfigPath, []byte("[wsl2]\r\nmemory=4GB\r\nnetworkingMode=mirrored\r\n"), 0o644)
+			lanHost.Set(func(h *lan.FakeHost) { h.Rules = 2 })
+		}
 		lanHost.Set(func(h *lan.FakeHost) {
-			if b, err := strconv.Atoi(q.Get("build")); err == nil {
-				h.WinBuild = uint32(b)
-			}
-			if p := q.Get("profile"); p != "" {
-				h.NetProfiles = []string{p}
-			}
-			if q.Get("fail") == "1" {
+			switch q.Get("fail") {
+			case "1":
 				h.FirewallErr = errors.New("The operation was canceled by the user.")
-			} else if q.Get("fail") == "0" {
+			case "0":
 				h.FirewallErr = nil
 			}
 		})
+		if p, err := strconv.Atoi(q.Get("busy")); err == nil {
+			lanMu.Lock()
+			lanBusy[p] = true
+			lanMu.Unlock()
+		}
 		ok(w)
 	})
 	mux.HandleFunc("GET /__test/lan", func(w http.ResponseWriter, r *http.Request) {
-		var calls []bool
-		lanHost.Set(func(h *lan.FakeHost) { calls = append([]bool{}, h.FirewallCalls...) })
+		b, _ := os.ReadFile(lanConfigPath)
+		var removes int
+		lanHost.Set(func(h *lan.FakeHost) { removes = h.RemoveCalls })
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"wslconfig": readLANConfig(), "firewall_calls": calls, "shutdowns": fwsl.Shutdowns(),
+			"wslconfig": string(b), "firewall_removes": removes, "shutdowns": fwsl.Shutdowns(),
 		})
 	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {

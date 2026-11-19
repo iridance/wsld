@@ -44,7 +44,7 @@ func main() {
 		Processes:    doctor.WindowsProcesses,
 		Bundle:       scripts.BootstrapBundle(),
 		Exec:         cli.DefaultExec,
-		LAN:          lan.NewManager(lan.NewHost(), wsl.ExecRunner{}),
+		LAN:          &lan.Manager{Host: lan.NewHost()},
 		Version:      version,
 	}
 	code := app.Run(ctx, os.Args[1:])

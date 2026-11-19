@@ -1,7 +1,7 @@
 # wsld Roadmap
 
-版本：0.9.0（git tag `v0.9.0`）  
-對應規格：[SPEC.md](SPEC.md)（**0.9.0 已交付**；Phase 0–4 基底已落地）
+版本：0.10.0（git tag `v0.10.0`）  
+對應規格：[SPEC.md](SPEC.md)（**0.10.0 已交付**；Phase 0–4 基底已落地）
 
 ## 總覽
 
@@ -21,7 +21,7 @@ Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-W
   6e Machines/Settings/Terminal/Tray
   6f Parity 驗證 + cutover（→ v2.0.0）
 
-0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）
+0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT
 之後 v2.0 = Phase 6（6a–6f）
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -192,7 +192,7 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ### 其他候選
 
-- [x] 區網存取：mirrored 網路 + Hyper-V 防火牆（僅私人網路）；`wsld lan on|off|status`、Settings › Network、doctor 檢查（見 SPEC §4.5；0.9.0）
+- [x] 區網存取：0.9.0 以 mirrored＋Hyper-V 防火牆交付；0.10.0 改為 wsld-gui 內建轉發器（Windows 原生防火牆確認、不重啟 WSL），並提供 `wsld lan restore-nat` 還原 mirrored（見 SPEC §4.5）
 - [ ] npiperelay（Windows named pipe ↔ 引擎）
 - [ ] 自動更新（`wsld`／`wsld-gui` 本體）
 - [ ] arm64 正式支援

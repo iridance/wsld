@@ -44,33 +44,32 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 預設 WSL 是 NAT 模式：`docker run -p 8080:80` 只會出現在 Windows 的 `127.0.0.1:8080`，手機或其他電腦連 `http://<這台電腦的內網IP>:8080` 會失敗。開啟「區網存取」後就能從內網連入。
 
-- **開啟**：`wsld lan on`，或 GUI 的 Settings › Network › LAN access。
-  1. 跳出 UAC 一次。wsld 會新增兩條 Hyper-V 防火牆放行規則：
-     - 規則名稱：`wsld-lan-tcp`／`wsld-lan-udp`
-     - 只套用在 WSL（VMCreatorId `{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`）
-     - **只對「私人」網路設定檔**生效
-  2. 在 `%USERPROFILE%\.wslconfig` 的 `[wsl2]` 寫入 `networkingMode=mirrored`：
-     - 其他設定與 CRLF 原樣保留
-     - 第一次改寫前備份成 `.wslconfig.wsld.bak`
-  3. 確認後執行 `wsl --shutdown`。這會重啟**所有** WSL 發行版，接著重新啟動 active machine。CLI 可用 `--yes` 略過詢問。
-- **狀態**：`wsld lan status`（可加 `--json`）。會顯示：
-  - `.wslconfig` 的設定與實際生效模式（`wslinfo --networking-mode`）
-  - 防火牆規則是否存在、目前網路設定檔
-  - 內網 IPv4，以及可連線的網址 `http://<IP>:<published 埠>`
-- **關閉**：`wsld lan off`。會移除規則（UAC）、移除 `networkingMode`，再重啟 WSL，回到 NAT。
-- **開放範圍**：mirrored 模式下，WSL 內**所有**監聽 `0.0.0.0` 的服務都會對「私人」網路開放，不只容器。Docker API 只綁 `127.0.0.1`，mirrored 不會把 loopback 鏡像到區網，所以 **API 不會對外**。
-- **不需要另外設定 Windows Defender 的應用程式規則**：埠是開在 WSL 內，由 Hyper-V 防火牆把關。
+- **開啟**：GUI 的 Settings › 網路 › 區網存取（立即生效），或 `wsld lan on`（寫入 `config.toml` 的 `lan_access = true`）。
+  - **wsld-gui** 會在這台電腦的每個內網 IPv4 上，替執行中容器的 published TCP 埠監聽，並把連線轉到 `127.0.0.1:<埠>`（WSL localhost 轉發）。每 3 秒依容器清單同步：新埠自動加入，停掉的容器自動關閉。
+  - 第一次監聽時，**Windows 防火牆會自己跳出「允許 wsld-gui 在私人／公用網路上通訊」**。在那個視窗勾選要開放的網路即可。之後要改：Windows 安全性 › 防火牆與網路保護 ›「允許應用程式通過防火牆」› wsld-gui。
+  - WSL 維持 NAT：不改 `.wslconfig`、不重啟 WSL、不影響其他發行版，也不需要 UAC（除非 Windows 防火牆視窗本身要求）。
+- **只在 wsld-gui 執行時有效**（縮到系統匣也算）。只用 CLI 不會轉發。
+- **開放範圍**：
+  - 只轉發「綁所有介面」的 published 埠（`-p 8080:80`）。明確綁本機的（`-p 127.0.0.1:5432:5432`）不轉發。
+  - **Docker API 埠不轉發**，仍只綁 `127.0.0.1`。
+  - 只支援 TCP（UDP 不轉發）。
+  - 容器看到的來源 IP 是本機，不是對方設備的 IP。
+- **狀態**：
+  - GUI 會列出每個轉發位址（`http://192.168.x.x:8080 → web`）。無法監聽的位址（例如該埠已被其他 Windows 程式佔用）會顯示原因。
+  - `wsld lan status`（可加 `--json`）會顯示設定與內網 IPv4。
+- **關閉**：GUI 開關，或 `wsld lan off`。轉發會立即（GUI）或在下一次同步時停止。
 - **連不到時**：
-  - `wsld doctor` 只在已啟用時才會出現「區網存取」這一項，用來檢查：
-    - 是否已生效（尚未生效時執行 `wsl --shutdown` 後 `wsld start`）
-    - 防火牆規則是否存在
-    - 目前網路是否為「公用」（需到 Windows 設定把網路改成「私人」）
+  - 確認 Windows 防火牆有允許 wsld-gui 使用目前的網路類型（私人／公用）。
   - 路由器的 AP／用戶端隔離（例如訪客 Wi-Fi）也會讓設備互相連不到。這不在 wsld 控制範圍內。
-- **手動回復**：
-  - 用 `.wslconfig.wsld.bak` 覆蓋 `.wslconfig`
-  - 以系統管理員執行 `Remove-NetFirewallHyperVRule -Name wsld-lan-tcp,wsld-lan-udp`
-  - 最後執行 `wsl --shutdown`
-- **需求**：Windows 11 22H2（build 22621）以上。
+- **0.9.0 遺留的 mirrored 模式**：
+  - 0.9.0 以 WSL mirrored 網路＋Hyper-V 防火牆規則實作區網存取。mirrored 模式下容器埠直接佔用 Windows 的埠，轉發器無法監聽。
+  - 偵測到 `.wslconfig` 有 `networkingMode=mirrored` 時，GUI 會顯示「還原 NAT」，`wsld doctor`／`wsld lan status` 也會提示。
+  - `wsld lan restore-nat`（或 GUI 按鈕）會依序：
+    1. 以 UAC 移除 `wsld-lan-tcp`／`wsld-lan-udp` 規則。
+    2. 從 `.wslconfig` 移除 `networkingMode`（備份：`.wslconfig.wsld.bak`）。
+    3. 確認後執行 `wsl --shutdown`。
+    4. 等 Windows 釋放 API 埠（最多約 2 分鐘），再啟動引擎。
+  - 手動回復：以系統管理員執行 `Remove-NetFirewallHyperVRule -Name wsld-lan-tcp,wsld-lan-udp`，刪掉 `.wslconfig` 的 `networkingMode` 行，再 `wsl --shutdown`。
 
 ## 容器「停止」要等 10 秒？
 
@@ -122,5 +121,5 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 - **無 npiperelay（Extra）**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
 - **GUI**：Theme（radio：Light／Dark／System）；Settings 在側欄；header 無 tcp 路徑。「開機自啟動」只起 Tray，不自動啟動引擎。
 - **自動更新（Extra）**：無；以發布頁下載新版覆蓋。
-- **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。要讓內網連到**容器**，請用 `wsld lan on`，不要對外開放 API。
-- **區網存取（mirrored）是全域設定**：會影響本機所有 WSL 發行版，切換時必須 `wsl --shutdown`。
+- **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。要讓內網連到**容器**，請開啟區網存取（wsld-gui 轉發），不要對外開放 API。
+- **區網存取只在 wsld-gui 執行時有效**，且只轉發 TCP；容器看到的來源 IP 是本機。

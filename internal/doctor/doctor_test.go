@@ -226,40 +226,38 @@ func TestReportSummaryCounts(t *testing.T) {
 	}
 }
 
-func TestLANCheckOnlyWhenEnabled(t *testing.T) {
-	d := deps(healthy(), nil, nil)
-	d.LAN = func(context.Context, string) (lan.Status, error) { return lan.Status{Enabled: false}, nil }
-	if r := find(Run(context.Background(), d), "lan"); r.ID != "missing:lan" {
-		t.Fatalf("lan check must be hidden when disabled: %+v", r)
-	}
-}
-
-func TestLANCheckLevels(t *testing.T) {
-	ready := lan.Status{Enabled: true, Effective: "mirrored", Firewall: lan.FirewallPresent, Addresses: []string{"192.168.1.20"}}
+func TestLANCheck(t *testing.T) {
 	cases := []struct {
-		name  string
-		mod   func(*lan.Status)
-		level Level
-		want  string
+		name    string
+		access  bool
+		legacy  lan.Legacy
+		level   Level
+		present bool
+		want    string
 	}{
-		{"ok", func(*lan.Status) {}, OK, "192.168.1.20"},
-		{"pending", func(s *lan.Status) { s.Effective, s.RestartPending = "nat", true }, Warn, "wsl --shutdown"},
-		{"firewall", func(s *lan.Status) { s.Firewall = lan.FirewallMissing }, Warn, "wsld lan on"},
-		{"public", func(s *lan.Status) { s.PublicNetwork = true }, Warn, "Private"},
+		{"off and nat", false, lan.Legacy{}, OK, false, ""},
+		{"on", true, lan.Legacy{}, Info, true, "wsld-gui"},
+		{"mirrored left over", true, lan.Legacy{Mirrored: true, Rules: 2}, Warn, true, "restore-nat"},
+		{"mirrored while off", false, lan.Legacy{Mirrored: true}, Warn, true, "restore-nat"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			st := ready
-			c.mod(&st)
 			d := deps(healthy(), nil, nil)
-			d.LAN = func(context.Context, string) (lan.Status, error) { return st, nil }
+			d.Cfg.LANAccess = c.access
+			d.LAN = func(context.Context) (lan.Legacy, error) { return c.legacy, nil }
 			rep := Run(context.Background(), d)
 			r := find(rep, "lan")
+			if !c.present {
+				if r.ID != "missing:lan" {
+					t.Fatalf("unexpected %+v", r)
+				}
+				return
+			}
 			if r.Level != c.level || !strings.Contains(r.Detail+r.Hint, c.want) {
 				t.Fatalf("got %+v", r)
 			}
 			if rep.ExitCode() != 0 {
-				t.Fatal("LAN warnings must not change the exit code")
+				t.Fatal("LAN results must not change the exit code")
 			}
 		})
 	}

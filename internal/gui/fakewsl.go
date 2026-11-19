@@ -25,9 +25,7 @@ type FakeWSL struct {
 	procStatN   map[string]int               // distro → /proc/stat 讀取次數（交替兩組假資料）
 	users       map[string]map[string]bool   // distro → useradd 建立的使用者
 	passwords   map[string]map[string]string // distro → user → chpasswd 設定的密碼
-	// OnShutdown 於 wsl --shutdown 時呼叫（testhost 用來模擬 .wslconfig 生效）。
-	OnShutdown func()
-	shutdowns  int
+	shutdowns   int
 }
 
 // Shutdowns 回傳 wsl --shutdown 的次數。
@@ -110,11 +108,7 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 			f.distros[i].State = "Stopped"
 		}
 		f.shutdowns++
-		hook := f.OnShutdown
 		f.mu.Unlock()
-		if hook != nil {
-			hook()
-		}
 		return nil, nil, nil
 	}
 	f.mu.Lock()

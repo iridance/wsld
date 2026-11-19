@@ -204,20 +204,3 @@ func TestShutdown(t *testing.T) {
 		t.Fatalf("calls = %v", fr.calls)
 	}
 }
-
-func TestNetworkingMode(t *testing.T) {
-	fr := &fakeRunner{out: map[string]result{
-		"-d Ubuntu -- wslinfo --networking-mode": {stdout: "Mirrored\n"},
-		"-d Empty -- wslinfo --networking-mode":  {stdout: "\n"},
-		"-d Old -- wslinfo --networking-mode":    {err: &ExitError{Code: 127}},
-	}}
-	if got, err := NetworkingMode(context.Background(), fr, "Ubuntu"); err != nil || got != "mirrored" {
-		t.Fatalf("got %q, %v", got, err)
-	}
-	if _, err := NetworkingMode(context.Background(), fr, "Empty"); err == nil {
-		t.Fatal("empty output must error")
-	}
-	if _, err := NetworkingMode(context.Background(), fr, "Old"); err == nil {
-		t.Fatal("missing wslinfo must error")
-	}
-}

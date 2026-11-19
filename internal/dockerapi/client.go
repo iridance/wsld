@@ -45,6 +45,14 @@ type Client struct {
 	timeout time.Duration
 }
 
+// CloseIdleConnections 由用戶端先關閉閒置的 keep-alive 連線。
+// wsl --shutdown 前呼叫：若讓伺服器端（wslrelay）先關，TIME_WAIT 會留在 API 埠上約 2 分鐘，
+// 切到 mirrored 模式後 dockerd 便無法綁定該埠。
+func (c *Client) CloseIdleConnections() {
+	c.hc.CloseIdleConnections()
+	c.longHC.CloseIdleConnections()
+}
+
 // errNoEndpoint：machine 尚未 init（config 無 api_endpoint）時所有請求直接回此錯誤，不去撥 127.0.0.1:0。
 var errNoEndpoint = fmt.Errorf("%w: machine not initialized yet (no api_endpoint); press Start engine", ErrUnreachable)
 

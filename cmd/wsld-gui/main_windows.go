@@ -113,13 +113,18 @@ func main() {
 		NewEngine:      func(c config.Config) gui.Engine { return dockerClient(c) },
 		NewLifecycle:   func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:   gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
-		LAN:            lan.NewManager(lan.NewHost(), wsl.ExecRunner{}),
+		LAN:            &lan.Manager{Host: lan.NewHost()},
+		Forwarder:      &lan.Forwarder{},
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 	defer stop()
+	// 區網存取：依 config lan_access 在內網 IP 轉發容器 published 埠（程式結束時關閉）
+	lanCtx, stopLAN := context.WithCancel(context.Background())
+	defer stopLAN()
+	go srv.RunLAN(lanCtx, 3*time.Second)
 	app.srv, app.base, app.token, app.engine = srv, base, srv.Token, engine
 
 	configJS := fmt.Sprintf(`window.__WSLD__={base:%q,token:%q};`, base, srv.Token)

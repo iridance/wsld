@@ -7,32 +7,13 @@ import (
 	"unicode/utf16"
 )
 
-func TestFirewallScriptEnable(t *testing.T) {
-	s := FirewallScript(true)
-	for _, want := range []string{
-		"Remove-NetFirewallHyperVRule -Name 'wsld-lan-tcp' -ErrorAction SilentlyContinue",
-		"New-NetFirewallHyperVRule -Name 'wsld-lan-tcp'",
-		"New-NetFirewallHyperVRule -Name 'wsld-lan-udp'",
-		"-VMCreatorId '" + WSLVMCreatorID + "'",
-		"-Protocol TCP", "-Protocol UDP",
-		"-Direction Inbound", "-Action Allow", "-Profiles Private",
-	} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("missing %q in\n%s", want, s)
-		}
+func TestRemoveFirewallScript(t *testing.T) {
+	s := RemoveFirewallScript()
+	if strings.Count(s, "Remove-NetFirewallHyperVRule") != 2 || !strings.Contains(s, "'wsld-lan-tcp'") || !strings.Contains(s, "'wsld-lan-udp'") {
+		t.Fatalf("script:\n%s", s)
 	}
-	if strings.Contains(s, "Public") || strings.Contains(s, "Any") {
-		t.Fatal("rules must be scoped to the Private profile only")
-	}
-}
-
-func TestFirewallScriptDisable(t *testing.T) {
-	s := FirewallScript(false)
-	if strings.Contains(s, "New-NetFirewallHyperVRule") {
-		t.Fatal("disable must not create rules")
-	}
-	if strings.Count(s, "Remove-NetFirewallHyperVRule") != 2 {
-		t.Fatalf("expected two removals:\n%s", s)
+	if strings.Contains(s, "New-NetFirewall") {
+		t.Fatal("must only remove rules")
 	}
 }
 
@@ -41,6 +22,17 @@ func TestElevateScriptUsesRunAs(t *testing.T) {
 	for _, want := range []string{"-Verb RunAs", "-Wait", "-PassThru", "exit $p.ExitCode", EncodeCommand("Write-Output hi")} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %q", want)
+		}
+	}
+}
+
+func TestRulesScriptAndParse(t *testing.T) {
+	if s := RulesScript(); !strings.Contains(s, "'wsld-lan-tcp','wsld-lan-udp'") || !strings.Contains(s, "catch { -1 }") {
+		t.Fatal(s)
+	}
+	for in, want := range map[string]int{"2\r\n": 2, "0": 0, "-1\n": -1, "": -1, "oops": -1} {
+		if got := ParseRules(in); got != want {
+			t.Errorf("%q → %d, want %d", in, got, want)
 		}
 	}
 }
@@ -59,31 +51,16 @@ func TestEncodeCommandUTF16LE(t *testing.T) {
 	}
 }
 
-func TestParseProbe(t *testing.T) {
-	cases := []struct {
-		in       string
-		rules    int
-		profiles []string
-	}{
-		{`{"rules":2,"profiles":["Private","Public"]}`, 2, []string{"Private", "Public"}},
-		{`{"profiles":"Private","rules":0}` + "\r\n", 0, []string{"Private"}},
-		{`{"rules":-1,"profiles":[]}`, -1, []string{}},
-		{`{"rules":1,"profiles":null}`, 1, []string{}},
-	}
-	for _, c := range cases {
-		p, err := ParseProbe(c.in)
-		if err != nil || p.Rules != c.rules || strings.Join(p.Profiles, ",") != strings.Join(c.profiles, ",") {
-			t.Fatalf("%s → %+v, %v", c.in, p, err)
+func TestNetstatPortInUse(t *testing.T) {
+	out := "\r\n使用中連線\r\n\r\n  協定   本機位址               外部位址               狀態           PID\r\n" +
+		"  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1234\r\n" +
+		"  TCP    127.0.0.1:23750        127.0.0.1:64158        TIME_WAIT       0\r\n" +
+		"  TCP    127.0.0.1:64158        127.0.0.1:23751        TIME_WAIT       0\r\n" +
+		"  TCP    [::1]:23752            [::]:0                 LISTENING       42\r\n"
+	cases := map[int]bool{23750: true, 23752: true, 23751: false, 2375: false, 135: true, 64158: true, 8080: false}
+	for port, want := range cases {
+		if got := NetstatPortInUse(out, port); got != want {
+			t.Errorf("port %d: got %v want %v", port, got, want)
 		}
-	}
-	if p, err := ParseProbe("garbage"); err == nil || p.Rules != -1 {
-		t.Fatal("garbage must fail with rules=-1")
-	}
-}
-
-func TestProbeScriptNamesRules(t *testing.T) {
-	s := ProbeScript()
-	if !strings.Contains(s, "'wsld-lan-tcp','wsld-lan-udp'") || !strings.Contains(s, "Get-NetConnectionProfile") {
-		t.Fatal(s)
 	}
 }

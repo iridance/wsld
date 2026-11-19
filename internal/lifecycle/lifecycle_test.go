@@ -499,3 +499,31 @@ func TestParseBootstrapPort(t *testing.T) {
 		t.Fatal("should not parse")
 	}
 }
+
+// 之前連續失敗（例如 mirrored 切換時埠尚未釋放）會觸發 systemd start limit；start 前必須 reset-failed。
+func TestStartResetsFailedStateBeforeStartingDocker(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose":                                         {{out: utf16(listUbuntuStopped)}},
+		"-d Ubuntu-26.04 -- true":                                  {{}},
+		"-d Ubuntu-26.04 -- systemctl is-system-running":           {{out: "running\n"}},
+		"-d Ubuntu-26.04 -- systemctl is-active docker":            {{out: "failed\n", err: &wsl.ExitError{Code: 3}}, {out: "active\n"}},
+		"-d Ubuntu-26.04 -- systemctl cat docker.service":          {{out: "# docker.service\n"}},
+		"-d Ubuntu-26.04 -u root -- systemctl reset-failed docker": {{}},
+		"-d Ubuntu-26.04 -u root -- systemctl start docker":        {{}},
+	}}
+	if _, err := newMgr(fr, &fakePinger{}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reset, start := -1, -1
+	for i, c := range fr.calls {
+		switch {
+		case strings.HasSuffix(c.args, "systemctl reset-failed docker"):
+			reset = i
+		case strings.HasSuffix(c.args, "systemctl start docker"):
+			start = i
+		}
+	}
+	if reset < 0 || start < reset {
+		t.Fatalf("reset-failed must run before start: reset=%d start=%d", reset, start)
+	}
+}

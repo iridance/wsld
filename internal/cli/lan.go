@@ -10,18 +10,22 @@ import (
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/i18n"
 	"github.com/iridance/wsld/internal/lan"
+	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
-// cmdLan：wsld lan on|off|status — 區網存取（mirrored 網路 + Hyper-V 防火牆）。
+const lanSubcommands = "on|off|status|restore-nat"
+
+// cmdLan：wsld lan on|off|status|restore-nat。
+// 區網存取由 wsld-gui 轉發（config lan_access）；restore-nat 清掉 0.9.0 留下的 mirrored 設定。
 func (a *App) cmdLan(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "on|off|status")))
+		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", lanSubcommands)))
 	}
 	sub, rest := args[0], args[1:]
 	fs := a.newFlags("lan " + sub)
-	yes := fs.Bool("yes", false, "restart WSL without asking")
-	asJSON := fs.Bool("json", false, "JSON output")
+	yes := fs.Bool("yes", false, "restart WSL without asking (restore-nat)")
+	asJSON := fs.Bool("json", false, "JSON output (status)")
 	if err := parse(fs, rest); err != nil {
 		return err
 	}
@@ -34,28 +38,31 @@ func (a *App) cmdLan(ctx context.Context, args []string) error {
 	switch sub {
 	case "status":
 		return a.lanStatus(ctx, *asJSON)
-	case "on":
-		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.enable_notice"))
-		if err := a.LAN.Enable(ctx); err != nil {
-			if errors.Is(err, lan.ErrUnsupported) {
-				return fail(ExitError, errors.New(i18n.T("cli.lan.unsupported", a.LAN.Host.Build())))
-			}
+	case "on", "off":
+		cfg, err := a.loadConfig()
+		if err != nil {
+			return err
+		}
+		cfg.LANAccess = sub == "on"
+		if err := config.Save(a.ConfigPath, cfg); err != nil {
 			return fail(ExitError, err)
 		}
-		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.enabled"))
-	case "off":
-		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.disable_notice"))
-		if err := a.LAN.Disable(ctx); err != nil {
+		if cfg.LANAccess {
+			fmt.Fprintln(a.Stdout, i18n.T("cli.lan.enabled"))
+		} else {
+			fmt.Fprintln(a.Stdout, i18n.T("cli.lan.disabled"))
+		}
+		return a.lanStatus(ctx, false)
+	case "restore-nat":
+		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.restore_notice"))
+		if err := a.LAN.RestoreNAT(ctx); err != nil {
 			return fail(ExitError, err)
 		}
-		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.disabled"))
+		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.restored"))
+		return a.lanRestart(ctx, *yes)
 	default:
-		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "on|off|status")))
+		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", lanSubcommands)))
 	}
-	if err := a.lanRestart(ctx, *yes); err != nil {
-		return err
-	}
-	return a.lanStatus(ctx, false)
 }
 
 // lanRestart 在確認後 wsl --shutdown，並重新啟動 active machine（讓 .wslconfig 生效）。
@@ -72,11 +79,30 @@ func (a *App) lanRestart(ctx context.Context, yes bool) error {
 	if err != nil {
 		return nil // 尚未 init：只需 shutdown
 	}
-	if _, ok := cfg.ActiveMachine(); !ok {
+	am, ok := cfg.ActiveMachine()
+	if !ok {
 		return nil
 	}
-	st, cfg, err := a.bringUp(ctx, cfg)
-	if err != nil {
+	// 網路模式切換後舊連線可能暫佔 API 埠（TIME_WAIT）；等埠釋放後再起 dockerd。
+	if port, err := cfg.APIPort(); err == nil {
+		fmt.Fprintln(a.Stdout, i18n.T("cli.lan.waiting_port", port))
+		if !a.LAN.WaitPortFree(ctx, port, lan.PortWaitTimeout) {
+			fmt.Fprintln(a.Stdout, i18n.T("cli.lan.port_still_busy", port))
+		}
+	}
+	var st lifecycle.Status
+	if am.Ready() {
+		// 已 init：只需重新啟動 docker.service（API 本來就不通，不要重跑 bootstrap）
+		m := a.manager(cfg, a.apiFor(cfg))
+		st, err = m.Start(ctx)
+		if err != nil {
+			return err
+		}
+		cfg = m.Cfg
+		if err := config.Save(a.ConfigPath, cfg); err != nil {
+			return fail(ExitError, err)
+		}
+	} else if st, cfg, err = a.bringUp(ctx, cfg); err != nil {
 		return err
 	}
 	a.printStatus(st)
@@ -95,17 +121,26 @@ func (a *App) confirm(prompt string) bool {
 	return ans == "y" || ans == "yes"
 }
 
+// lanStatusJSON 是 wsld lan status --json 的輸出。
+type lanStatusJSON struct {
+	Enabled   bool     `json:"enabled"`
+	Addresses []string `json:"addresses"`
+	Mirrored  bool     `json:"mirrored"`
+}
+
 func (a *App) lanStatus(ctx context.Context, asJSON bool) error {
-	distro := ""
+	st := lanStatusJSON{Addresses: []string{}}
 	if cfg, err := config.Load(a.ConfigPath); err == nil {
-		if m, ok := cfg.ActiveMachine(); ok {
-			distro = m.Distro
-		}
+		st.Enabled = cfg.LANAccess
 	}
-	st, err := a.LAN.Status(ctx, distro)
+	if ifs, err := a.LAN.Host.Interfaces(); err == nil {
+		st.Addresses = lan.LANAddresses(ifs)
+	}
+	legacy, err := a.LAN.Legacy(ctx)
 	if err != nil {
 		return fail(ExitError, err)
 	}
+	st.Mirrored = legacy.Mirrored
 	if asJSON {
 		return a.writeJSON(st)
 	}
@@ -115,65 +150,27 @@ func (a *App) lanStatus(ctx context.Context, asJSON bool) error {
 		state = i18n.T("cli.lan.state_on")
 	}
 	fmt.Fprintln(w, i18n.T("cli.lan.title", state))
-	configured := st.Configured
-	if configured == "" {
-		configured = i18n.T("cli.lan.default_nat")
+	addrs := strings.Join(st.Addresses, ", ")
+	if addrs == "" {
+		addrs = i18n.T("cli.lan.none")
 	}
-	fmt.Fprintln(w, i18n.T("cli.lan.configured", configured))
-	fmt.Fprintln(w, i18n.T("cli.lan.effective", orUnknown(st.Effective)))
-	fmt.Fprintln(w, i18n.T("cli.lan.firewall", firewallText(st.Firewall)))
-	fmt.Fprintln(w, i18n.T("cli.lan.profiles", orNone(strings.Join(st.Profiles, ", "))))
-	fmt.Fprintln(w, i18n.T("cli.lan.addresses", orNone(strings.Join(st.Addresses, ", "))))
-	if st.Ready() {
+	fmt.Fprintln(w, i18n.T("cli.lan.addresses", addrs))
+	if st.Enabled {
 		for _, ip := range st.Addresses {
 			fmt.Fprintln(w, i18n.T("cli.lan.connect", ip))
 		}
-		fmt.Fprintln(w, i18n.T("cli.lan.hint_isolation"))
+		fmt.Fprintln(w, i18n.T("cli.lan.gui_note"))
 	}
-	if !st.Supported {
-		fmt.Fprintln(w, i18n.T("cli.lan.unsupported", st.Build))
-	}
-	if st.RestartPending {
-		fmt.Fprintln(w, i18n.T("cli.lan.warn_restart"))
-	}
-	if st.Enabled && st.Firewall == lan.FirewallMissing {
-		fmt.Fprintln(w, i18n.T("cli.lan.warn_firewall"))
-	}
-	if st.Enabled && st.PublicNetwork {
-		fmt.Fprintln(w, i18n.T("cli.lan.warn_public"))
+	if st.Mirrored {
+		fmt.Fprintln(w, i18n.T("cli.lan.warn_mirrored"))
 	}
 	return nil
 }
 
-func firewallText(s string) string {
-	switch s {
-	case lan.FirewallPresent:
-		return i18n.T("cli.lan.fw_present")
-	case lan.FirewallMissing:
-		return i18n.T("cli.lan.fw_missing")
-	default:
-		return i18n.T("cli.lan.unknown")
-	}
-}
-
-func orUnknown(s string) string {
-	if s == "" {
-		return i18n.T("cli.lan.unknown")
-	}
-	return s
-}
-
-func orNone(s string) string {
-	if s == "" {
-		return i18n.T("cli.lan.none")
-	}
-	return s
-}
-
-// lanStatusFunc 給 doctor 用；未設定 LAN 時回 nil（略過該項）。
-func (a *App) lanStatusFunc() func(context.Context, string) (lan.Status, error) {
+// lanLegacyFunc 給 doctor 用；未設定 LAN 時回 nil（略過遺留檢查）。
+func (a *App) lanLegacyFunc() func(context.Context) (lan.Legacy, error) {
 	if a.LAN == nil {
 		return nil
 	}
-	return a.LAN.Status
+	return a.LAN.Legacy
 }

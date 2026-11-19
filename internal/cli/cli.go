@@ -500,7 +500,7 @@ func (a *App) cmdDoctor(ctx context.Context, args []string) error {
 		API:       a.apiFor(cfg),
 		Processes: a.Processes,
 		Dial:      a.Dial,
-		LAN:       a.lanStatusFunc(),
+		LAN:       a.lanLegacyFunc(),
 	})
 	if *asJSON {
 		type item struct {

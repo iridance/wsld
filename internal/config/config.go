@@ -53,6 +53,8 @@ type Config struct {
 	APITimeoutSec      int       `toml:"api_timeout_sec"`
 	Lang               string    `toml:"lang,omitempty"`  // "" = en；GUI 右下角切換後寫回
 	Theme              string    `toml:"theme,omitempty"` // light | dark | system；"" = system
+	// LANAccess：wsld-gui 在內網 IP 上轉發容器 published 埠（Settings › Network）。
+	LANAccess bool `toml:"lan_access,omitempty"`
 
 	// 自 active machine 衍生，不寫入檔案（供 lifecycle／doctor 沿用欄位存取）。
 	Distro      string `toml:"-"`
@@ -70,6 +72,7 @@ type fileShape struct {
 	APITimeoutSec      int       `toml:"api_timeout_sec"`
 	Lang               string    `toml:"lang"`
 	Theme              string    `toml:"theme"`
+	LANAccess          bool      `toml:"lan_access"`
 	// Legacy flat keys
 	Distro      string `toml:"distro"`
 	User        string `toml:"user"`
@@ -131,6 +134,7 @@ func Load(path string) (Config, error) {
 	c.TrayAutostart = raw.TrayAutostart
 	c.Lang = raw.Lang
 	c.Theme = raw.Theme
+	c.LANAccess = raw.LANAccess
 	if raw.RefreshIntervalSec != 0 {
 		c.RefreshIntervalSec = raw.RefreshIntervalSec
 	}
@@ -166,6 +170,7 @@ type saveShape struct {
 	APITimeoutSec      int       `toml:"api_timeout_sec"`
 	Lang               string    `toml:"lang,omitempty"`
 	Theme              string    `toml:"theme,omitempty"`
+	LANAccess          bool      `toml:"lan_access,omitempty"`
 }
 
 // Save 驗證後寫入新格式（會建立目錄）。
@@ -186,6 +191,7 @@ func Save(path string, c Config) error {
 		APITimeoutSec:      c.APITimeoutSec,
 		Lang:               c.Lang,
 		Theme:              c.Theme,
+		LANAccess:          c.LANAccess,
 	}
 	data, err := toml.Marshal(out)
 	if err != nil {

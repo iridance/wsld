@@ -145,18 +145,21 @@ export interface Meta {
   lan_supported?: boolean;
 }
 
+/** 一個區網轉發（內網 IP:埠 → 容器）。 */
+export interface LANForward {
+  address: string;
+  port: number;
+  container: string;
+  error?: string;
+}
+
 /** 區網存取狀態（GET/PUT /api/lan）。 */
 export interface LANStatus {
-  supported: boolean;
-  build: number;
-  configured: string;
-  effective: string;
   enabled: boolean;
-  restartPending: boolean;
-  firewall: "present" | "missing" | "unknown";
-  profiles: string[];
-  publicNetwork: boolean;
   addresses: string[];
+  forwards: LANForward[];
+  /** WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT） */
+  mirrored: boolean;
 }
 
 export class ApiError extends Error {
@@ -261,7 +264,8 @@ export const api = {
   getSettings: () => call<Settings>("GET", "/api/settings"),
   putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
   getLAN: () => call<LANStatus>("GET", "/api/lan"),
-  putLAN: (enabled: boolean, restart: boolean) => call<LANStatus>("PUT", "/api/lan", { enabled, restart }),
+  putLAN: (enabled: boolean) => call<LANStatus>("PUT", "/api/lan", { enabled }),
+  restoreNAT: () => call<LANStatus>("POST", "/api/lan/restore-nat"),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),

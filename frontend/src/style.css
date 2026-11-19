@@ -561,13 +561,16 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 .set-control { display: flex; align-items: center; }
 .set-control .tf { width: 240px; max-width: 100%; }
 /* 區網存取：位址清單、警告、待重啟 */
-.lan-addresses { display: flex; flex-direction: column; gap: 2px; font-size: 13px; user-select: text; }
-.lan-status { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lan-addresses { display: flex; flex-direction: column; gap: 4px; font-size: 13px; user-select: text; }
+.lan-forward { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.lan-forward.error .mono { text-decoration: line-through; color: var(--muted); }
+.lan-forward-err { flex-basis: 100%; font-size: 12px; color: var(--bad); }
 .lan-warn {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 18px; border-radius: 6px; font-size: 13px;
   background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); color: var(--fg);
 }
 .lan-warn p { margin: 0; }
+.lan-warn > div { margin-top: 6px; }
 [data-testid="confirm-text"] { white-space: pre-line; }
 .set-control .tf.num { width: 160px; }
 .set-control .tf.select { width: 200px; }

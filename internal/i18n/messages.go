@@ -21,7 +21,7 @@ Commands:
   stop-ct    Stop a container (--time N)
   exec       Open a shell in a container (bash → sh, or exec_shell)
   doctor     Run diagnostics (--json)
-  lan        LAN access for published ports: on|off|status (--yes restarts WSL)
+  lan        LAN access via wsld-gui forwarding: on|off|status; restore-nat undoes 0.9.0 mirrored mode
   version    Print version
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 WSL/engine not ready, 4 API unreachable
@@ -43,7 +43,7 @@ Config: %s`,
   stop-ct    停止容器（--time N）
   exec       進入容器 shell（bash → sh，或 exec_shell）
   doctor     診斷（--json）
-  lan        區網存取（published 埠可由內網 IP 連入）：on|off|status（--yes 直接重啟 WSL）
+  lan        區網存取（wsld-gui 在內網 IP 轉發 published 埠）：on|off|status；restore-nat 還原 0.9.0 的 mirrored
   version    顯示版本
 
 退出碼：0 成功、1 一般錯誤、2 用法錯誤、3 WSL／引擎未就緒、4 API 連線失敗
@@ -82,23 +82,16 @@ Config: %s`,
 
 	// ---- wsld lan ----
 	"cli.lan.unavailable": {EN: "LAN access is not available in this build", ZhTW: "此版本不支援區網存取"},
-	"cli.lan.unsupported": {
-		EN:   "LAN access requires Windows 11 22H2 (build 22621) or later; this is build %d",
-		ZhTW: "區網存取需要 Windows 11 22H2（build 22621）以上；目前為 build %d",
+	"cli.lan.enabled": {
+		EN:   "LAN access on (saved to config). wsld-gui forwards published ports on this PC's LAN IP while it runs; the first time, Windows asks whether to allow wsld-gui on Private / Public networks.",
+		ZhTW: "已開啟區網存取（寫入 config）。wsld-gui 執行時會在這台電腦的內網 IP 轉發 published 埠；第一次 Windows 會詢問是否允許 wsld-gui 使用私人／公用網路。",
 	},
-	"cli.lan.enable_notice": {
-		EN: "Enabling LAN access: WSL switches to mirrored networking, so every service listening on 0.0.0.0 inside WSL " +
-			"(including container published ports) becomes reachable from Private networks. The Docker API stays on 127.0.0.1.\n" +
-			"A UAC prompt will appear to add the Hyper-V firewall rules.",
-		ZhTW: "啟用區網存取：WSL 改用 mirrored 網路，WSL 內所有監聽 0.0.0.0 的服務（含容器 published 埠）都可從「私人」網路連入；" +
-			"Docker API 仍只綁 127.0.0.1。\n接著會跳出 UAC，以新增 Hyper-V 防火牆規則。",
+	"cli.lan.disabled": {EN: "LAN access off (saved to config).", ZhTW: "已關閉區網存取（寫入 config）。"},
+	"cli.lan.restore_notice": {
+		EN:   "Restoring NAT networking: a UAC prompt removes the wsld 0.9.0 firewall rules, then networkingMode is removed from .wslconfig (backup: .wslconfig.wsld.bak).",
+		ZhTW: "還原 NAT 網路：會跳出 UAC 以移除 wsld 0.9.0 的防火牆規則，再從 .wslconfig 移除 networkingMode（備份：.wslconfig.wsld.bak）。",
 	},
-	"cli.lan.disable_notice": {
-		EN:   "Disabling LAN access: a UAC prompt will appear to remove the firewall rules; networkingMode is removed from .wslconfig.",
-		ZhTW: "停用區網存取：會跳出 UAC 以移除防火牆規則，並從 .wslconfig 移除 networkingMode。",
-	},
-	"cli.lan.enabled":  {EN: "LAN access configured (.wslconfig + Hyper-V firewall).", ZhTW: "已設定區網存取（.wslconfig + Hyper-V 防火牆）。"},
-	"cli.lan.disabled": {EN: "LAN access disabled.", ZhTW: "已停用區網存取。"},
+	"cli.lan.restored": {EN: ".wslconfig restored to NAT networking.", ZhTW: "已將 .wslconfig 還原為 NAT 網路。"},
 	"cli.lan.restart_prompt": {
 		EN:   "Apply now? This runs `wsl --shutdown` and restarts ALL WSL distros. [y/N] ",
 		ZhTW: "現在套用？會執行 wsl --shutdown，重啟「所有」WSL 發行版。[y/N] ",
@@ -107,33 +100,28 @@ Config: %s`,
 		EN:   "Not applied yet. To apply: wsl --shutdown, then wsld start",
 		ZhTW: "尚未套用。要套用請執行：wsl --shutdown，再 wsld start",
 	},
-	"cli.lan.restarting":   {EN: "Restarting WSL (wsl --shutdown)…", ZhTW: "重啟 WSL（wsl --shutdown）…"},
-	"cli.lan.title":        {EN: "LAN access: %s", ZhTW: "區網存取：%s"},
-	"cli.lan.state_on":     {EN: "on", ZhTW: "開啟"},
-	"cli.lan.state_off":    {EN: "off", ZhTW: "關閉"},
-	"cli.lan.configured":   {EN: "  .wslconfig networkingMode: %s", ZhTW: "  .wslconfig networkingMode：%s"},
-	"cli.lan.effective":    {EN: "  effective mode:            %s", ZhTW: "  實際生效模式：%s"},
-	"cli.lan.firewall":     {EN: "  Hyper-V firewall rules:    %s", ZhTW: "  Hyper-V 防火牆規則：%s"},
-	"cli.lan.profiles":     {EN: "  network profile:           %s", ZhTW: "  網路設定檔：%s"},
-	"cli.lan.addresses":    {EN: "  LAN IPv4:                  %s", ZhTW: "  內網 IPv4：%s"},
-	"cli.lan.connect":      {EN: "  → other devices: http://%s:<published port>", ZhTW: "  → 其他設備連線：http://%s:<published 埠>"},
-	"cli.lan.default_nat":  {EN: "(not set → nat)", ZhTW: "（未設定 → nat）"},
-	"cli.lan.unknown":      {EN: "unknown", ZhTW: "未知"},
-	"cli.lan.none":         {EN: "none", ZhTW: "無"},
-	"cli.lan.fw_present":   {EN: "present (Private networks only)", ZhTW: "已建立（僅私人網路）"},
-	"cli.lan.fw_missing":   {EN: "missing", ZhTW: "不存在"},
-	"cli.lan.warn_restart": {EN: "! not applied yet — run wsl --shutdown, then wsld start", ZhTW: "! 尚未生效 — 請執行 wsl --shutdown，再 wsld start"},
-	"cli.lan.warn_firewall": {
-		EN:   "! Hyper-V firewall rules are missing — run wsld lan on again",
-		ZhTW: "! Hyper-V 防火牆規則不存在 — 請再執行 wsld lan on",
+	"cli.lan.waiting_port": {
+		EN:   "Waiting for Windows to release API port %d (old connections; up to 2 minutes)…",
+		ZhTW: "等待 Windows 釋放 API 埠 %d（舊連線，最多約 2 分鐘）…",
 	},
-	"cli.lan.warn_public": {
-		EN:   "! this network is Public; the firewall rules only allow Private networks — set it to Private in Windows Settings › Network",
-		ZhTW: "! 目前網路是「公用」，防火牆規則只放行「私人」網路 — 請到 Windows 設定 › 網路，把此網路改為私人",
+	"cli.lan.port_still_busy": {
+		EN:   "port %d is still in use on Windows; trying to start the engine anyway",
+		ZhTW: "Windows 上埠 %d 仍被佔用；仍嘗試啟動引擎",
 	},
-	"cli.lan.hint_isolation": {
-		EN:   "  (still unreachable? check the router for AP/client isolation, e.g. guest Wi-Fi)",
-		ZhTW: "  （仍連不到？請檢查路由器是否開啟 AP／用戶端隔離，例如訪客 Wi-Fi）",
+	"cli.lan.restarting": {EN: "Restarting WSL (wsl --shutdown)…", ZhTW: "重啟 WSL（wsl --shutdown）…"},
+	"cli.lan.title":      {EN: "LAN access: %s", ZhTW: "區網存取：%s"},
+	"cli.lan.state_on":   {EN: "on", ZhTW: "開啟"},
+	"cli.lan.state_off":  {EN: "off", ZhTW: "關閉"},
+	"cli.lan.addresses":  {EN: "  LAN IPv4: %s", ZhTW: "  內網 IPv4：%s"},
+	"cli.lan.connect":    {EN: "  → other devices: http://%s:<published port>", ZhTW: "  → 其他設備連線：http://%s:<published 埠>"},
+	"cli.lan.none":       {EN: "none", ZhTW: "無"},
+	"cli.lan.gui_note": {
+		EN:   "  (forwarding runs inside wsld-gui — keep it open or in the tray)",
+		ZhTW: "  （轉發由 wsld-gui 執行 — 請保持開啟或縮到系統匣）",
+	},
+	"cli.lan.warn_mirrored": {
+		EN:   "! WSL is in mirrored networking mode (left by wsld 0.9.0); forwarding cannot work — run wsld lan restore-nat",
+		ZhTW: "! WSL 處於 mirrored 網路模式（wsld 0.9.0 遺留），轉發無法運作 — 請執行 wsld lan restore-nat",
 	},
 
 	// ---- status ----
@@ -156,14 +144,16 @@ Config: %s`,
 	"ps.header": {EN: "CONTAINER ID  NAME                 IMAGE                      STATE     STATUS", ZhTW: "CONTAINER ID  NAME                 IMAGE                      STATE     STATUS"},
 
 	// ---- doctor 標題／提示 ----
-	"doctor.lan.title":            {EN: "LAN access (mirrored networking)", ZhTW: "區網存取（mirrored 網路）"},
-	"doctor.lan.ok":               {EN: "active; LAN IPv4: %s", ZhTW: "已生效；內網 IPv4：%s"},
-	"doctor.lan.pending":          {EN: ".wslconfig says mirrored but WSL is running %q", ZhTW: ".wslconfig 設為 mirrored，但 WSL 目前是 %q"},
-	"doctor.lan.pending_hint":     {EN: "wsl --shutdown, then wsld start", ZhTW: "wsl --shutdown 後執行 wsld start"},
-	"doctor.lan.firewall":         {EN: "Hyper-V firewall rules wsld-lan-tcp/udp are missing", ZhTW: "Hyper-V 防火牆規則 wsld-lan-tcp/udp 不存在"},
-	"doctor.lan.firewall_hint":    {EN: "run wsld lan on again (UAC)", ZhTW: "再執行一次 wsld lan on（UAC）"},
-	"doctor.lan.public":           {EN: "current network is Public; the rules only allow Private networks", ZhTW: "目前網路為「公用」，規則只放行「私人」網路"},
-	"doctor.lan.public_hint":      {EN: "Windows Settings › Network & internet › set this network to Private", ZhTW: "Windows 設定 › 網路和網際網路 › 將此網路設為私人"},
+	"doctor.lan.title": {EN: "LAN access", ZhTW: "區網存取"},
+	"doctor.lan.on":    {EN: "on — wsld-gui forwards published ports on the LAN IP while it runs", ZhTW: "開啟 — wsld-gui 執行時在內網 IP 轉發 published 埠"},
+	"doctor.lan.mirrored": {
+		EN:   "WSL is in mirrored networking mode (left by wsld 0.9.0); LAN access now needs the default NAT mode",
+		ZhTW: "WSL 處於 mirrored 網路模式（wsld 0.9.0 遺留）；區網存取現在需要預設的 NAT 模式",
+	},
+	"doctor.lan.mirrored_hint": {
+		EN:   "wsld lan restore-nat (or Settings › Network › Restore NAT)",
+		ZhTW: "wsld lan restore-nat（或 Settings › 網路 ›「還原 NAT」）",
+	},
 	"doctor.wsl.title":            {EN: "wsl.exe available", ZhTW: "wsl.exe 可用"},
 	"doctor.wsl.hint":             {EN: "run scripts/01-enable-wsl.ps1 as Administrator and reboot", ZhTW: "以系統管理員執行 scripts/01-enable-wsl.ps1 並重開機"},
 	"doctor.wsl.detail":           {EN: "%d distro(s)", ZhTW: "%d 個發行版"},
@@ -318,51 +308,40 @@ Config: %s`,
 	"gui.settings.group.network": {EN: "Network", ZhTW: "網路"},
 	"gui.settings.lan":           {EN: "LAN access", ZhTW: "區網存取"},
 	"gui.settings.lan_hint": {
-		EN:   "Let other devices on your network open container ports via this PC's IP (WSL mirrored networking)",
-		ZhTW: "讓同一內網的其他設備透過這台電腦的 IP 連到容器埠（WSL mirrored 網路）",
+		EN:   "Let other devices on your network open container published ports via this PC's IP. Works while wsld-gui runs (tray included).",
+		ZhTW: "讓同一內網的其他設備透過這台電腦的 IP 連到容器 published 埠。wsld-gui 執行時有效（含系統匣）。",
 	},
 	"gui.settings.lan_status":      {EN: "Status", ZhTW: "狀態"},
-	"gui.settings.lan_status_hint": {EN: "The Docker API always stays on 127.0.0.1", ZhTW: "Docker API 一律只綁 127.0.0.1"},
-	"gui.settings.lan_addresses":   {EN: "From other devices", ZhTW: "其他設備連線"},
+	"gui.settings.lan_status_hint": {EN: "The Docker API is never forwarded; it stays on 127.0.0.1", ZhTW: "Docker API 不會轉發，仍只綁 127.0.0.1"},
+	"gui.settings.lan_addresses":   {EN: "Addresses for other devices", ZhTW: "其他設備連線位址"},
 	"gui.lan.status.loading":       {EN: "Checking…", ZhTW: "查詢中…"},
-	"gui.lan.status.applying":      {EN: "Applying… accept the Windows UAC prompt; WSL will restart", ZhTW: "套用中… 請在 Windows UAC 視窗按「是」；WSL 將重新啟動"},
 	"gui.lan.status.off":           {EN: "Off — published ports only on this PC (127.0.0.1)", ZhTW: "關閉 — published 埠只在本機（127.0.0.1）"},
-	"gui.lan.status.on":            {EN: "On — mirrored networking, firewall open on Private networks", ZhTW: "開啟 — mirrored 網路，防火牆已對「私人」網路放行"},
-	"gui.lan.status.pending":       {EN: "Not applied yet — WSL needs to restart", ZhTW: "尚未生效 — 需要重啟 WSL"},
-	"gui.lan.restart":              {EN: "Restart WSL now", ZhTW: "立即重啟 WSL"},
-	"gui.lan.apply":                {EN: "Apply", ZhTW: "套用"},
-	"gui.lan.done_on":              {EN: "LAN access enabled", ZhTW: "已啟用區網存取"},
-	"gui.lan.done_off":             {EN: "LAN access disabled", ZhTW: "已停用區網存取"},
-	"gui.lan.confirm_on": {
-		EN: "Enable LAN access?\n\nWSL switches to mirrored networking. Every service listening on 0.0.0.0 inside WSL — " +
-			"including container published ports — becomes reachable from devices on Private networks. The Docker API stays on 127.0.0.1.\n\n" +
-			"Windows will ask for administrator permission (UAC) to add firewall rules, then ALL WSL distros restart.",
-		ZhTW: "啟用區網存取？\n\nWSL 會改用 mirrored 網路；WSL 內所有監聽 0.0.0.0 的服務（含容器 published 埠）都可從「私人」網路的設備連入。" +
-			"Docker API 仍只綁 127.0.0.1。\n\nWindows 會要求系統管理員權限（UAC）以新增防火牆規則，接著「所有」WSL 發行版會重新啟動。",
+	"gui.lan.status.on":            {EN: "On — forwarding %d address(es)", ZhTW: "開啟 — 正在轉發 %d 個位址"},
+	"gui.lan.status.idle":          {EN: "On — no running container publishes a port yet", ZhTW: "開啟 — 目前沒有執行中的容器 published 埠"},
+	"gui.lan.status.failed":        {EN: "On — could not listen on %d address(es); see below", ZhTW: "開啟 — 有 %d 個位址無法監聽，見下方"},
+	"gui.lan.status.blocked":       {EN: "On, but WSL is in mirrored mode — restore NAT first", ZhTW: "已開啟，但 WSL 處於 mirrored 模式 — 請先還原 NAT"},
+	"gui.lan.status.restoring":     {EN: "Restoring NAT… accept the Windows UAC prompt; WSL then restarts (can take up to 2 minutes)", ZhTW: "還原 NAT 中… 請在 Windows UAC 視窗按「是」；接著重啟 WSL（最多約 2 分鐘）"},
+	"gui.lan.done_on": {
+		EN:   "LAN access on. If Windows asks, allow wsld-gui on Private networks.",
+		ZhTW: "已開啟區網存取。若 Windows 詢問，請允許 wsld-gui 使用「私人網路」。",
 	},
-	"gui.lan.confirm_off": {
-		EN:   "Disable LAN access?\n\nWindows will ask for administrator permission (UAC) to remove the firewall rules, then ALL WSL distros restart.",
-		ZhTW: "停用區網存取？\n\nWindows 會要求系統管理員權限（UAC）以移除防火牆規則，接著「所有」WSL 發行版會重新啟動。",
+	"gui.lan.done_off":     {EN: "LAN access off", ZhTW: "已關閉區網存取"},
+	"gui.lan.done_restore": {EN: "WSL is back on NAT networking", ZhTW: "WSL 已還原為 NAT 網路"},
+	"gui.lan.restore":      {EN: "Restore NAT", ZhTW: "還原 NAT"},
+	"gui.lan.confirm_restore": {
+		EN: "Restore NAT networking?\n\nwsld 0.9.0 switched WSL to mirrored mode. Windows will ask for administrator permission (UAC) to remove its firewall rules; " +
+			"networkingMode is removed from .wslconfig (backup: .wslconfig.wsld.bak), then ALL WSL distros restart.",
+		ZhTW: "還原為 NAT 網路？\n\nwsld 0.9.0 把 WSL 切成了 mirrored 模式。Windows 會要求系統管理員權限（UAC）以移除當時的防火牆規則；" +
+			"接著從 .wslconfig 移除 networkingMode（備份：.wslconfig.wsld.bak），然後「所有」WSL 發行版會重新啟動。",
 	},
-	"gui.lan.confirm_restart": {
-		EN:   "Restart WSL now to apply the network change? ALL WSL distros will restart.",
-		ZhTW: "現在重啟 WSL 以套用網路設定？「所有」WSL 發行版都會重新啟動。",
+	"gui.lan.warn.mirrored": {
+		EN:   "WSL is still in mirrored networking mode (set by wsld 0.9.0). In this mode container ports already occupy this PC's ports, so wsld-gui cannot forward them.",
+		ZhTW: "WSL 仍處於 mirrored 網路模式（wsld 0.9.0 設定）。此模式下容器埠已直接佔用這台電腦的埠，wsld-gui 無法轉發。",
 	},
-	"gui.lan.warn.unsupported": {
-		EN:   "Requires Windows 11 22H2 (build 22621) or later; this PC is build %d.",
-		ZhTW: "需要 Windows 11 22H2（build 22621）以上；這台電腦是 build %d。",
-	},
-	"gui.lan.warn.firewall": {
-		EN:   "The Hyper-V firewall rules are missing. Turn LAN access off and on again to recreate them.",
-		ZhTW: "Hyper-V 防火牆規則不存在。請把區網存取關閉再開啟以重新建立。",
-	},
-	"gui.lan.warn.public": {
-		EN:   "This network is Public. The firewall rules only allow Private networks — set it to Private in Windows Settings › Network & internet.",
-		ZhTW: "目前網路是「公用」。防火牆規則只放行「私人」網路 — 請到 Windows 設定 › 網路和網際網路，把此網路改為私人。",
-	},
-	"gui.lan.hint.isolation": {
-		EN:   "Replace <port> with the container's published port. Still unreachable? Check the router for AP/client isolation (e.g. guest Wi-Fi).",
-		ZhTW: "把 <port> 換成容器的 published 埠。仍連不到？請檢查路由器是否開啟 AP／用戶端隔離（例如訪客 Wi-Fi）。",
+	"gui.lan.no_ports": {EN: "No running container publishes a port (docker run -p 8080:80 …)", ZhTW: "沒有執行中的容器 published 埠（docker run -p 8080:80 …）"},
+	"gui.lan.hint.firewall": {
+		EN:   "Windows asks once whether wsld-gui may use Private / Public networks. Change it later in Windows Security › Firewall › Allow an app. Still unreachable? Check the router for AP/client isolation.",
+		ZhTW: "Windows 會詢問一次是否允許 wsld-gui 使用私人／公用網路；之後可在 Windows 安全性 › 防火牆 ›「允許應用程式通過防火牆」修改。仍連不到？請檢查路由器是否開啟 AP／用戶端隔離。",
 	},
 	"gui.settings.lang_hint":             {EN: "Also switches the tray menu", ZhTW: "系統匣選單一併切換"},
 	"gui.about.desc":                     {EN: "Windows Subsystem Linux with Docker", ZhTW: "Windows Subsystem Linux with Docker"},

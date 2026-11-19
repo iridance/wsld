@@ -86,8 +86,10 @@ type Server struct {
 	NewLifecycle func(cfg config.Config) Lifecycle
 	// OnActiveChange 於 active 變更後額外通知（例如 Tray 重繪）。
 	OnActiveChange func(cfg config.Config)
-	// LAN 管理區網存取（mirrored 網路 + Hyper-V 防火牆）；nil → /api/lan 回 501。
+	// LAN 提供網卡、0.9.0 mirrored 遺留設定清理與 WSL 重啟時的埠等待；與 Forwarder 皆非 nil 才啟用 /api/lan。
 	LAN *lan.Manager
+	// Forwarder 在內網 IP 上轉發容器 published 埠（區網存取）。
+	Forwarder *lan.Forwarder
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
 
@@ -95,6 +97,8 @@ type Server struct {
 	starting  bool
 	lastStart *lifecycle.Status
 	engineMu  sync.RWMutex
+
+	lanMu sync.Mutex // 序列化區網轉發同步（背景迴圈與 API 共用）
 
 	installOnce sync.Once
 	install     *installTracker
@@ -144,6 +148,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("GET /api/lan", s.handleGetLAN)
 	mux.HandleFunc("PUT /api/lan", s.handlePutLAN)
+	mux.HandleFunc("POST /api/lan/restore-nat", s.handleRestoreNAT)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
@@ -338,7 +343,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		APIEndpoint:        c.APIEndpoint,
 		ActiveReady:        ready,
 		AutostartSupported: s.Autostart != nil && !unsupported,
-		LANSupported:       s.LAN != nil,
+		LANSupported:       s.LAN != nil && s.Forwarder != nil,
 	})
 }
 
@@ -849,7 +854,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	deps := doctor.Deps{WSL: s.WSL, Cfg: s.cfg(), API: s.engine(), Processes: s.Processes}
 	if s.LAN != nil {
-		deps.LAN = s.LAN.Status
+		deps.LAN = s.LAN.Legacy
 	}
 	rep := doctor.Run(r.Context(), deps)
 	type item struct {

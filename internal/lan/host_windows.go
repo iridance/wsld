@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/sys/windows"
-
 	"github.com/iridance/wsld/internal/procutil"
 )
 
@@ -32,28 +30,34 @@ func (SystemHost) ConfigPath() (string, error) {
 	return filepath.Join(home, ".wslconfig"), nil
 }
 
-// Build 實作 Host。
-func (SystemHost) Build() uint32 {
-	return windows.RtlGetVersion().BuildNumber
-}
-
-// SetFirewall 實作 Host：跳出 UAC 以系統管理員執行防火牆腳本。
-func (SystemHost) SetFirewall(ctx context.Context, enable bool) error {
-	_, err := runPowerShell(ctx, ElevateScript(FirewallScript(enable)))
+// RemoveFirewallRules 實作 Host：跳出 UAC 以系統管理員執行移除腳本。
+func (SystemHost) RemoveFirewallRules(ctx context.Context) error {
+	_, err := runPowerShell(ctx, ElevateScript(RemoveFirewallScript()))
 	return err
 }
 
-// Probe 實作 Host。
-func (SystemHost) Probe(ctx context.Context) (Probe, error) {
-	out, err := runPowerShell(ctx, ProbeScript())
+// FirewallRules 實作 Host。
+func (SystemHost) FirewallRules(ctx context.Context) int {
+	out, err := runPowerShell(ctx, RulesScript())
 	if err != nil {
-		return Probe{Rules: -1}, err
+		return -1
 	}
-	return ParseProbe(out)
+	return ParseRules(out)
 }
 
 // Interfaces 實作 Host。
 func (SystemHost) Interfaces() ([]Iface, error) { return SystemInterfaces() }
+
+// PortInUse 實作 Host：以 netstat.exe 檢查（含 TIME_WAIT）。
+func (SystemHost) PortInUse(ctx context.Context, port int) (bool, error) {
+	cmd := exec.CommandContext(ctx, "netstat.exe", "-ano", "-p", "TCP")
+	procutil.HideConsole(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return NetstatPortInUse(string(out), port), nil
+}
 
 func runPowerShell(ctx context.Context, script string) (string, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive",

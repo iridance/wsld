@@ -77,8 +77,8 @@ interface State {
   /** 區網存取狀態（進入設定頁時查詢一次；undefined = 尚未查詢） */
   lan?: LANStatus;
   lanLoading?: boolean;
-  /** 套用中（等待 UAC／WSL 重啟） */
-  lanApplying?: boolean;
+  /** 套用中：toggle＝儲存並同步轉發；restore＝還原 NAT（等待 UAC／WSL 重啟） */
+  lanApplying?: "toggle" | "restore";
   imgFilter: ImgFilter;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
@@ -2077,24 +2077,39 @@ export class App {
     if (this.st.view === "settings") this.renderViewBody();
   }
 
-  /** 開／關區網存取：確認 → UAC → wsl --shutdown → 重新啟動引擎。enabled 不變時只重啟。 */
-  private async applyLAN(enabled: boolean, confirmKey: string): Promise<void> {
-    const okLabel = confirmKey === "gui.lan.confirm_restart" ? t("gui.lan.restart") : t("gui.lan.apply");
-    if (!(await this.confirm(t(confirmKey), undefined, { label: okLabel, icon: "power", danger: false }))) return;
-    this.st.lanApplying = true;
+  /** 開／關區網存取：立即生效（wsld-gui 開始在內網 IP 監聽；Windows 會自己跳防火牆的私人／公用確認）。 */
+  private async setLAN(enabled: boolean): Promise<void> {
+    this.st.lanApplying = "toggle";
+    this.renderViewBody();
+    try {
+      this.st.lan = await api.putLAN(enabled);
+      this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
+    } catch (e) {
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.renderBanner();
+    } finally {
+      this.st.lanApplying = undefined;
+    }
+    this.renderViewBody();
+  }
+
+  /** 還原 NAT：清掉 0.9.0 的 mirrored 設定（UAC）→ 重啟 WSL（等 API 埠釋放後再起引擎）。 */
+  private async restoreNAT(): Promise<void> {
+    if (!(await this.confirm(t("gui.lan.confirm_restore"), undefined, { label: t("gui.lan.restore"), icon: "power", danger: false }))) return;
+    this.st.lanApplying = "restore";
     this.st.busy.add("lan"); // 暫停輪詢：WSL 重啟期間 API 本來就不通
     this.st.lastError = undefined;
     this.renderBanner();
     this.renderViewBody();
     let failed = false;
     try {
-      this.st.lan = await api.putLAN(enabled, true);
-      this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
+      this.st.lan = await api.restoreNAT();
+      this.notify(t("gui.lan.done_restore"));
     } catch (e) {
       failed = true;
       this.st.lastError = e instanceof ApiError ? e.message : String(e);
     } finally {
-      this.st.lanApplying = false;
+      this.st.lanApplying = undefined;
       this.st.busy.delete("lan");
     }
     if (failed) {
@@ -2109,7 +2124,7 @@ export class App {
   private lanSection(row: (label: Node, hint: string, control: Node) => HTMLElement): HTMLElement {
     const s = this.st.lan;
     if (!s && !this.st.lanLoading && !this.st.lanApplying) void this.loadLAN();
-    const applying = !!this.st.lanApplying;
+    const applying = this.st.lanApplying;
     const on = !!s?.enabled;
     const toggle = el("button", {
       type: "button",
@@ -2119,43 +2134,44 @@ export class App {
       "aria-checked": on ? "true" : "false",
     }) as HTMLButtonElement;
     toggle.setAttribute("aria-label", t("gui.settings.lan"));
-    toggle.disabled = !s || !s.supported || applying;
+    toggle.disabled = !s || !!applying;
     const state = el("span", { class: "switch-state", "aria-hidden": "true", text: t(on ? "gui.on" : "gui.off") });
-    toggle.onclick = () => void this.applyLAN(!on, on ? "gui.lan.confirm_off" : "gui.lan.confirm_on");
+    toggle.onclick = () => void this.setLAN(!on);
 
-    let statusKey = "gui.lan.status.loading";
-    if (applying) statusKey = "gui.lan.status.applying";
-    else if (s?.restartPending) statusKey = "gui.lan.status.pending";
-    else if (s && s.enabled) statusKey = "gui.lan.status.on";
-    else if (s) statusKey = "gui.lan.status.off";
-    const status = el("span", { "data-testid": "settings-lan-status", text: t(statusKey) });
+    const okForwards = (s?.forwards ?? []).filter((f) => !f.error);
+    let statusText = t("gui.lan.status.loading");
+    if (applying === "restore") statusText = t("gui.lan.status.restoring");
+    else if (s && !s.enabled) statusText = t("gui.lan.status.off");
+    else if (s && s.mirrored) statusText = t("gui.lan.status.blocked");
+    else if (s && s.forwards.length === 0) statusText = t("gui.lan.status.idle");
+    else if (s && okForwards.length === 0) statusText = t("gui.lan.status.failed").replace("%d", String(s.forwards.length));
+    else if (s) statusText = t("gui.lan.status.on").replace("%d", String(okForwards.length));
+    const status = el("span", { "data-testid": "settings-lan-status", text: statusText });
 
     const extra: HTMLElement[] = [];
-    const ready = !!s && s.enabled && !s.restartPending && s.effective === "mirrored" && s.firewall === "present";
-    if (ready && s.addresses.length) {
-      const list = el("div", { class: "lan-addresses mono", "data-testid": "settings-lan-addresses" });
-      for (const ip of s.addresses) list.append(el("span", { text: `http://${ip}:<port>` }));
-      extra.push(row(el("span", { text: t("gui.settings.lan_addresses") }), t("gui.lan.hint.isolation"), list));
-    }
-    const warns: string[] = [];
-    if (s && !s.supported) warns.push(t("gui.lan.warn.unsupported").replace("%d", String(s.build)));
-    if (s?.enabled && s.firewall === "missing") warns.push(t("gui.lan.warn.firewall"));
-    if (s?.enabled && s.publicNetwork) warns.push(t("gui.lan.warn.public"));
-    if (warns.length) {
-      const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-warn", role: "note" });
-      for (const w of warns) box.append(el("p", { text: w }));
+    if (s?.mirrored) {
+      const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-mirrored", role: "note" }, el("p", { text: t("gui.lan.warn.mirrored") }));
+      const restore = btn({ type: "button", "data-testid": "settings-lan-restore" }, "power", t("gui.lan.restore"));
+      restore.disabled = !!applying;
+      restore.onclick = () => void this.restoreNAT();
+      box.append(el("div", {}, restore));
       extra.push(box);
     }
-    let control: Node = status;
-    if (s?.restartPending && !applying) {
-      const restart = btn({ type: "button", "data-testid": "settings-lan-restart" }, "power", t("gui.lan.restart"));
-      restart.onclick = () => void this.applyLAN(s.enabled, "gui.lan.confirm_restart");
-      control = el("span", { class: "lan-status" }, status, restart);
+    if (s?.enabled && (s.forwards.length > 0 || !s.mirrored)) {
+      const list = el("div", { class: "lan-addresses", "data-testid": "settings-lan-forwards" });
+      for (const f of s.forwards) {
+        const item = el("div", { class: f.error ? "lan-forward error" : "lan-forward", "data-testid": "settings-lan-forward" });
+        item.append(el("span", { class: "mono", text: `http://${f.address}:${f.port}` }), el("span", { class: "muted", text: `→ ${f.container}` }));
+        if (f.error) item.append(el("span", { class: "lan-forward-err", text: f.error }));
+        list.append(item);
+      }
+      if (s.forwards.length === 0) list.append(el("span", { class: "muted", text: t("gui.lan.no_ports") }));
+      extra.push(row(el("span", { text: t("gui.settings.lan_addresses") }), t("gui.lan.hint.firewall"), list));
     }
     return el("section", { class: "set-group", "data-testid": "settings-lan-group" },
       el("h2", { text: t("gui.settings.group.network") }),
       row(el("span", { "data-testid": "settings-lan-label", text: t("gui.settings.lan") }), t("gui.settings.lan_hint"), el("span", { class: "switch" }, state, toggle)),
-      row(el("span", { text: t("gui.settings.lan_status") }), t("gui.settings.lan_status_hint"), control),
+      row(el("span", { text: t("gui.settings.lan_status") }), t("gui.settings.lan_status_hint"), status),
       ...extra,
     );
   }

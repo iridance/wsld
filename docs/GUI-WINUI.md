@@ -1,5 +1,7 @@
 # WinUI3 GUI（Phase 6，v2.0 設計文件）
 
+> **2026-11-19 註記**：本文的 UI 技術路線（`windows::UI::Xaml`）與階段順序已部分過時，另有「保留 Go 後端、只換 WinUI 3 介面」的方案，見 [GUI-NATIVE-EVAL.md](GUI-NATIVE-EVAL.md)。
+
 **狀態**：設計階段（Phase 6a 尚未開工）。本文解決 [SPEC.md](SPEC.md) §7 原列的兩個開放項（v2 與 Go core 整合方式、WinAppDriver／UIA 測試策略）——兩者皆已在下方定案。對應 Roadmap 見 [ROADMAP.md](ROADMAP.md) Phase 6a–6f。
 
 **已鎖定的方向**：核心（取代 Go `internal/*`）與 GUI 都改寫成 **純 Rust**；GUI 透過 `windows-rs` 的 WinRT 投影直接寫 **WinUI3／XAML**（不採 C#/.NET 殼）；核心與 GUI／CLI 之間沿用現有的**本機 HTTP+WebSocket 橋接 API**模式（即今天 `internal/gui/server.go` 的角色），不改為 in-process FFI；遷移採**漸進式並行**——現有 Go/Wails 產品持續發布，新架構在同一 repo 旁邊長出來，功能與測試對等後才切換發布管道。

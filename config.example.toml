@@ -3,6 +3,7 @@
 
 active = "Ubuntu-26.04"
 # theme = "system"       # light | dark | system
+# lan_access = false     # wsld-gui 在內網 IP 轉發容器 published 埠（Settings › Network）
 # exec_shell = ""
 # refresh_interval_sec = 3
 # tray_autostart = false

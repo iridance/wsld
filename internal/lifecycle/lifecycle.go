@@ -161,7 +161,7 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 			if m.NewAPI != nil {
 				m.API = m.NewAPI(newCfg)
 			}
-		} else if _, stderr, err := wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "root", nil, "systemctl", "start", "docker"); err != nil {
+		} else if _, stderr, err := m.startDocker(ctx); err != nil {
 			return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.docker_start_failed", err, strings.TrimSpace(string(stderr))))
 		}
 		// 等待 active
@@ -183,6 +183,12 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 		return m.Status(ctx), fmt.Errorf("%w: %s", ErrAPI, i18n.T("lc.api_no_response", m.Cfg.APIEndpoint, lastErr))
 	}
 	return m.Status(ctx), nil
+}
+
+// startDocker：先 reset-failed（之前連續失敗觸發 start limit 時，systemctl start 會直接拒絕），再 start。
+func (m *Manager) startDocker(ctx context.Context) ([]byte, []byte, error) {
+	_, _, _ = wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "root", nil, "systemctl", "reset-failed", "docker")
+	return wsl.RunIn(ctx, m.WSL, m.Cfg.Distro, "root", nil, "systemctl", "start", "docker")
 }
 
 // InitOptions 為 wsld init 的參數；空值代表自動。

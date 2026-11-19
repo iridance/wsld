@@ -1,8 +1,8 @@
-// Package lan 管理「區網存取」：把 WSL 切到 mirrored 網路模式並開放 Hyper-V 防火牆，
-// 讓容器 published 埠可從其他設備透過 Windows 內網 IP 連入。
+// Package lan 提供「區網存取」：wsld-gui 在 Windows 的內網 IP 上轉發容器 published 埠（Forwarder），
+// 讓其他設備可透過這台電腦的 IP 連到容器。WSL 維持預設 NAT；Docker API 不轉發，仍只綁 127.0.0.1。
 //
-// Docker API 仍只綁 127.0.0.1；mirrored 模式不會把 loopback 鏡像到區網，因此 API 不對外。
-// 狀態的真實來源是系統本身（.wslconfig、wslinfo、防火牆規則），不寫進 config.toml。
+// 另含 0.9.0 遺留設定的清理：0.9.0 以 WSL mirrored 網路＋Hyper-V 防火牆規則實作，
+// mirrored 模式下容器埠直接佔用 Windows 的埠，轉發器無法監聽，因此需先還原為 NAT（Manager.RestoreNAT）。
 package lan
 
 import (
@@ -13,55 +13,27 @@ import (
 	"os"
 	"slices"
 	"strings"
-
-	"github.com/iridance/wsld/internal/wsl"
+	"time"
 )
 
-// 網路模式值（.wslconfig networkingMode／wslinfo --networking-mode）。
-const (
-	ModeMirrored = "mirrored"
-	ModeNAT      = "nat"
-)
+// ModeMirrored 是 .wslconfig networkingMode 的 mirrored 值。
+const ModeMirrored = "mirrored"
 
-// MinBuild 是 mirrored 網路模式需要的最低 Windows build（Windows 11 22H2）。
-const MinBuild = 22621
-
-// WSLVMCreatorID 是 WSL 在 Hyper-V 防火牆的 VMCreatorId。
-const WSLVMCreatorID = "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}"
-
-// RuleNames 是 wsld 建立的 Hyper-V 防火牆規則名稱。
+// RuleNames 是 wsld 0.9.0 建立的 Hyper-V 防火牆規則名稱。
 var RuleNames = []string{"wsld-lan-tcp", "wsld-lan-udp"}
-
-// 防火牆狀態。
-const (
-	FirewallPresent = "present"
-	FirewallMissing = "missing"
-	FirewallUnknown = "unknown"
-)
-
-// ErrUnsupported 表示 Windows 版本不支援 mirrored 網路模式（或非 Windows）。
-var ErrUnsupported = errors.New("LAN access requires Windows 11 22H2 (build 22621) or later")
-
-// Probe 是一次查詢防火牆與網路設定檔的結果。
-type Probe struct {
-	// Rules 是已存在的 wsld 規則數；-1 表示無法查詢。
-	Rules int
-	// Profiles 是目前連線網路的 Windows 設定檔（Private／Public／DomainAuthenticated）。
-	Profiles []string
-}
 
 // Host 抽象 Windows 端的副作用（真實實作在 host_windows.go；測試用 FakeHost）。
 type Host interface {
 	// ConfigPath 回傳 %USERPROFILE%\.wslconfig。
 	ConfigPath() (string, error)
-	// Build 回傳 Windows build；非 Windows 回 0。
-	Build() uint32
-	// SetFirewall 以系統管理員權限（UAC）建立或移除 wsld 的 Hyper-V 防火牆規則。
-	SetFirewall(ctx context.Context, enable bool) error
-	// Probe 查詢規則是否存在與網路設定檔（不需提權）。
-	Probe(ctx context.Context) (Probe, error)
+	// RemoveFirewallRules 以系統管理員權限（UAC）移除 wsld 的 Hyper-V 防火牆規則。
+	RemoveFirewallRules(ctx context.Context) error
+	// FirewallRules 回傳仍存在的 wsld 規則數；-1 表示無法查詢（不需提權）。
+	FirewallRules(ctx context.Context) int
 	// Interfaces 列出網卡與其 IPv4 位址。
 	Interfaces() ([]Iface, error)
+	// PortInUse 回報 Windows 上是否仍有任何 TCP 連線／監聽佔用此本機埠（含 TIME_WAIT）。
+	PortInUse(ctx context.Context, port int) (bool, error)
 }
 
 // Iface 是一張網卡的名稱與位址。
@@ -71,97 +43,73 @@ type Iface struct {
 	Addrs []net.IP
 }
 
-// Status 是區網存取的目前狀態。
-type Status struct {
-	Supported bool   `json:"supported"`
-	Build     uint32 `json:"build"`
-	// Configured 是 .wslconfig 的 networkingMode（空 = 預設 nat）。
-	Configured string `json:"configured"`
-	// Effective 是 active distro 內 wslinfo 回報的實際模式（空 = 未知）。
-	Effective      string   `json:"effective"`
-	Enabled        bool     `json:"enabled"`
-	RestartPending bool     `json:"restartPending"`
-	Firewall       string   `json:"firewall"`
-	Profiles       []string `json:"profiles"`
-	PublicNetwork  bool     `json:"publicNetwork"`
-	Addresses      []string `json:"addresses"`
+// Legacy 描述 0.9.0 mirrored 模式的遺留設定。
+type Legacy struct {
+	// Mirrored 表示 .wslconfig 的 networkingMode=mirrored（轉發器在此模式下無法使用）。
+	Mirrored bool `json:"mirrored"`
+	// Rules 是仍存在的 wsld 防火牆規則數（-1 = 未知）。
+	Rules int `json:"rules"`
 }
 
-// Ready 表示區網存取已設定、已生效且防火牆規則存在。
-func (s Status) Ready() bool {
-	return s.Enabled && !s.RestartPending && s.Effective == ModeMirrored && s.Firewall == FirewallPresent
-}
-
-// Manager 實作區網存取的查詢與切換。
+// Manager 處理遺留設定與 WSL 重啟時的埠等待。
 type Manager struct {
 	Host Host
-	// Mode 回傳 distro 內實際的網路模式（預設用 wslinfo）。
-	Mode func(ctx context.Context, distro string) (string, error)
+	// Sleep 供 WaitPortFree 等待（測試可替換；nil = time.Sleep）。
+	Sleep func(time.Duration)
 }
 
-// NewManager 以真實 wsl.exe 查詢實際模式。
-func NewManager(h Host, r wsl.Runner) *Manager {
-	return &Manager{Host: h, Mode: func(ctx context.Context, distro string) (string, error) {
-		return wsl.NetworkingMode(ctx, r, distro)
-	}}
-}
-
-// Status 查詢狀態；distro 為空時不查實際模式。
-func (m *Manager) Status(ctx context.Context, distro string) (Status, error) {
-	st := Status{Build: m.Host.Build(), Firewall: FirewallUnknown, Profiles: []string{}, Addresses: []string{}}
-	st.Supported = st.Build >= MinBuild
+// Legacy 讀取 .wslconfig 與防火牆規則。
+func (m *Manager) Legacy(ctx context.Context) (Legacy, error) {
 	content, err := m.readConfig()
 	if err != nil {
-		return st, err
+		return Legacy{Rules: -1}, err
 	}
-	st.Configured = strings.ToLower(GetKey(content, "wsl2", "networkingMode"))
-	st.Enabled = st.Configured == ModeMirrored
-	if distro != "" && m.Mode != nil {
-		if mode, err := m.Mode(ctx, distro); err == nil {
-			st.Effective = mode
-		}
+	l := Legacy{Mirrored: strings.EqualFold(GetKey(content, "wsl2", "networkingMode"), ModeMirrored), Rules: 0}
+	if l.Mirrored {
+		l.Rules = m.Host.FirewallRules(ctx)
 	}
-	if st.Effective != "" {
-		st.RestartPending = st.Enabled != (st.Effective == ModeMirrored)
-	}
-	if p, err := m.Host.Probe(ctx); err == nil {
-		switch {
-		case p.Rules < 0:
-			st.Firewall = FirewallUnknown
-		case p.Rules >= len(RuleNames):
-			st.Firewall = FirewallPresent
-		default:
-			st.Firewall = FirewallMissing
-		}
-		if p.Profiles != nil {
-			st.Profiles = p.Profiles
-		}
-		st.PublicNetwork = slices.Contains(p.Profiles, "Public")
-	}
-	if ifs, err := m.Host.Interfaces(); err == nil {
-		st.Addresses = LANAddresses(ifs)
-	}
-	return st, nil
+	return l, nil
 }
 
-// Enable 開放 Hyper-V 防火牆（UAC）並在 .wslconfig 設 networkingMode=mirrored。
+// RestoreNAT 移除 wsld 的防火牆規則（存在或無法確認時需 UAC），再從 .wslconfig 移除 networkingMode。
 // 先處理防火牆：使用者取消 UAC 時不改 .wslconfig。生效需要 wsl --shutdown（由呼叫端決定）。
-func (m *Manager) Enable(ctx context.Context) error {
-	if m.Host.Build() < MinBuild {
-		return ErrUnsupported
-	}
-	if err := m.Host.SetFirewall(ctx, true); err != nil {
-		return fmt.Errorf("firewall: %w", err)
-	}
-	return m.editConfig(func(c string) string { return SetKey(c, "wsl2", "networkingMode", ModeMirrored) })
-}
-
-// Disable 移除防火牆規則（UAC）並從 .wslconfig 移除 networkingMode（回到預設 nat）。
-func (m *Manager) Disable(ctx context.Context) error {
-	if err := m.Host.SetFirewall(ctx, false); err != nil {
-		return fmt.Errorf("firewall: %w", err)
+func (m *Manager) RestoreNAT(ctx context.Context) error {
+	if m.Host.FirewallRules(ctx) != 0 {
+		if err := m.Host.RemoveFirewallRules(ctx); err != nil {
+			return fmt.Errorf("firewall: %w", err)
+		}
 	}
 	return m.editConfig(func(c string) string { return RemoveKey(c, "wsl2", "networkingMode") })
+}
+
+// PortWaitTimeout 是 wsl --shutdown 後等 Windows 釋放 API 埠的上限（TIME_WAIT 預設 120 秒）。
+const PortWaitTimeout = 150 * time.Second
+
+// WaitPortFree 等到 Windows 上沒有連線佔用 port（例如網路模式切換後留下的 TIME_WAIT）。
+// 埠未釋放前 dockerd／WSL localhost 轉發可能綁定失敗（address already in use）。
+// 回傳 true 表示已空出；逾時或無法查詢回傳 false（呼叫端照樣嘗試啟動）。
+func (m *Manager) WaitPortFree(ctx context.Context, port int, timeout time.Duration) bool {
+	if port <= 0 {
+		return true
+	}
+	sleep := m.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	const step = 2 * time.Second
+	for waited := time.Duration(0); ; waited += step {
+		busy, err := m.Host.PortInUse(ctx, port)
+		if err != nil {
+			return false
+		}
+		if !busy {
+			return true
+		}
+		if waited >= timeout || ctx.Err() != nil {
+			return false
+		}
+		sleep(step)
+	}
 }
 
 func (m *Manager) readConfig() (string, error) {

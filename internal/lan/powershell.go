@@ -2,27 +2,17 @@ package lan
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf16"
 )
 
-// FirewallScript 產生（以系統管理員身分執行的）建立／移除 wsld Hyper-V 防火牆規則腳本。
-// 啟用時只套用在「私人」網路設定檔，公用 Wi-Fi 不對外。
-func FirewallScript(enable bool) string {
+// RemoveFirewallScript 產生（以系統管理員身分執行的）移除 wsld 0.9.0 Hyper-V 防火牆規則腳本。
+func RemoveFirewallScript() string {
 	var b strings.Builder
-	b.WriteString("$ErrorActionPreference = 'Stop'\n")
 	for _, name := range RuleNames {
 		fmt.Fprintf(&b, "Remove-NetFirewallHyperVRule -Name '%s' -ErrorAction SilentlyContinue\n", name)
-	}
-	if enable {
-		for _, name := range RuleNames {
-			proto := strings.ToUpper(strings.TrimPrefix(name, "wsld-lan-"))
-			fmt.Fprintf(&b, "New-NetFirewallHyperVRule -Name '%s' -DisplayName 'wsld LAN access (%s)' "+
-				"-Direction Inbound -VMCreatorId '%s' -Protocol %s -Action Allow -Profiles Private | Out-Null\n",
-				name, proto, WSLVMCreatorID, proto)
-		}
 	}
 	return b.String()
 }
@@ -35,40 +25,38 @@ func ElevateScript(inner string) string {
 		"exit $p.ExitCode\n"
 }
 
-// ProbeScript 查詢 wsld 規則數與目前網路設定檔，輸出一行 JSON。
-func ProbeScript() string {
+// RulesScript 輸出仍存在的 wsld 規則數；無法查詢時輸出 -1。
+func RulesScript() string {
 	names := make([]string, len(RuleNames))
 	for i, n := range RuleNames {
 		names[i] = "'" + n + "'"
 	}
-	return "$r = -1\n" +
-		"try { $r = @(Get-NetFirewallHyperVRule -Name " + strings.Join(names, ",") + " -ErrorAction SilentlyContinue).Count } catch { $r = -1 }\n" +
-		"$p = @()\n" +
-		"try { $p = @(Get-NetConnectionProfile | ForEach-Object { [string]$_.NetworkCategory }) } catch { }\n" +
-		"ConvertTo-Json -Compress @{ rules = $r; profiles = $p }\n"
+	return "try { @(Get-NetFirewallHyperVRule -Name " + strings.Join(names, ",") +
+		" -ErrorAction SilentlyContinue).Count } catch { -1 }\n"
 }
 
-// ParseProbe 解析 ProbeScript 的輸出。
-func ParseProbe(out string) (Probe, error) {
-	var raw struct {
-		Rules    int             `json:"rules"`
-		Profiles json.RawMessage `json:"profiles"`
+// ParseRules 解析 RulesScript 的輸出；無法解析回 -1。
+func ParseRules(out string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return -1
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &raw); err != nil {
-		return Probe{Rules: -1}, fmt.Errorf("parse probe: %w", err)
-	}
-	p := Probe{Rules: raw.Rules, Profiles: []string{}}
-	// PowerShell 5 對單一元素陣列可能輸出字串而非陣列。
-	var list []string
-	if err := json.Unmarshal(raw.Profiles, &list); err == nil {
-		p.Profiles = append(p.Profiles, list...)
-	} else {
-		var one string
-		if err := json.Unmarshal(raw.Profiles, &one); err == nil && one != "" {
-			p.Profiles = append(p.Profiles, one)
+	return n
+}
+
+// NetstatPortInUse 解析 `netstat.exe -ano -p TCP` 輸出：本機位址的埠等於 port 的任何一列（任何狀態）都算佔用。
+func NetstatPortInUse(out string, port int) bool {
+	suffix := fmt.Sprintf(":%d", port)
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || !strings.EqualFold(f[0], "TCP") {
+			continue
+		}
+		if strings.HasSuffix(f[1], suffix) {
+			return true
 		}
 	}
-	return p, nil
+	return false
 }
 
 // EncodeCommand 轉為 powershell -EncodedCommand 需要的 Base64(UTF-16LE)。

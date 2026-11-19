@@ -101,8 +101,8 @@ type Deps struct {
 	API       Pinger
 	Processes func(ctx context.Context) ([]string, error)  // Windows 程序名；nil 則略過 Desktop 檢查
 	Dial      func(ctx context.Context, addr string) error // TCP 連線探測；nil 用 net.Dialer
-	// LAN 查詢區網存取狀態；nil 則略過。只有在 .wslconfig 設了 mirrored 時才會出現此項。
-	LAN func(ctx context.Context, distro string) (lan.Status, error)
+	// LAN 查詢 0.9.0 mirrored 遺留設定；nil 則略過。
+	LAN func(ctx context.Context) (lan.Legacy, error)
 }
 
 // Run 執行全部檢查。
@@ -236,31 +236,20 @@ func (c *checker) run(ctx context.Context) {
 	c.infoChecks()
 }
 
-// checkLAN：已設定 mirrored 時，確認已生效、防火牆規則存在、目前網路不是「公用」。
+// checkLAN：區網存取開啟時列出（由 wsld-gui 轉發）；偵測到 mirrored 模式（0.9.0 遺留）時警告，
+// 因為 mirrored 下容器埠直接佔用 Windows 的埠，轉發器無法監聽。
 func (c *checker) checkLAN(ctx context.Context) {
-	if c.d.LAN == nil {
-		return
+	var legacy lan.Legacy
+	if c.d.LAN != nil {
+		legacy, _ = c.d.LAN(ctx)
 	}
-	st, err := c.d.LAN(ctx, c.d.Cfg.Distro)
-	if err != nil || !st.Enabled {
-		return
-	}
-	r := Result{ID: "lan", Title: i18n.T("doctor.lan.title"), Level: OK}
 	switch {
-	case st.RestartPending:
-		r.Level, r.Detail, r.Hint = Warn, i18n.T("doctor.lan.pending", st.Effective), i18n.T("doctor.lan.pending_hint")
-	case st.Firewall == lan.FirewallMissing:
-		r.Level, r.Detail, r.Hint = Warn, i18n.T("doctor.lan.firewall"), i18n.T("doctor.lan.firewall_hint")
-	case st.PublicNetwork:
-		r.Level, r.Detail, r.Hint = Warn, i18n.T("doctor.lan.public"), i18n.T("doctor.lan.public_hint")
-	default:
-		addrs := strings.Join(st.Addresses, ", ")
-		if addrs == "" {
-			addrs = "-"
-		}
-		r.Detail = i18n.T("doctor.lan.ok", addrs)
+	case legacy.Mirrored:
+		c.add(Result{ID: "lan", Title: i18n.T("doctor.lan.title"), Level: Warn,
+			Detail: i18n.T("doctor.lan.mirrored"), Hint: i18n.T("doctor.lan.mirrored_hint")})
+	case c.d.Cfg.LANAccess:
+		c.add(Result{ID: "lan", Title: i18n.T("doctor.lan.title"), Level: Info, Detail: i18n.T("doctor.lan.on")})
 	}
-	c.add(r)
 }
 
 func (c *checker) checkAPI(ctx context.Context) {
