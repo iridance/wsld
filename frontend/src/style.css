@@ -389,12 +389,12 @@ pre.conf {
   transition: background .1s, border-color .1s, box-shadow .1s;
 }
 .tf[hidden] { display: none; }
-.tf > input, .tf > select {
+.tf > input {
   flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; outline: none;
   background: transparent; color: inherit; font: inherit;
 }
 .tf > input::placeholder { color: var(--faint); opacity: 1; }
-.tf > input:focus-visible, .tf > select:focus-visible { outline: none; } /* 焦點改由外框底線表示 */
+.tf > input:focus-visible { outline: none; } /* 焦點改由外框底線表示 */
 .tf:hover { background: var(--surface-hover); border-color: var(--border-strong); }
 .tf:focus-within { background: var(--surface); border-color: var(--border); border-bottom-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
 .tf.is-error, .tf:has(> input[aria-invalid="true"]) { border-bottom-color: var(--bad); box-shadow: inset 0 -1px 0 var(--bad); }
@@ -419,11 +419,38 @@ button.tf-btn[hidden] { display: none; }
 .tf > input[type="number"] { -moz-appearance: textfield; appearance: textfield; font-variant-numeric: tabular-nums; }
 .tf > input[type="number"]::-webkit-inner-spin-button, .tf > input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .tf .stepper { display: flex; align-items: center; gap: 2px; margin-right: -4px; padding-left: 6px; border-left: 1px solid var(--border); }
-/* 下拉：自繪箭頭 */
+/* 下拉 dropdown()：自繪箭頭＋自繪清單 */
 .tf.select { padding-right: 0; cursor: pointer; }
-.tf.select > select { appearance: none; -webkit-appearance: none; padding-right: 34px; cursor: pointer; }
-.tf.select > select option { background: var(--surface); color: var(--fg); }
-.tf.select .chev { position: absolute; right: 10px; top: 50%; width: 14px; height: 14px; margin-top: -7px; color: var(--muted); pointer-events: none; }
+.tf.select .chev { position: absolute; right: 10px; top: 50%; width: 14px; height: 14px; margin-top: -7px; color: var(--muted); pointer-events: none; transition: transform .12s; }
+/* 按鈕佔滿外框，展開清單為浮動卡片（fixed，不被捲動容器裁切） */
+.tf.dd { padding: 0; }
+.tf.dd > button[role="combobox"] {
+  flex: 1; min-width: 0; height: 100%; min-height: 0; margin: 0; padding: 0 34px 0 10px; border: 0; border-radius: inherit;
+  display: flex; align-items: center; justify-content: flex-start; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.tf.dd > button[role="combobox"]:hover:not(:disabled) { background: transparent; border-color: transparent; }
+.tf.dd > button[role="combobox"]:focus-visible { outline: none; }
+.tf.dd .dd-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf.dd .dd-value.placeholder { color: var(--faint); }
+.tf.dd.open { border-bottom-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
+.tf.dd.open .chev { transform: rotate(180deg); }
+.dd-list {
+  position: fixed; z-index: 50; margin: 0; padding: 4px; list-style: none; max-height: 280px; overflow-y: auto; box-sizing: border-box;
+  background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-lg); cursor: default;
+}
+.dd-list[hidden] { display: none; }
+.dd-list > li {
+  position: relative; display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 10px 0 14px; border-radius: 4px;
+  font-size: 13px; white-space: nowrap; cursor: pointer;
+}
+.dd-list > li > span { flex: 1; }
+.dd-list > li.active { background: var(--hover); }
+.dd-list > li[aria-selected="true"] { font-weight: 600; }
+.dd-list > li[aria-selected="true"]::before {
+  content: ""; position: absolute; left: 4px; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: var(--accent);
+}
+.dd-list .dd-check { flex: none; width: 14px; height: 14px; color: var(--accent); visibility: hidden; }
+.dd-list > li[aria-selected="true"] .dd-check { visibility: visible; }
 /* 輸入名稱確認：完全相符時出現綠色勾 */
 .tf .match { flex: none; width: 16px; height: 16px; color: var(--ok); stroke-width: 2.25; display: none; }
 .tf.matched .match { display: block; }
@@ -556,7 +583,7 @@ ul.checks .check-label { flex: 1; }
 ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-size: 12px; }
 
 /* ---- 設定：分組 SettingsCard ----------------------------------------------- */
-.list.cards .settings-form { max-width: 880px; padding: 0; gap: 22px; }
+.list.cards .settings-form { max-width: none; padding: 0; gap: 22px; } /* 寬度隨視窗，不設上限 */
 .set-group { display: flex; flex-direction: column; gap: 4px; }
 .set-group h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
 .set-row {

@@ -1,9 +1,15 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { engine, listHold, listRelease, open, reset, waitListHeld } from "./helpers";
 
 test.beforeEach(async ({ request }) => {
   await reset(request);
 });
+
+/** Add machine 的發行版是自繪下拉：點開再點選項。 */
+async function pickDistro(scope: Page | Locator, name: string) {
+  await scope.getByTestId("add-machine-select").click();
+  await scope.getByTestId(`add-machine-select-option-${name}`).click();
+}
 
 async function go(page: Page, view: string) {
   await open(page);
@@ -237,13 +243,24 @@ test("Machines: Add machine lists online distributions and installs the chosen o
   const dlg = page.getByTestId("add-machine-dialog");
   await expect(dlg).toBeVisible();
   const sel = dlg.getByTestId("add-machine-select");
-  await expect(sel.locator("option")).toHaveCount(4);
-  await expect(sel.locator("option").nth(0)).toHaveText(/Please select a distro|請選擇發行版/);
-  await expect(sel.locator("option").nth(2)).toHaveText("Debian GNU/Linux (Debian)");
+  await expect(sel).toHaveAttribute("role", "combobox");
+  await expect(sel).toHaveText(/Please select a distro|請選擇發行版/);
+  await expect(sel).toHaveAttribute("data-value", "");
   await expect(dlg.getByTestId("add-machine-install")).toBeDisabled();
   await expect(dlg.getByTestId("add-machine-name")).toHaveValue("");
 
-  await sel.selectOption("Debian");
+  // 自繪清單：在對話框內開啟、列出線上發行版；Esc 只關清單不關對話框
+  await sel.click();
+  const opts = dlg.getByTestId("add-machine-select-list").getByRole("option");
+  await expect(opts).toHaveCount(3);
+  await expect(opts.nth(1)).toHaveText("Debian GNU/Linux (Debian)");
+  await page.keyboard.press("Escape");
+  await expect(dlg.getByTestId("add-machine-select-list")).toBeHidden();
+  await expect(dlg).toBeVisible();
+
+  await pickDistro(dlg, "Debian");
+  await expect(sel).toHaveAttribute("data-value", "Debian");
+  await expect(sel).toHaveText("Debian GNU/Linux (Debian)");
   await expect(dlg.getByTestId("add-machine-name")).toHaveValue("Debian");
   await dlg.getByTestId("add-machine-name").fill("Debian1");
   await expect(dlg.getByTestId("add-machine-user")).toHaveValue("irice");
@@ -272,7 +289,7 @@ test("Machines: Add machine validates the Linux user and allows an empty passwor
   await go(page, "machines");
   await page.getByTestId("btn-add-machine").click();
   const dlg = page.getByTestId("add-machine-dialog");
-  await dlg.getByTestId("add-machine-select").selectOption("Debian");
+  await pickDistro(dlg, "Debian");
   await dlg.getByTestId("add-machine-name").fill("Debian5");
   await expect(dlg.getByTestId("add-machine-password")).toHaveAttribute("type", "password");
   await expect(dlg.getByTestId("add-machine-password-hint")).toBeVisible();
@@ -304,7 +321,7 @@ test("Machines: Add machine disables Cancel while installing", async ({ page }) 
   await go(page, "machines");
   await page.getByTestId("btn-add-machine").click();
   const dlg = page.getByTestId("add-machine-dialog");
-  await dlg.getByTestId("add-machine-select").selectOption("Ubuntu");
+  await pickDistro(dlg, "Ubuntu");
   await expect(dlg.getByTestId("add-machine-name")).toHaveValue("Ubuntu");
 
   let release!: () => void;
@@ -319,6 +336,7 @@ test("Machines: Add machine disables Cancel while installing", async ({ page }) 
   const done = dlg.getByTestId("add-machine-install").click();
   await expect(dlg.getByTestId("add-machine-cancel")).toBeDisabled();
   await expect(dlg.getByTestId("add-machine-install")).toBeDisabled();
+  await expect(dlg.getByTestId("add-machine-select")).toBeDisabled();
   release();
   await done;
   await expect(dlg).toBeHidden();
@@ -330,7 +348,7 @@ test("Machines: Add machine shows download progress while installing", async ({ 
   await page.getByTestId("btn-add-machine").click();
   const dlg = page.getByTestId("add-machine-dialog");
   await expect(dlg.locator("h2")).toHaveText(/Add machine|新增機器/);
-  await dlg.getByTestId("add-machine-select").selectOption("Ubuntu");
+  await pickDistro(dlg, "Ubuntu");
   const progress = dlg.getByTestId("add-machine-progress");
   await expect(progress).toBeHidden();
 
@@ -494,7 +512,7 @@ test("Machines: a failed install keeps the dialog open and shows the error", asy
   await request.post("/__test/wsl/fail-install");
   await go(page, "machines");
   await page.getByTestId("btn-add-machine").click();
-  await page.getByTestId("add-machine-select").selectOption("Ubuntu");
+  await pickDistro(page, "Ubuntu");
   await expect(page.getByTestId("add-machine-name")).toHaveValue("Ubuntu");
   await page.getByTestId("add-machine-install").click();
   await expect(page.getByTestId("add-machine-dialog")).toBeVisible();

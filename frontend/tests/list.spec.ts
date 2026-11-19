@@ -221,9 +221,10 @@ test("defaults to English; the Settings language switch changes labels and persi
   await expect(page).toHaveTitle("wsld");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
-  await expect(page.getByTestId("lang-select")).toHaveValue("en");
+  await expect(page.getByTestId("lang-select")).toHaveAttribute("data-value", "en");
 
-  await page.getByTestId("lang-select").selectOption("zh-TW");
+  await page.getByTestId("lang-select").click();
+  await page.getByTestId("lang-select-option-zh-TW").click();
   await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
   await expect(page.getByTestId("nav-containers")).toHaveText("容器");
   await expect(page.getByTestId("status-connection")).toHaveText("已連線");
@@ -231,9 +232,10 @@ test("defaults to English; the Settings language switch changes labels and persi
 
   await page.reload(); // 存在 config，不是只在記憶體
   await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
-  await expect(page.getByTestId("lang-select")).toHaveValue("zh-TW");
+  await expect(page.getByTestId("lang-select")).toHaveAttribute("data-value", "zh-TW");
 
-  await page.getByTestId("lang-select").selectOption("en");
+  await page.getByTestId("lang-select").click();
+  await page.getByTestId("lang-select-option-en").click();
   await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
 });
 

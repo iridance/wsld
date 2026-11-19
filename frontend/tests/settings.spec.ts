@@ -84,3 +84,33 @@ test("header has no Settings button or tcp path; folder/term icons have border",
   const folder = page.getByTestId("btn-open-folder");
   expect(await folder.evaluate((e) => getComputedStyle(e).borderStyle)).not.toBe("none");
 });
+
+test("settings content width follows the window width", async ({ page }) => {
+  for (const width of [900, 1600]) {
+    await page.setViewportSize({ width, height: 800 });
+    await open(page);
+    await page.getByTestId("nav-settings").click();
+    const form = (await page.getByTestId("settings-form").boundingBox())!;
+    const list = (await page.getByTestId("settings-list").boundingBox())!;
+    // 表單填滿設定區（不固定在 880px 等上限）
+    expect(form.width).toBeGreaterThan(list.width - 4);
+    expect(form.width).toBeGreaterThan(width - 120);
+  }
+});
+
+test("auto refresh does not rebuild Settings: open dropdown and unsaved edits survive a poll", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("settings-exec-shell").fill("zsh");
+  await page.getByTestId("lang-select").click();
+  await expect(page.getByTestId("lang-select-list")).toBeVisible();
+  // 等兩次輪詢（/api/status）真的發生並完成
+  for (let i = 0; i < 2; i++) {
+    await page.waitForResponse((r) => r.url().endsWith("/api/status"), { timeout: 10_000 });
+  }
+  await page.waitForTimeout(200);
+  await expect(page.getByTestId("lang-select-list")).toBeVisible();
+  await expect(page.getByTestId("lang-select")).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-exec-shell")).toHaveValue("zsh");
+});

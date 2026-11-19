@@ -20,7 +20,9 @@ test("checkbox, radio, select and number are drawn by wsld, not the browser", as
 
   await page.getByTestId("nav-settings").click();
   expect(await appearance(page.getByTestId("settings-theme-system"))).toBe("none");
-  expect(await appearance(page.getByTestId("lang-select"))).toBe("none");
+  // 語言下拉是自繪 combobox（不是原生 <select>）
+  await expect(page.getByTestId("lang-select")).toHaveAttribute("role", "combobox");
+  await expect(page.getByTestId("view-settings").locator("select")).toHaveCount(0);
   expect(await appearance(page.getByTestId("settings-refresh"))).toBe("textfield");
   // 文字欄位外框在 .tf，內層 input 無框
   const shell = page.getByTestId("settings-exec-shell");
@@ -97,4 +99,42 @@ test("typed confirmation shows a check only on an exact match", async ({ page })
   await page.getByTestId("btn-rm-image-bbb222bbb222").click();
   await expect(page.getByTestId("confirm-typed-field")).toBeHidden();
   await page.getByTestId("confirm-cancel").click();
+});
+
+test("dropdown: the open list is drawn by wsld and works with mouse and keyboard", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("nav-settings").click();
+  const dd = page.getByTestId("lang-select");
+  const list = page.getByTestId("lang-select-list");
+  await expect(dd).toHaveAttribute("data-value", "en");
+  await expect(dd).toHaveText("English");
+  await expect(list).toBeHidden();
+
+  // 滑鼠：開啟→清單在欄位下方、與欄位同寬以上；目前值有勾；點外面關閉
+  await dd.click();
+  await expect(dd).toHaveAttribute("aria-expanded", "true");
+  await expect(list).toBeVisible();
+  await expect(list).toHaveAttribute("role", "listbox");
+  await expect(page.getByTestId("lang-select-option-en")).toHaveAttribute("aria-selected", "true");
+  const f = (await dd.locator("xpath=..").boundingBox())!;
+  const l = (await list.boundingBox())!;
+  expect(l.y).toBeGreaterThanOrEqual(f.y + f.height);
+  expect(l.width).toBeGreaterThanOrEqual(f.width - 1);
+  await page.getByTestId("settings-form").locator("h2").first().click();
+  await expect(list).toBeHidden();
+  await expect(dd).toHaveAttribute("aria-expanded", "false");
+
+  // 鍵盤：Esc 關閉不改值；↓ 移動、Enter 選取
+  await dd.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(list).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(list).toBeHidden();
+  await expect(dd).toHaveAttribute("data-value", "en");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("lang-select-option-zh-TW")).toHaveClass(/active/);
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
+  await expect(page.getByTestId("lang-select")).toHaveAttribute("data-value", "zh-TW");
 });

@@ -108,6 +108,6 @@ test("language select lives in Settings and is drawn by wsld (no native arrow)",
   await page.getByTestId("nav-settings").click();
   const sel = page.getByTestId("lang-select");
   await expect(sel).toBeVisible();
-  expect(await sel.evaluate((e) => getComputedStyle(e).appearance)).toBe("none");
+  await expect(sel).toHaveAttribute("role", "combobox");
   await expect(sel.locator("xpath=..").locator("svg.chev")).toBeVisible();
 });

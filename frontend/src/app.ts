@@ -121,11 +121,178 @@ const textField = (input: HTMLInputElement, ...extra: (Node | string)[]): HTMLEl
   return f;
 };
 
-/** 下拉：同文字欄位外框＋自繪箭頭（原生箭頭以 appearance:none 隱藏）。 */
-const selectField = (sel: HTMLSelectElement): HTMLElement => {
+/** 自繪下拉（設計稿「Input controls」ComboBox）：外框同 .tf.select，展開清單也自繪，不用 OS 原生彈出清單。
+ *  按鈕 role=combobox、目前值在 data-value；清單 role=listbox 以 fixed 定位（不被捲動容器裁切），下方空間不足時往上開。
+ *  鍵盤：Enter／Space／↑↓ 展開，↑↓／Home／End 移動，Enter／Space 選取，Esc／Tab 關閉。
+ *  目前值不在選項內時顯示 placeholder（淡色）；setOptions 可換選項（例如非同步載入），setDisabled 停用。
+ *  注意：不要包在 <label> 裡（點清單項目會被 label 轉成再點一次按鈕），標題用 aria-labelledby。 */
+type DropdownOption = readonly [value: string, label: string];
+interface Dropdown {
+  el: HTMLElement;
+  button: HTMLButtonElement;
+  readonly value: string;
+  setOptions(options: readonly DropdownOption[], value?: string, placeholder?: string): void;
+  setDisabled(disabled: boolean): void;
+}
+const dropdown = (
+  attrs: { testid: string; id?: string; labelledby?: string; placeholder?: string },
+  initial: readonly DropdownOption[],
+  value: string,
+  onChange: (v: string) => void,
+): Dropdown => {
+  const trigger = el("button", {
+    type: "button",
+    role: "combobox",
+    "aria-haspopup": "listbox",
+    "aria-expanded": "false",
+    "data-testid": attrs.testid,
+    ...(attrs.id ? { id: attrs.id } : {}),
+    ...(attrs.labelledby ? { "aria-labelledby": attrs.labelledby } : {}),
+  }) as HTMLButtonElement;
+  const text = el("span", { class: "dd-value" });
   const chev = icon("chevron-down");
   chev.classList.add("chev");
-  return el("span", { class: "tf select" }, sel, chev);
+  trigger.append(text, chev);
+  const list = el("ul", { role: "listbox", class: "dd-list", tabindex: "-1", "data-testid": `${attrs.testid}-list` });
+  list.hidden = true;
+  const listId = `${attrs.testid}-listbox`;
+  list.id = listId;
+  trigger.setAttribute("aria-controls", listId);
+  const field = el("span", { class: "tf select dd" }, trigger, list);
+
+  let options: readonly DropdownOption[] = [];
+  let items: HTMLLIElement[] = [];
+  let placeholder = attrs.placeholder ?? "";
+  let current = value;
+  let active = -1;
+
+  const sync = () => {
+    const i = options.findIndex(([v]) => v === current);
+    text.textContent = i >= 0 ? options[i][1] : placeholder;
+    text.classList.toggle("placeholder", i < 0);
+    trigger.dataset.value = i >= 0 ? current : "";
+    items.forEach((li, j) => li.setAttribute("aria-selected", String(j === i)));
+  };
+  const setActive = (i: number) => {
+    if (!items.length) return;
+    active = Math.max(0, Math.min(items.length - 1, i));
+    items.forEach((li, j) => li.classList.toggle("active", j === active));
+    trigger.setAttribute("aria-activedescendant", items[active].id);
+    items[active].scrollIntoView({ block: "nearest" });
+  };
+  const place = () => {
+    const r = field.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 12;
+    const above = r.top - 12;
+    list.style.minWidth = `${r.width}px`;
+    list.style.left = `${r.left}px`;
+    list.style.maxHeight = "";
+    const h = list.offsetHeight;
+    const up = h > below && above > below;
+    list.style.maxHeight = `${Math.min(280, Math.max(up ? above : below, 96))}px`;
+    list.style.top = up ? "" : `${r.bottom + 4}px`;
+    list.style.bottom = up ? `${window.innerHeight - r.top + 4}px` : "";
+  };
+  const onOutside = (e: Event) => {
+    if (!field.contains(e.target as Node)) close();
+  };
+  const onViewport = (e: Event) => {
+    if (e.target !== list) close(); // 清單自己捲動不關
+  };
+  const open = () => {
+    if (!list.hidden || trigger.disabled || !items.length) return;
+    list.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    field.classList.add("open");
+    place();
+    setActive(Math.max(0, options.findIndex(([v]) => v === current)));
+    document.addEventListener("mousedown", onOutside, true);
+    window.addEventListener("resize", onViewport);
+    window.addEventListener("scroll", onViewport, true);
+  };
+  const close = () => {
+    if (list.hidden) return;
+    list.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.removeAttribute("aria-activedescendant");
+    field.classList.remove("open");
+    document.removeEventListener("mousedown", onOutside, true);
+    window.removeEventListener("resize", onViewport);
+    window.removeEventListener("scroll", onViewport, true);
+  };
+  const pick = (i: number) => {
+    close();
+    const v = options[i]?.[0];
+    if (v === undefined || v === current) return;
+    current = v;
+    sync();
+    onChange(v);
+  };
+  const setOptions = (next: readonly DropdownOption[], v = current, ph?: string) => {
+    close();
+    options = next;
+    if (ph !== undefined) placeholder = ph;
+    current = v;
+    items = options.map(([ov, label], i) => {
+      const li = el("li", { role: "option", id: `${listId}-${i}`, "data-value": ov, "data-testid": `${attrs.testid}-option-${ov}` }) as HTMLLIElement;
+      const check = icon("check");
+      check.classList.add("dd-check");
+      li.append(el("span", { text: label }), check);
+      li.onmousemove = () => setActive(i);
+      li.onmousedown = (e) => e.preventDefault(); // 不讓按鈕失焦
+      li.onclick = () => pick(i);
+      return li;
+    });
+    list.replaceChildren(...items);
+    sync();
+  };
+  trigger.onclick = () => (list.hidden ? open() : close());
+  trigger.onblur = () => close();
+  trigger.onkeydown = (e) => {
+    const shut = list.hidden;
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+        e.preventDefault();
+        if (shut) open();
+        else setActive(active + (e.key === "ArrowDown" ? 1 : -1));
+        break;
+      case "Home":
+      case "End":
+        if (shut) return;
+        e.preventDefault();
+        setActive(e.key === "Home" ? 0 : items.length - 1);
+        break;
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        if (shut) open();
+        else pick(active);
+        break;
+      case "Escape":
+        if (shut) return; // 關著時交給外層（例如關對話框）
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        break;
+      case "Tab":
+        close();
+        break;
+    }
+  };
+  setOptions(initial, value);
+  return {
+    el: field,
+    button: trigger,
+    get value() {
+      return trigger.dataset.value ?? "";
+    },
+    setOptions,
+    setDisabled(disabled: boolean) {
+      if (disabled) close();
+      trigger.disabled = disabled;
+    },
+  };
 };
 
 /** 數字：隱藏原生 spinner，改為欄內 −／＋ 與單位；超出 min／max 標成錯誤。 */
@@ -263,7 +430,7 @@ export class App {
     }
     if (signal.aborted || gen !== this.refreshGen) return;
     this.st.refreshCount++;
-    this.renderAll();
+    this.renderAll(true);
   }
 
   private async loadView(signal?: AbortSignal): Promise<void> {
@@ -540,11 +707,13 @@ export class App {
     this.renderAll();
   }
 
-  private renderAll(): void {
+  /** fromRefresh：由輪詢刷新呼叫時不重建設定頁——設定頁內容不來自輪詢資料，
+   *  重建會收掉展開中的下拉、清掉尚未儲存的輸入與焦點；設定頁只在明確事件（進頁、切語言、區網動作等）時重繪。 */
+  private renderAll(fromRefresh = false): void {
     this.renderHeader();
     this.renderBanner();
     this.renderNotice();
-    this.renderViewBody();
+    if (!(fromRefresh && this.st.view === "settings")) this.renderViewBody();
     // Info 抽屜不隨列表輪詢重建；僅 machine 的 CPU／記憶體由 usage poll 就地更新
   }
 
@@ -845,14 +1014,8 @@ export class App {
 
   /** Settings「外觀」的語言切換：立即寫入 config（後端與 Tray 一併切換），再重新載入 meta 重繪。 */
   private langSelect(): HTMLElement {
-    const sel = el("select", { "data-testid": "lang-select", id: "settings-lang" }) as HTMLSelectElement;
-    for (const [v, label] of [["en", "English"], ["zh-TW", "繁體中文"]]) {
-      const o = el("option", { value: v, text: label }) as HTMLOptionElement;
-      o.selected = v === this.st.meta.lang;
-      sel.append(o);
-    }
-    sel.onchange = () => void this.switchLang(sel.value);
-    return selectField(sel);
+    const langs = [["en", "English"], ["zh-TW", "繁體中文"]] as const;
+    return dropdown({ testid: "lang-select", id: "settings-lang" }, langs, this.st.meta.lang, (v) => void this.switchLang(v)).el;
   }
 
   private async switchLang(lang: string): Promise<void> {
@@ -1793,9 +1956,15 @@ export class App {
     }
   }
 
+  private addMachineDistro?: Dropdown;
+
   private buildAddMachineDialog(): HTMLDialogElement {
     const d = el("dialog", { "data-testid": "add-machine-dialog" }) as HTMLDialogElement;
-    const sel = el("select", { "data-testid": "add-machine-select" }) as HTMLSelectElement;
+    const sel = dropdown({ testid: "add-machine-select", labelledby: "add-machine-select-label" }, [], "", (v) => {
+      if (v) name.value = v;
+      syncInstallEnabled();
+    });
+    this.addMachineDistro = sel;
     const name = el("input", {
       type: "text",
       "data-testid": "add-machine-name",
@@ -1841,10 +2010,6 @@ export class App {
         pw.value !== pw2.value ||
         this.st.busy.has("install");
     };
-    sel.onchange = () => {
-      if (sel.value) name.value = sel.value;
-      syncInstallEnabled();
-    };
     name.oninput = () => syncInstallEnabled();
     user.oninput = () => syncInstallEnabled();
     pw.oninput = () => syncInstallEnabled();
@@ -1859,7 +2024,8 @@ export class App {
     const form = el(
       "form",
       { method: "dialog", class: "add-machine-form" },
-      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.select") }), selectField(sel)),
+      // 下拉不能包在 <label> 裡（點清單項目會被轉成再點一次按鈕）
+      el("div", { class: "field" }, el("span", { class: "field-label", id: "add-machine-select-label", text: t("gui.machines.select") }), sel.el),
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.name") }), textField(name)),
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.linux_user") }), textField(user), userErr),
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.password") }), textField(pw)),
@@ -1882,9 +2048,10 @@ export class App {
       const nm = name.value.trim();
       const usr = user.value.trim();
       if (!dist || !nm || !userOk() || pwProblem() !== "" || pw.value !== pw2.value || this.st.busy.has("install")) return;
-      const fields = [sel, name, user, pw, pw2];
+      const fields = [name, user, pw, pw2];
       install.disabled = true;
       cancel.disabled = true;
+      sel.setDisabled(true);
       for (const f of fields) f.disabled = true;
       install.querySelector(".label")!.textContent = t("gui.machines.installing");
       err.hidden = true;
@@ -1925,6 +2092,7 @@ export class App {
         progress.hidden = true;
         this.st.busy.delete("install");
         cancel.disabled = false;
+        sel.setDisabled(false);
         for (const f of fields) f.disabled = false;
         install.querySelector(".label")!.textContent = t("gui.machines.install");
         syncInstallEnabled();
@@ -1937,7 +2105,7 @@ export class App {
 
   private async openAddMachine(): Promise<void> {
     const d = this.root.querySelector<HTMLDialogElement>('[data-testid="add-machine-dialog"]')!;
-    const sel = d.querySelector<HTMLSelectElement>('[data-testid="add-machine-select"]')!;
+    const sel = this.addMachineDistro!;
     const name = d.querySelector<HTMLInputElement>('[data-testid="add-machine-name"]')!;
     const user = d.querySelector<HTMLInputElement>('[data-testid="add-machine-user"]')!;
     const pws = d.querySelectorAll<HTMLInputElement>('[data-testid="add-machine-password"], [data-testid="add-machine-password2"]');
@@ -1958,8 +2126,8 @@ export class App {
       p.setAttribute("aria-invalid", "false");
     }
     cancel.disabled = false;
-    sel.replaceChildren(el("option", { value: "", text: t("gui.machines.loading") }));
-    sel.disabled = true;
+    sel.setOptions([], "", t("gui.machines.loading"));
+    sel.setDisabled(true);
     install.disabled = true;
     d.showModal();
     try {
@@ -1968,23 +2136,18 @@ export class App {
         api.installDefaults().catch(() => ({ user: "" })),
       ]);
       user.value = defaults.user || "";
-      const opts = [
-        el("option", { value: "", text: t("gui.machines.select_placeholder") }),
-        ...online.map((o) =>
-          el("option", {
-            value: o.name,
-            text: o.friendly && o.friendly !== o.name ? `${o.friendly} (${o.name})` : o.name,
-          }),
-        ),
-      ];
-      sel.replaceChildren(...opts);
-      sel.disabled = false;
+      sel.setOptions(
+        online.map((o) => [o.name, o.friendly && o.friendly !== o.name ? `${o.friendly} (${o.name})` : o.name] as const),
+        "",
+        t("gui.machines.select_placeholder"),
+      );
+      sel.setDisabled(false);
       name.disabled = false;
       user.disabled = false;
       for (const p of pws) p.disabled = false;
       install.disabled = true;
     } catch (e) {
-      sel.replaceChildren(el("option", { value: "", text: t("gui.machines.select_placeholder") }));
+      sel.setOptions([], "", t("gui.machines.select_placeholder"));
       err.textContent = e instanceof ApiError ? e.message : String(e);
       err.hidden = false;
     }
@@ -2211,6 +2374,7 @@ export class App {
       return;
     }
     await this.refresh();
+    this.renderViewBody(); // 輪詢刷新不重建設定頁，還原完成要自己重繪
   }
 
   private lanSection(row: (label: Node, hint: string, control: Node) => HTMLElement): HTMLElement {
