@@ -81,6 +81,52 @@ func EvaluateFirewall(rules []FwRule, exe string) FirewallState {
 	return FirewallMissing
 }
 
+// FirewallMethod 是加入規則時要提權執行的程式。
+type FirewallMethod string
+
+const (
+	// MethodNetsh：提權 Windows 內建的 netsh.exe 加入規則（UAC 顯示已驗證的「網路命令殼層／Microsoft Windows」，詳細資料列出整條規則）。
+	MethodNetsh FirewallMethod = "netsh"
+	// MethodHelper：提權 wsld-gui.exe --allow-firewall（COM）；能一次停用封鎖規則並更新既有規則，netsh 一行指令做不到。
+	MethodHelper FirewallMethod = "helper"
+)
+
+// AppRuleDescription 是規則的描述（netsh 與 COM 共用）。
+const AppRuleDescription = "Lets devices on the same network reach container ports forwarded by wsld-gui (LAN access)."
+
+// PlanFirewall 決定加入規則的方式：有針對 exe 的對內封鎖規則、已有 wsld 自己的規則（netsh add 會重複），
+// 或 exe 位於 UNC 路徑（dev build）時用 helper；其餘用 netsh。
+func PlanFirewall(rules []FwRule, exe string) FirewallMethod {
+	if strings.HasPrefix(strings.ReplaceAll(exe, "/", `\`), `\\`) {
+		return MethodHelper
+	}
+	for _, r := range rules {
+		if !SamePath(r.App, exe) {
+			continue
+		}
+		if r.Name == AppRuleName || (r.Inbound && !r.Allow) {
+			return MethodHelper
+		}
+	}
+	return MethodNetsh
+}
+
+// NetshAddRuleArgs 是提權 netsh.exe 時的參數（不含程式本身）：與 AddAppRule 相同的規則（TCP、私人＋公用、僅同網段）。
+func NetshAddRuleArgs(exe string) string {
+	return `advfirewall firewall add rule name="` + AppRuleName + `" dir=in action=allow program="` + exe +
+		`" protocol=TCP profile=private,public remoteip=localsubnet interfacetype=any enable=yes description="` +
+		AppRuleDescription + `"`
+}
+
+// NetshPath 回傳 %SystemRoot%\System32\netsh.exe（以完整路徑提權，不依賴 PATH）。
+func NetshPath() string {
+	root := strings.TrimRight(os.Getenv("SystemRoot"), `\`)
+	if root == "" {
+		root = `C:\Windows`
+	}
+	return root + `\System32\netsh.exe`
+}
+
 var envRef = regexp.MustCompile(`%([^%]+)%`)
 
 // SamePath 比較兩個 Windows 路徑（不分大小寫、展開 %VAR%、統一斜線）。

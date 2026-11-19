@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -178,11 +177,12 @@ func TestLANFirewallStatus(t *testing.T) {
 	e := newEnv(t, "")
 	le := withLAN(t, e)
 	le.host.AppState = lan.FirewallMissing
-	// 授權屬於 app 層級：區網存取關閉時也回報
-	if st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", ""))); st.Firewall != lan.FirewallMissing {
-		t.Fatalf("firewall must be reported while off: %q", st.Firewall)
+	// 授權屬於 app 層級：區網存取關閉時也回報，並附上授權方式與 exe 路徑（說明對話框用）
+	st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", "")))
+	if st.Firewall != lan.FirewallMissing || st.FirewallMethod != lan.MethodNetsh || st.Exe != `C:\wsld\wsld-gui.exe` {
+		t.Fatalf("firewall must be reported while off: %+v", st)
 	}
-	st := decodeLAN(t, mustBody(e.req(t, "PUT", "/api/lan", `{"enabled":true}`)))
+	st = decodeLAN(t, mustBody(e.req(t, "PUT", "/api/lan", `{"enabled":true}`)))
 	if !st.Enabled || st.Firewall != lan.FirewallMissing || le.host.AllowCalls != 0 {
 		t.Fatalf("enable must only save the setting, never elevate: %+v allow=%d", st, le.host.AllowCalls)
 	}
@@ -190,45 +190,67 @@ func TestLANFirewallStatus(t *testing.T) {
 	if resp.StatusCode != 200 || decodeLAN(t, b).Firewall != lan.FirewallAllowed || le.host.AllowCalls != 1 {
 		t.Fatalf("status=%d body=%s allow=%d", resp.StatusCode, b, le.host.AllowCalls)
 	}
+	if el := le.host.Elevated[0]; !strings.HasSuffix(el.File, `\System32\netsh.exe`) {
+		t.Fatalf("missing rule must elevate netsh: %+v", el)
+	}
 }
 
-func TestEnsureFirewallAtStartup(t *testing.T) {
-	ctx := context.Background()
-	for _, c := range []struct {
-		state lan.FirewallState
-		calls int
-	}{
-		{lan.FirewallMissing, 1},
-		{lan.FirewallBlocked, 1},
-		{lan.FirewallAllowed, 0},
-		{lan.FirewallUnknown, 0},
-	} {
-		e := newEnv(t, "")
-		le := withLAN(t, e)
-		le.host.AppState = c.state
-		if err := e.s.EnsureFirewall(ctx); err != nil {
-			t.Fatalf("%s: %v", c.state, err)
-		}
-		if le.host.AllowCalls != c.calls {
-			t.Fatalf("%s: allow calls = %d, want %d", c.state, le.host.AllowCalls, c.calls)
-		}
-		if e.s.cfg().LANAccess {
-			t.Fatalf("%s: startup authorization must not turn LAN access on", c.state)
-		}
-	}
-
-	// 取消 UAC：回傳 ErrUACCanceled，狀態維持未授權
+func TestLANFirewallBlockedUsesHelper(t *testing.T) {
 	e := newEnv(t, "")
 	le := withLAN(t, e)
-	le.host.AppState, le.host.AllowErr = lan.FirewallBlocked, lan.ErrUACCanceled
-	if err := e.s.EnsureFirewall(ctx); !errors.Is(err, lan.ErrUACCanceled) {
-		t.Fatalf("err = %v", err)
+	le.host.AppState = lan.FirewallBlocked
+	if st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", ""))); st.FirewallMethod != lan.MethodHelper {
+		t.Fatalf("blocked must use the helper: %+v", st)
 	}
+	if resp, b := e.req(t, "POST", "/api/lan/firewall", ""); resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	if el := le.host.Elevated[0]; el.File != `C:\wsld\wsld-gui.exe` || el.Params != lan.AllowFirewallFlag {
+		t.Fatalf("elevated = %+v", el)
+	}
+}
 
-	// 沒有 LAN（非 Windows）：不做事
-	e.s.LAN = nil
-	if err := e.s.EnsureFirewall(ctx); err != nil {
-		t.Fatal(err)
+// 未授權時不在內網 IP 監聽：避免 Windows 自己跳「安全性警訊」（按取消會產生封鎖規則）；授權後立即開始轉發。
+func TestLANNoListenUntilFirewallAllowed(t *testing.T) {
+	for _, state := range []lan.FirewallState{lan.FirewallMissing, lan.FirewallBlocked} {
+		e := newEnv(t, "")
+		le := withLAN(t, e)
+		le.host.AppState = state
+		st := decodeLAN(t, mustBody(e.req(t, "PUT", "/api/lan", `{"enabled":true}`)))
+		if !st.Enabled || len(st.Forwards) != 0 || len(le.listen) != 0 {
+			t.Fatalf("%s: must not listen: st=%+v listen=%v", state, st, le.listen)
+		}
+		e.s.SyncLAN(t.Context())
+		if len(le.listen) != 0 {
+			t.Fatalf("%s: background sync listened: %v", state, le.listen)
+		}
+		st = decodeLAN(t, mustBody(e.req(t, "POST", "/api/lan/firewall", "")))
+		if st.Firewall != lan.FirewallAllowed || len(st.Forwards) != 1 || strings.Join(le.listen, ",") != "192.168.1.20:8080" {
+			t.Fatalf("%s: after allow: st=%+v listen=%v", state, st, le.listen)
+		}
+	}
+	// 查不到狀態（被原則管理、COM 失敗）時照常轉發
+	e := newEnv(t, "")
+	le := withLAN(t, e)
+	le.host.AppState = lan.FirewallUnknown
+	if st := decodeLAN(t, mustBody(e.req(t, "PUT", "/api/lan", `{"enabled":true}`))); len(st.Forwards) != 1 {
+		t.Fatalf("unknown must still forward: %+v", st)
+	}
+}
+
+// 背景同步沿用快取的防火牆狀態（逐條讀規則較慢）；GET /api/lan 會強制重新讀取。
+func TestLANFirewallStateCached(t *testing.T) {
+	e := newEnv(t, "")
+	le := withLAN(t, e)
+	le.host.AppState = lan.FirewallMissing
+	_, _ = e.req(t, "PUT", "/api/lan", `{"enabled":true}`)
+	le.host.Set(func(h *lan.FakeHost) { h.AppState = lan.FirewallAllowed }) // 例如使用者在 wf.msc 手動加了規則
+	e.s.SyncLAN(t.Context())
+	if len(le.listen) != 0 {
+		t.Fatalf("background sync must use the cached state: %v", le.listen)
+	}
+	if st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", ""))); st.Firewall != lan.FirewallAllowed || len(st.Forwards) != 1 {
+		t.Fatalf("GET must refresh: %+v", st)
 	}
 }
 
@@ -237,8 +259,11 @@ func TestFirewallPendingWhileUACOpen(t *testing.T) {
 	le := withLAN(t, e)
 	le.host.AppState = lan.FirewallMissing
 	le.host.AllowHold = make(chan struct{})
-	done := make(chan error, 1)
-	go func() { done <- e.s.EnsureFirewall(context.Background()) }()
+	first := make(chan int, 1)
+	go func() {
+		resp, _ := e.req(t, "POST", "/api/lan/firewall", "")
+		first <- resp.StatusCode
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for !decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", ""))).FirewallPending {
 		if time.Now().After(deadline) {
@@ -246,18 +271,15 @@ func TestFirewallPendingWhileUACOpen(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// 設定頁在此時按「授權防火牆」：排在啟動的請求後面，對方授權完成就不再跳第二次 UAC
-	retry := make(chan int, 1)
+	// 第二次按下（例如另一個視窗）：排在第一個請求後面，對方授權完成就不再跳第二次 UAC
+	second := make(chan int, 1)
 	go func() {
 		resp, _ := e.req(t, "POST", "/api/lan/firewall", "")
-		retry <- resp.StatusCode
+		second <- resp.StatusCode
 	}()
 	close(le.host.AllowHold)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if code := <-retry; code != 200 {
-		t.Fatalf("retry status = %d", code)
+	if a, b := <-first, <-second; a != 200 || b != 200 {
+		t.Fatalf("status = %d, %d", a, b)
 	}
 	st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", "")))
 	if st.FirewallPending || st.Firewall != lan.FirewallAllowed || le.host.AllowCalls != 1 {

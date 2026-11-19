@@ -5,7 +5,15 @@ async function lanEnv(request: APIRequestContext, q: string): Promise<void> {
   expect((await request.post(`/__test/lan?${q}`)).ok()).toBeTruthy();
 }
 
-async function lanState(request: APIRequestContext): Promise<{ wslconfig: string; firewall_removes: number; firewall_allows: number; shutdowns: number }> {
+type Elevation = { file: string; params: string };
+
+async function lanState(request: APIRequestContext): Promise<{
+  wslconfig: string;
+  firewall_removes: number;
+  firewall_allows: number;
+  firewall_elevated: Elevation[];
+  shutdowns: number;
+}> {
   const r = await request.get("/__test/lan");
   expect(r.ok()).toBeTruthy();
   return r.json();
@@ -47,8 +55,9 @@ test("turning LAN access on adds a globe button that opens the container in the 
   await page.getByTestId("nav-settings").click();
   await page.getByTestId("settings-lan").click();
 
-  // 不經 wsld 確認框：直接生效；防火牆已授權時不跳 UAC
+  // 不經 wsld 確認框：直接生效；防火牆已授權時不顯示說明對話框、不跳 UAC
   await expect(page.getByTestId("confirm-dialog")).not.toBeVisible();
+  await expect(page.getByTestId("fw-dialog")).not.toBeVisible();
   await expect(page.getByTestId("settings-lan")).toHaveAttribute("aria-checked", "true");
   await expect(page.getByTestId("settings-lan-status")).toContainText("forwarding 1 address");
   await expect(page.getByTestId("notice")).toContainText("LAN access on");
@@ -181,36 +190,95 @@ test("delete dialogs keep their danger button after a Restore NAT confirm", asyn
   await expect(page.getByTestId("confirm-ok")).toHaveText("Confirm");
 });
 
-test("turning LAN access on only saves the setting — no UAC even when wsld-gui is not allowed yet", async ({ page, request }) => {
+test("turning LAN access on explains the firewall rule before UAC, then forwards once allowed", async ({ page, request }) => {
   await lanEnv(request, "fw=missing");
   await open(page);
   await page.getByTestId("nav-settings").click();
+  // 啟動與進設定頁都不提權
+  await expect(page.getByTestId("fw-dialog")).not.toBeVisible();
   await expect(page.getByTestId("settings-lan-fw-warn")).toHaveCount(0); // 關閉時不提示
+  expect((await lanState(request)).firewall_allows).toBe(0);
+
   await page.getByTestId("settings-lan").click();
   await expect(page.getByTestId("settings-lan")).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByTestId("notice")).toContainText("LAN access on");
+  const dialog = page.getByTestId("fw-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId("fw-dialog-title")).toHaveText("Allow LAN connections through Windows Firewall");
+  const rule = page.getByTestId("fw-dialog-rule");
+  await expect(rule).toContainText("wsld-gui (LAN access)");
+  await expect(rule).toContainText("C:\\wsld\\wsld-gui.exe");
+  await expect(rule).toContainText("TCP");
+  await expect(rule).toContainText("Private + Public");
+  await expect(rule).toContainText("same subnet only");
+  const method = page.getByTestId("fw-dialog-method");
+  await expect(method).toHaveAttribute("data-method", "netsh");
+  await expect(method).toContainText("Network Command Shell (netsh.exe)");
+  await expect(method).toContainText("Microsoft Windows");
+  // 對話框開著時尚未提權，轉發暫停
   expect((await lanState(request)).firewall_allows).toBe(0);
-  // 啟動時的授權被取消過 → 開啟後提示並提供重試；沒有獨立的防火牆列
-  await expect(page.getByTestId("settings-lan-firewall")).toHaveCount(0);
-  const warn = page.getByTestId("settings-lan-fw-warn");
-  await expect(warn).toHaveAttribute("data-state", "missing");
-  await expect(warn).toContainText("UAC prompt at startup was canceled");
-  await expect(warn).toContainText("moving or renaming the file");
-  await warn.getByTestId("settings-lan-fw-allow").click();
+  await expect(page.getByTestId("settings-lan-status")).toContainText("paused until wsld-gui is allowed");
+
+  await page.getByTestId("fw-dialog-continue").click();
+  await expect(dialog).not.toBeVisible();
   await expect(page.getByTestId("notice")).toContainText("Firewall rule added");
   await expect(page.getByTestId("settings-lan-fw-warn")).toHaveCount(0);
-  expect((await lanState(request)).firewall_allows).toBe(1);
+  await expect(page.getByTestId("settings-lan-status")).toContainText("forwarding 1 address");
+  const st = await lanState(request);
+  expect(st.firewall_allows).toBe(1);
+  expect(st.firewall_elevated[0].file).toMatch(/\\System32\\netsh\.exe$/);
+  expect(st.firewall_elevated[0].params).toContain("remoteip=localsubnet");
 });
 
-test("the startup firewall request shows as waiting in Settings until UAC is answered", async ({ page, request }) => {
+test("Not now keeps LAN access on with a paused warning; the button reopens the explanation", async ({ page, request }) => {
+  await lanEnv(request, "fw=missing");
+  await open(page);
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("settings-lan").click();
+  await expect(page.getByTestId("fw-dialog")).toBeVisible();
+  await page.getByTestId("fw-dialog-later").click();
+  await expect(page.getByTestId("fw-dialog")).not.toBeVisible();
+  await expect(page.getByTestId("settings-lan")).toHaveAttribute("aria-checked", "true");
+  expect((await lanState(request)).firewall_allows).toBe(0);
+  const warn = page.getByTestId("settings-lan-fw-warn");
+  await expect(warn).toHaveAttribute("data-state", "missing");
+  await expect(warn).toContainText("forwarding is paused");
+  await expect(warn).toContainText("moving or renaming the file");
+  // 沒有轉發 → 容器列沒有地球按鈕
+  await page.getByTestId("nav-containers").click();
+  await expect(page.getByTestId("btn-lan-web")).toHaveCount(0);
+  await page.getByTestId("nav-settings").click();
+
+  await page.getByTestId("settings-lan-fw-allow").click();
+  await expect(page.getByTestId("fw-dialog")).toBeVisible();
+  expect((await lanState(request)).firewall_allows).toBe(0);
+  await page.getByTestId("fw-dialog-continue").click();
+  await expect(page.getByTestId("settings-lan-fw-warn")).toHaveCount(0);
+  expect((await lanState(request)).firewall_allows).toBe(1);
+  await page.getByTestId("nav-containers").click();
+  await expect(page.getByTestId("btn-lan-web")).toBeVisible();
+});
+
+test("a blocked wsld-gui is fixed by wsld-gui itself and the dialog says so", async ({ page, request }) => {
+  await lanEnv(request, "fw=blocked");
+  await open(page);
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("settings-lan").click();
+  const method = page.getByTestId("fw-dialog-method");
+  await expect(method).toHaveAttribute("data-method", "helper");
+  await expect(method).toContainText("UAC prompt shows wsld-gui");
+  await expect(method).toContainText("does not start a second copy");
+  await page.getByTestId("fw-dialog-continue").click();
+  await expect(page.getByTestId("settings-lan-fw-warn")).toHaveCount(0);
+  const st = await lanState(request);
+  expect(st.firewall_elevated).toEqual([{ file: "C:\\wsld\\wsld-gui.exe", params: "--allow-firewall" }]);
+});
+
+test("the firewall request shows as waiting in Settings until UAC is answered", async ({ page, request }) => {
   await lanEnv(request, "fw=missing&fwhold=1");
   await open(page);
   await page.getByTestId("nav-settings").click();
   await page.getByTestId("settings-lan").click();
-  await expect(page.getByTestId("settings-lan")).toHaveAttribute("aria-checked", "true");
-  await lanEnv(request, "startup=1");
-  await page.getByTestId("nav-containers").click();
-  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("fw-dialog-continue").click();
   const warn = page.getByTestId("settings-lan-fw-warn");
   await expect(warn).toHaveAttribute("data-state", "pending");
   await expect(warn).toContainText("Waiting for UAC");
@@ -225,14 +293,14 @@ test("retrying the firewall after a canceled UAC keeps the warning and error, th
   await open(page);
   await page.getByTestId("nav-settings").click();
   await page.getByTestId("settings-lan").click();
+  await page.getByTestId("fw-dialog-continue").click();
+  await expect(page.getByTestId("error-banner")).toContainText("Canceled at the UAC prompt");
   const warn = page.getByTestId("settings-lan-fw-warn");
   await expect(warn).toHaveAttribute("data-state", "blocked");
-  await warn.getByTestId("settings-lan-fw-allow").click();
-  await expect(page.getByTestId("error-banner")).toContainText("Canceled at the UAC prompt");
-  await expect(page.getByTestId("settings-lan-fw-warn")).toBeVisible();
 
   await lanEnv(request, "fwfail=0");
   await page.getByTestId("settings-lan-fw-allow").click();
+  await page.getByTestId("fw-dialog-continue").click();
   await expect(page.getByTestId("settings-lan-fw-warn")).toHaveCount(0);
   expect((await lanState(request)).firewall_allows).toBe(2);
 });
@@ -245,6 +313,11 @@ test("LAN section is translated in zh-TW", async ({ page, request }) => {
   await expect(page.getByTestId("settings-lan-status")).toContainText("關閉");
   await lanEnv(request, "fw=missing&fwfail=1");
   await page.getByTestId("settings-lan").click();
-  await expect(page.getByTestId("settings-lan-fw-warn")).toContainText("啟動時的 UAC 被取消");
+  await expect(page.getByTestId("fw-dialog-title")).toHaveText("允許區網連線通過 Windows 防火牆");
+  await expect(page.getByTestId("fw-dialog-rule")).toContainText("私人＋公用");
+  await expect(page.getByTestId("fw-dialog-method")).toContainText("網路命令殼層");
+  await expect(page.getByTestId("fw-dialog-continue")).toContainText("繼續");
+  await page.getByTestId("fw-dialog-later").click();
+  await expect(page.getByTestId("settings-lan-fw-warn")).toContainText("轉發已暫停");
   await expect(page.getByTestId("settings-lan-fw-allow")).toContainText("授權防火牆");
 });

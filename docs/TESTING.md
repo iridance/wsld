@@ -28,7 +28,7 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 - **`wsl.Runner`**：所有 `wsl.exe` 呼叫走介面；測試以 `fakeRunner` 依 `args` 串接鍵回應（含 UTF-16LE 輸出）。
 - **`dockerapi`**：`httptest.Server` 模擬 Engine API；exec 以 `http.Hijacker` 模擬 101 Upgrade。
 - **`lan.Forwarder`**：以真的 loopback 監聽測轉發、關閉、重試與排序；`Listen` 可注入（GUI 測試與 testhost 改綁 127.0.0.1 隨機埠）。`lan.PublishedTargets` 為純函式。
-- **`lan.Manager`**（0.9.0 mirrored 清理與埠等待）：Windows 端副作用（`.wslconfig` 路徑、UAC 移除防火牆規則、規則數、網卡、netstat）走 `lan.Host`；測試用 `lan.FakeHost`。testhost 以 `/__test/lan?mirrored=1&fail=1&busy=8080` 模擬遺留設定、取消 UAC、埠被佔用；`fw=missing|blocked` 模擬 wsld-gui 尚未通過防火牆，`fwfail=1` 模擬加規則時取消 UAC，`fwhold=1`／`fwhold=0` 讓 UAC 停在等待中／放行，`startup=1` 於背景執行啟動時的 `EnsureFirewall`。防火牆判定（`lan.EvaluateFirewall`、`lan.SamePath`）為純函式單元測試；COM 讀寫與 UAC（`firewall_windows.go`）需在 Windows 實機驗證。
+- **`lan.Manager`**（0.9.0 mirrored 清理與埠等待）：Windows 端副作用（`.wslconfig` 路徑、UAC 移除防火牆規則、規則數、網卡、netstat）走 `lan.Host`；測試用 `lan.FakeHost`。testhost 以 `/__test/lan?mirrored=1&fail=1&busy=8080` 模擬遺留設定、取消 UAC、埠被佔用；`fw=missing|blocked` 模擬 wsld-gui 尚未通過防火牆，`fwfail=1` 模擬加規則時取消 UAC，`fwhold=1`／`fwhold=0` 讓 UAC 停在等待中／放行；`GET /__test/lan` 的 `firewall_elevated` 列出提權過的程式與參數（netsh 或 `wsld-gui.exe --allow-firewall`）。防火牆判定與授權方式（`lan.EvaluateFirewall`、`lan.PlanFirewall`、`lan.NetshAddRuleArgs`、`lan.SamePath`）為純函式單元測試；COM 讀寫、netsh 與 UAC（`firewall_windows.go`）需在 Windows 實機驗證。
 - **`lifecycle.Manager`**：`Sleep`／`PingInterval` 可注入，避免重試等待。
 - **`doctor.Deps`**：`Processes`（tasklist）與 `Dial`（埠探測）可注入。
 - **`cli.App`**：`NewAPI`、`Exec` 注入；測試斷言退出碼 0／1／2／3／4 與輸出片段。
@@ -47,7 +47,7 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 ## 實機驗收（Windows）
 
 ```bash
-make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.12.0）
+make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.13.0）
 ./dist/wsld.exe init                  # 在 WSL Ubuntu 內安裝 Docker、寫 %APPDATA%\wsld\config.toml
 curl.exe http://127.0.0.1:23750/_ping # OK
 ./dist/wsld.exe status && ./dist/wsld.exe doctor
@@ -60,7 +60,8 @@ DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d --name t -v "$PWD:/app" alpine s
 ```bash
 ./dist/wsld.exe lan restore-nat --yes # 若 0.9.0 曾開過 mirrored：UAC 移除規則、還原 NAT、重啟 WSL
 DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d -p 8080:80 nginx:alpine
-# 啟動 wsld-gui（尚未授權時）→ UAC（顯示 wsld-gui）→ 是；Settings › 網路 › 區網存取 開啟（不跳 UAC）；另一台設備連 http://<內網IP>:<埠>
+# 啟動 wsld-gui（尚未授權時）→ 不跳 UAC；Settings › 網路 › 區網存取 開啟 → 說明對話框 → 繼續 → UAC 顯示「網路命令殼層」（Microsoft Windows，詳細資料有完整 netsh 規則）→ 是；授權前不出現 Windows 安全性警訊
+# 以 wf.msc 替 wsld-gui.exe 加一條對內封鎖規則 → 再授權：對話框說明由 wsld-gui 處理，UAC 顯示 wsld-gui，完成後封鎖規則停用
 # 另一台設備：http://<內網IP>:8080 → nginx 首頁；curl http://<內網IP>:23750/_ping → 必須連不到（API 不轉發）
 # 容器頁 nginx 列出現地球按鈕，點擊以瀏覽器開啟 http://<內網IP>:8080；停掉容器：該位址消失；關閉開關：另一台設備連不到，本機 127.0.0.1:8080 仍可用
 ```

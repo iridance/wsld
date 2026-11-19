@@ -1,7 +1,7 @@
 # wsld Roadmap
 
-版本：0.12.0（git tag `v0.12.0`）  
-對應規格：[SPEC.md](SPEC.md)（**0.12.0 已交付**；Phase 0–4 基底已落地）
+版本：0.13.0（git tag `v0.13.0`）  
+對應規格：[SPEC.md](SPEC.md)（**0.13.0 已交付**；Phase 0–4 基底已落地）
 
 ## 總覽
 
@@ -21,7 +21,7 @@ Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-W
   6e Machines/Settings/Terminal/Tray
   6f Parity 驗證 + cutover（→ v2.0.0）
 
-0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT；**0.11.0**（`v0.11.0`）= 區網存取的防火牆授權（UAC 提權 wsld-gui 自身加規則）＋容器列地球按鈕＋自繪下拉選單；**0.11.1**（`v0.11.1`）= 修正 Kali 等 Debian 衍生版 bootstrap 404＋WSL 發行版分類表（`scripts/lib/distros.tsv`）＋「設為目前」改稱「設為主要」（未單獨發布，併入 v0.12.0）；**0.12.0**（`v0.12.0`）= Machines 卡片啟動／停止發行版＋wsld-gui 啟動時請求防火牆授權（區網存取開關只改設定）
+0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT；**0.11.0**（`v0.11.0`）= 區網存取的防火牆授權（UAC 提權 wsld-gui 自身加規則）＋容器列地球按鈕＋自繪下拉選單；**0.11.1**（`v0.11.1`）= 修正 Kali 等 Debian 衍生版 bootstrap 404＋WSL 發行版分類表（`scripts/lib/distros.tsv`）＋「設為目前」改稱「設為主要」（未單獨發布，併入 v0.12.0）；**0.12.0**（`v0.12.0`）= Machines 卡片啟動／停止發行版＋wsld-gui 啟動時請求防火牆授權（區網存取開關只改設定）；**0.13.0**（`v0.13.0`）= 防火牆授權改為使用者開啟區網存取時才詢問：wsld 先說明規則再提權 netsh（有封鎖規則時改用 wsld-gui helper），未授權前不在內網 IP 監聽
 之後 v2.0 = Phase 6（6a–6f）
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -252,7 +252,7 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ### 其他候選
 
-- [x] 區網存取：0.9.0 以 mirrored＋Hyper-V 防火牆交付；0.10.0 改為 wsld-gui 內建轉發器（Windows 原生防火牆確認、不重啟 WSL），並提供 `wsld lan restore-nat` 還原 mirrored；0.11.0 開啟時以 UAC 替 wsld-gui 加入防火牆規則（私人＋公用、LocalSubnet），設定頁顯示授權狀態；0.12.0 改為 wsld-gui 啟動時請求授權，開關只改設定（見 SPEC §4.5）
+- [x] 區網存取：0.9.0 以 mirrored＋Hyper-V 防火牆交付；0.10.0 改為 wsld-gui 內建轉發器（Windows 原生防火牆確認、不重啟 WSL），並提供 `wsld lan restore-nat` 還原 mirrored；0.11.0 開啟時以 UAC 替 wsld-gui 加入防火牆規則（私人＋公用、LocalSubnet），設定頁顯示授權狀態；0.12.0 改為 wsld-gui 啟動時請求授權，開關只改設定；0.13.0 改回使用者操作時才請求：先顯示 wsld 說明對話框，再提權 Windows 內建 netsh（UAC 顯示 Microsoft 已驗證的網路命令殼層），未授權前不監聽（見 SPEC §4.5）
 - [ ] npiperelay（Windows named pipe ↔ 引擎）
 - [ ] 自動更新（`wsld`／`wsld-gui` 本體）
 - [ ] arm64 正式支援
@@ -317,6 +317,12 @@ Extra ≠ 0.5／v2.0 完成條件
 - Tray icon（`Shell_NotifyIcon`）與 XAML `DispatcherQueue` 共存於同一行程的 spike
 - 背景 tokio runtime（跑 axum 橋接 server）與 UI thread 的 threading 方案 spike（見 GUI-WINUI.md §6.2 預設方案）
 - 封裝模式決定：MSIX vs unpackaged
+  - 併入 **MSIX 防火牆 spike**：以 manifest 的 `desktop2:Extension Category="windows.firewallRules"` 在安裝時建立規則，執行時免 UAC（取代 0.13.0 的 netsh 提權）。需驗證：
+    - 一般安裝（雙擊 .msix，非 App Attach）是否確實建立規則
+    - 規則只能指定方向／協定／設定檔／埠範圍，**不支援 RemoteAddresses=LocalSubnet**，範圍比現行規則寬
+    - AppData 寫入虛擬化是否把 `%APPDATA%\wsld\config.toml` 與 CLI `wsld.exe` 分開
+    - 登入自啟改 `windows.startupTask`、CLI 以 `appExecutionAlias` 暴露
+    - 簽章管道（Microsoft Store 或付費簽章服務；自簽憑證需管理員匯入，等於又回到 UAC）與 CI 打包（`makeappx`／`signtool`）
 
 #### 完成定義
 

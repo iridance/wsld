@@ -364,6 +364,14 @@ dialog .add-machine-form { display: grid; gap: 14px; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
 dialog p { margin: 0 0 16px; max-width: 440px; white-space: pre-line; }
 dialog .confirm-field { margin: 0 0 16px; }
+dl.fw-rule {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0 0 16px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+}
+dl.fw-rule dt { color: var(--muted); }
+dl.fw-rule dd { margin: 0; overflow-wrap: anywhere; }
+dl.fw-rule dd.mono { font-family: var(--mono); font-size: 12px; }
+dialog p.fw-method { color: var(--muted); font-size: 13px; }
 pre.conf {
   margin: 0; padding: 10px 12px; background: var(--term-bg); color: var(--term-fg);
   border-radius: 6px; font: 12px/1.5 var(--mono); max-height: 50vh; overflow: auto;

@@ -34,10 +34,10 @@ type Host interface {
 	Interfaces() ([]Iface, error)
 	// PortInUse 回報 Windows 上是否仍有任何 TCP 連線／監聽佔用此本機埠（含 TIME_WAIT）。
 	PortInUse(ctx context.Context, port int) (bool, error)
-	// AppFirewall 回傳 exe 的對內防火牆授權狀態（讀取規則，不需提權）。
-	AppFirewall(ctx context.Context, exe string) (FirewallState, error)
-	// AllowApp 以系統管理員身分（UAC）執行「exe --allow-firewall」替 exe 加入對內允許規則；取消 UAC 回 ErrUACCanceled。
-	AllowApp(ctx context.Context, exe string) error
+	// AppRules 讀出 ApplicationName 為 exe 的防火牆規則（不需提權）。
+	AppRules(ctx context.Context, exe string) ([]FwRule, error)
+	// RunElevated 以系統管理員身分（UAC）執行 file params 並等它結束；取消 UAC 回 ErrUACCanceled，結束碼非 0 回錯誤。
+	RunElevated(ctx context.Context, file, params string) error
 }
 
 // Iface 是一張網卡的名稱與位址。
@@ -88,24 +88,40 @@ func (m *Manager) RestoreNAT(ctx context.Context) error {
 	return m.editConfig(func(c string) string { return RemoveKey(c, "wsl2", "networkingMode") })
 }
 
-// Firewall 回傳 Exe 的防火牆授權狀態；Exe 未設定或查詢失敗時回 FirewallUnknown。
-func (m *Manager) Firewall(ctx context.Context) FirewallState {
-	if m.Exe == "" {
-		return FirewallUnknown
-	}
-	st, err := m.Host.AppFirewall(ctx, m.Exe)
-	if err != nil {
-		return FirewallUnknown
-	}
-	return st
+// FirewallInfo 是 Exe 的防火牆授權狀態，以及要授權時會用的提權方式。
+type FirewallInfo struct {
+	State  FirewallState  `json:"state"`
+	Method FirewallMethod `json:"method"`
 }
 
-// AllowFirewall 以 UAC 替 Exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段），並停用針對 Exe 的對內封鎖規則。
+// FirewallInfo 讀取 Exe 的規則；Exe 未設定或查詢失敗時 State 為 FirewallUnknown（Method 為 netsh）。
+func (m *Manager) FirewallInfo(ctx context.Context) FirewallInfo {
+	if m.Exe == "" {
+		return FirewallInfo{State: FirewallUnknown, Method: MethodNetsh}
+	}
+	rules, err := m.Host.AppRules(ctx, m.Exe)
+	if err != nil {
+		return FirewallInfo{State: FirewallUnknown, Method: PlanFirewall(nil, m.Exe)}
+	}
+	return FirewallInfo{State: EvaluateFirewall(rules, m.Exe), Method: PlanFirewall(rules, m.Exe)}
+}
+
+// AllowFirewall 以 UAC 替 Exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段）：
+// 一般提權 netsh.exe；有封鎖規則或既有 wsld 規則時提權 wsld-gui.exe --allow-firewall（一併停用封鎖規則）。
 func (m *Manager) AllowFirewall(ctx context.Context) error {
 	if m.Exe == "" {
 		return errors.New("wsld-gui executable path unknown")
 	}
-	return m.Host.AllowApp(ctx, m.Exe)
+	if m.FirewallInfo(ctx).Method == MethodHelper {
+		return m.Host.RunElevated(ctx, m.Exe, AllowFirewallFlag)
+	}
+	if err := m.Host.RunElevated(ctx, NetshPath(), NetshAddRuleArgs(m.Exe)); err != nil {
+		if errors.Is(err, ErrUACCanceled) {
+			return err
+		}
+		return fmt.Errorf("netsh: %w", err)
+	}
+	return nil
 }
 
 // PortWaitTimeout 是 wsl --shutdown 後等 Windows 釋放 API 埠的上限（TIME_WAIT 預設 120 秒）。

@@ -700,6 +700,7 @@ export class App {
         ),
       ),
       this.buildConfirmDialog(),
+      this.buildFirewallDialog(),
       this.buildAddMachineDialog(),
     );
     this.renderNav();
@@ -2361,7 +2362,7 @@ export class App {
     if (this.st.view === "settings") this.renderViewBody();
   }
 
-  /** 開／關區網存取：只寫設定並立即生效（wsld-gui 開始在內網 IP 監聽）。防火牆授權在 wsld-gui 啟動時已請求，這裡不提權。 */
+  /** 開／關區網存取：寫設定並立即生效。開啟時若 wsld-gui 尚未通過防火牆，接著顯示說明對話框（使用者確認後才跳 UAC）。 */
   private async setLAN(enabled: boolean): Promise<void> {
     this.st.lanApplying = "toggle";
     this.renderViewBody();
@@ -2377,9 +2378,70 @@ export class App {
     }
     if (ok) this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
     this.renderViewBody();
+    const fw = this.st.lan?.firewall;
+    if (ok && enabled && (fw === "missing" || fw === "blocked")) await this.askFirewall();
   }
 
-  /** 重試防火牆授權（啟動時的 UAC 被取消時）：以 UAC 替 wsld-gui.exe 加入對內允許規則（私人＋公用網路、僅同網段）。 */
+  // ---- 防火牆授權說明對話框 ----------------------------------------------------
+
+  private firewallResolve?: (ok: boolean) => void;
+
+  /** UAC 本身看不出在授權什麼：先由 wsld 說明要加的規則，以及接下來 UAC 會顯示哪個程式。 */
+  private buildFirewallDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "fw-dialog", "aria-labelledby": "fw-dialog-title" }) as HTMLDialogElement;
+    const ok = btn({ class: "primary", type: "button", "data-testid": "fw-dialog-continue" }, "shield", t("gui.lan.fw.continue"));
+    const later = btn({ type: "button", "data-testid": "fw-dialog-later" }, "close", t("gui.lan.fw.later"));
+    ok.onclick = () => {
+      this.firewallResolve?.(true);
+      this.firewallResolve = undefined;
+      d.close();
+    };
+    later.onclick = () => d.close();
+    d.addEventListener("close", () => {
+      this.firewallResolve?.(false);
+      this.firewallResolve = undefined;
+    });
+    d.append(
+      el("h2", { id: "fw-dialog-title", "data-testid": "fw-dialog-title" }),
+      el("p", { "data-testid": "fw-dialog-intro" }),
+      el("dl", { class: "fw-rule", "data-testid": "fw-dialog-rule" }),
+      el("p", { class: "fw-method", "data-testid": "fw-dialog-method" }),
+      el("div", { class: "row" }, later, ok),
+    );
+    return d;
+  }
+
+  /** 顯示說明對話框；按「繼續」才以 UAC 加入規則。 */
+  private async askFirewall(): Promise<void> {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="fw-dialog"]');
+    const s = this.st.lan;
+    if (!d || !s || d.open) return;
+    const method = s.firewall_method === "helper" ? "helper" : "netsh";
+    d.querySelector('[data-testid="fw-dialog-title"]')!.textContent = t("gui.lan.fw.title");
+    d.querySelector('[data-testid="fw-dialog-intro"]')!.textContent = t("gui.lan.fw.intro");
+    const rows: [string, string][] = [
+      ["gui.lan.fw.rule.name", "wsld-gui (LAN access)"],
+      ["gui.lan.fw.rule.program", s.exe || "wsld-gui.exe"],
+      ["gui.lan.fw.rule.protocol", "TCP"],
+      ["gui.lan.fw.rule.networks", t("gui.lan.fw.rule.networks_value")],
+      ["gui.lan.fw.rule.remote", t("gui.lan.fw.rule.remote_value")],
+    ];
+    d.querySelector('[data-testid="fw-dialog-rule"]')!.replaceChildren(
+      ...rows.flatMap(([k, v]) => [el("dt", { text: t(k) }), el("dd", { class: k.endsWith("program") ? "mono" : "", text: v })]),
+    );
+    const m = d.querySelector<HTMLElement>('[data-testid="fw-dialog-method"]')!;
+    m.dataset.method = method;
+    m.textContent = t(`gui.lan.fw.method.${method}`);
+    d.querySelector('[data-testid="fw-dialog-continue"]')!.replaceChildren(icon("shield"), el("span", { class: "label", text: t("gui.lan.fw.continue") }));
+    d.querySelector('[data-testid="fw-dialog-later"]')!.replaceChildren(icon("close"), el("span", { class: "label", text: t("gui.lan.fw.later") }));
+    const go = await new Promise<boolean>((resolve) => {
+      this.firewallResolve = resolve;
+      d.showModal();
+    });
+    if (go) await this.allowFirewall();
+  }
+
+  /** 以 UAC 替 wsld-gui.exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段）；只在說明對話框按「繼續」後呼叫。 */
   private async allowFirewall(): Promise<void> {
     this.st.lanApplying = "firewall";
     this.st.lastError = undefined;
@@ -2426,7 +2488,7 @@ export class App {
     this.renderViewBody(); // 輪詢刷新不重建設定頁，還原完成要自己重繪
   }
 
-  /** 啟動時的防火牆 UAC 還在等使用者回應：留在設定頁時每 1.5 秒重查，回應後更新提示。 */
+  /** 防火牆 UAC 還在等使用者回應（例如離開設定頁後再回來）：留在設定頁時每 1.5 秒重查，回應後更新提示。 */
   private lanPendingTimer?: number;
   private pollLANWhilePending(): void {
     if (this.lanPendingTimer !== undefined) return;
@@ -2458,12 +2520,13 @@ export class App {
     if (applying === "restore") statusText = t("gui.lan.status.restoring");
     else if (s && !s.enabled) statusText = t("gui.lan.status.off");
     else if (s && s.mirrored) statusText = t("gui.lan.status.blocked");
+    else if (s && (s.firewall === "missing" || s.firewall === "blocked")) statusText = t("gui.lan.status.firewall");
     else if (s && s.forwards.length === 0) statusText = t("gui.lan.status.idle");
     else if (s && okForwards.length === 0) statusText = t("gui.lan.status.failed").replace("%d", String(s.forwards.length));
     else if (s) statusText = t("gui.lan.status.on").replace("%d", String(okForwards.length));
     const status = el("span", { "data-testid": "settings-lan-status", text: statusText });
 
-    // 防火牆授權在 wsld-gui 啟動時請求；這裡只在區網存取開啟、授權仍不足時提示並提供重試
+    // 區網存取開啟、wsld-gui 尚未通過防火牆時提示（轉發暫停）；按鈕先開說明對話框，確認後才跳 UAC
     const extra: HTMLElement[] = [];
     const fw = s?.enabled && !s.mirrored ? s.firewall : "";
     const fwWaiting = applying === "firewall" || !!s?.firewall_pending;
@@ -2473,7 +2536,7 @@ export class App {
         el("p", { text: t(fwWaiting ? "gui.lan.fw.allowing" : "gui.lan.fw.warn") }));
       const allow = btn({ type: "button", "data-testid": "settings-lan-fw-allow" }, "shield", t("gui.lan.fw.allow"));
       allow.disabled = !!applying || fwWaiting;
-      allow.onclick = () => void this.allowFirewall();
+      allow.onclick = () => void this.askFirewall();
       box.append(el("div", {}, allow));
       extra.push(box);
     }

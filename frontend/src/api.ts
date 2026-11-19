@@ -166,9 +166,13 @@ export interface LANStatus {
   forwards: LANForward[];
   /** WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT） */
   mirrored: boolean;
-  /** wsld-gui.exe 的 Windows 防火牆對內授權（wsld-gui 啟動時請求，與區網存取開關無關） */
+  /** wsld-gui.exe 的 Windows 防火牆對內授權（與區網存取開關無關；missing／blocked 時不在內網 IP 監聽） */
   firewall: "allowed" | "missing" | "blocked" | "unknown" | "";
-  /** 正在等使用者回應防火牆的 UAC（啟動時的請求或設定頁按鈕） */
+  /** 授權時提權的程式：netsh（Windows 內建）或 helper（wsld-gui 自己，處理封鎖規則） */
+  firewall_method?: "netsh" | "helper";
+  /** 規則綁定的 wsld-gui.exe 路徑 */
+  exe?: string;
+  /** 正在等使用者回應防火牆的 UAC */
   firewall_pending?: boolean;
 }
 

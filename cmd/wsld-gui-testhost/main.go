@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -87,7 +86,7 @@ func main() {
 			if h.AllowHold != nil {
 				close(h.AllowHold)
 			}
-			h.AppState, h.AllowErr, h.AllowCalls, h.AllowHold = "", nil, 0, nil
+			h.AppState, h.AllowErr, h.AllowCalls, h.AllowHold, h.Elevated = "", nil, 0, nil, nil
 		})
 		lanMu.Lock()
 		lanBusy = map[int]bool{}
@@ -231,9 +230,8 @@ func main() {
 		}
 		ok(w)
 	})
-	// /__test/lan?mirrored=1&fail=1&busy=8080&fw=missing&fwfail=1&fwhold=1&startup=1：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用、
-	// wsld-gui 尚未通過防火牆（missing／blocked）、加入防火牆規則時取消 UAC、UAC 尚未回應（fwhold=0 放行）、
-	// wsld-gui 啟動時的防火牆請求（startup=1，於背景執行 EnsureFirewall）。
+	// /__test/lan?mirrored=1&fail=1&busy=8080&fw=missing&fwfail=1&fwhold=1：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用、
+	// wsld-gui 尚未通過防火牆（missing／blocked）、加入防火牆規則時取消 UAC、UAC 尚未回應（fwhold=0 放行）。
 	mux.HandleFunc("POST /__test/lan", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("mirrored") == "1" {
@@ -273,18 +271,20 @@ func main() {
 			lanBusy[p] = true
 			lanMu.Unlock()
 		}
-		if q.Get("startup") == "1" {
-			go func() { _ = srv.EnsureFirewall(context.Background()) }()
-		}
 		ok(w)
 	})
 	mux.HandleFunc("GET /__test/lan", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := os.ReadFile(lanConfigPath)
 		var removes, allows int
-		lanHost.Set(func(h *lan.FakeHost) { removes, allows = h.RemoveCalls, h.AllowCalls })
+		elevated := []lan.Elevation{}
+		lanHost.Set(func(h *lan.FakeHost) {
+			removes, allows = h.RemoveCalls, h.AllowCalls
+			elevated = append(elevated, h.Elevated...)
+		})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"wslconfig": string(b), "firewall_removes": removes, "firewall_allows": allows, "shutdowns": fwsl.Shutdowns(),
+			"wslconfig": string(b), "firewall_removes": removes, "firewall_allows": allows, "firewall_elevated": elevated,
+			"shutdowns": fwsl.Shutdowns(),
 		})
 	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {

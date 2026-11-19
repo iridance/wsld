@@ -2,6 +2,7 @@ package lan
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"sync"
@@ -24,14 +25,23 @@ type FakeHost struct {
 	PortBusyPolls int
 	// PortChecks 記錄 PortInUse 被呼叫的埠。
 	PortChecks []int
-	// AppState 是 AppFirewall 回傳的狀態（空字串 = FirewallAllowed）。
+	// AppState 決定 AppRules 回傳的規則（空字串 = FirewallAllowed）：
+	// allowed → wsld 規則；missing → 無規則；blocked → Windows 視窗按取消產生的封鎖規則；unknown → 查詢失敗。
 	AppState FirewallState
-	// AllowErr 非 nil 時 AllowApp 回傳它（例如 ErrUACCanceled）。
+	// AllowErr 非 nil 時 RunElevated 回傳它（例如 ErrUACCanceled）。
 	AllowErr error
-	// AllowCalls 記錄 AllowApp 的呼叫次數。
+	// AllowCalls 記錄 RunElevated 的呼叫次數。
 	AllowCalls int
-	// AllowHold 非 nil 時 AllowApp 等到它關閉才繼續（模擬使用者還沒回應 UAC）。
+	// Elevated 記錄 RunElevated 的每次呼叫。
+	Elevated []Elevation
+	// AllowHold 非 nil 時 RunElevated 等到它關閉才繼續（模擬使用者還沒回應 UAC）。
 	AllowHold chan struct{}
+}
+
+// Elevation 是 FakeHost.RunElevated 收到的一次提權。
+type Elevation struct {
+	File   string `json:"file"`
+	Params string `json:"params"`
 }
 
 // ConfigPath 實作 Host。
@@ -78,18 +88,24 @@ func (f *FakeHost) PortInUse(_ context.Context, port int) (bool, error) {
 	return false, nil
 }
 
-// AppFirewall 實作 Host。
-func (f *FakeHost) AppFirewall(context.Context, string) (FirewallState, error) {
+// AppRules 實作 Host：依 AppState 產生對應的規則。
+func (f *FakeHost) AppRules(_ context.Context, exe string) ([]FwRule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.AppState == "" {
-		return FirewallAllowed, nil
+	both := FwProfilePrivate | FwProfilePublic
+	switch f.AppState {
+	case "", FirewallAllowed:
+		return []FwRule{{Name: AppRuleName, App: exe, Inbound: true, Allow: true, Enabled: true, Protocol: FwProtoTCP, Profiles: both}}, nil
+	case FirewallBlocked:
+		return []FwRule{{Name: "wsld-gui", App: exe, Inbound: true, Enabled: true, Protocol: FwProtoTCP, Profiles: both}}, nil
+	case FirewallMissing:
+		return nil, nil
 	}
-	return f.AppState, nil
+	return nil, errors.New("firewall unavailable")
 }
 
-// AllowApp 實作 Host：成功後狀態變為 FirewallAllowed。
-func (f *FakeHost) AllowApp(ctx context.Context, _ string) error {
+// RunElevated 實作 Host：記錄呼叫；成功後狀態變為 FirewallAllowed。
+func (f *FakeHost) RunElevated(ctx context.Context, file, params string) error {
 	f.mu.Lock()
 	hold := f.AllowHold
 	f.mu.Unlock()
@@ -103,6 +119,7 @@ func (f *FakeHost) AllowApp(ctx context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.AllowCalls++
+	f.Elevated = append(f.Elevated, Elevation{File: file, Params: params})
 	if f.AllowErr != nil {
 		return f.AllowErr
 	}

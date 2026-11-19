@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.12.0**（tag `v0.12.0`）已交付（Machines 卡片可啟動／停止發行版；wsld-gui 啟動時就請求防火牆授權，區網存取開關只改設定；並含 0.11.1 的 Kali bootstrap 修正與「設為主要」用語）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.13.0**（tag `v0.13.0`）已交付（區網存取的防火牆授權改為使用者開啟時才詢問：先由 wsld 說明要加的規則，再提權 Windows 內建的 netsh；未授權前不在內網 IP 監聽）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -93,13 +93,13 @@ wsld-gui.exe --tray    # 只留系統匣
 2. 用 WSL Remote 開發比較順。
 3. 盡量別跟 Docker Desktop 雙引擎混著玩。
 4. API 預設 **23750**（占用會換），只聽 `127.0.0.1`。
-5. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：到 GUI Settings › 網路開啟「區網存取」，或執行 `wsld lan on`。wsld-gui 會在內網 IP 轉發容器的 published 埠。wsld-gui 啟動時若尚未通過 Windows 防火牆會跳一次 UAC 加入規則（私人＋公用網路、只接受同網段；規則綁定 exe 位置，搬移後會再問一次），開關本身只改設定。只在 wsld-gui 執行時有效（含系統匣），API 不轉發。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
+5. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：到 GUI Settings › 網路開啟「區網存取」，或執行 `wsld lan on`。wsld-gui 會在內網 IP 轉發容器的 published 埠。第一次開啟時若 wsld-gui 尚未通過 Windows 防火牆，wsld 會先說明要加的規則（私人＋公用網路、只接受同網段；規則綁定 exe 位置，搬移後需重新授權），按「繼續」後由 Windows 內建的 netsh 經 UAC 加入；授權前不轉發。只在 wsld-gui 執行時有效（含系統匣），API 不轉發。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
 
 ## 開發
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.12.0；GUI 頂部列 v0.12.0）
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.13.0；GUI 頂部列 v0.13.0）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -108,7 +108,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（**0.12.0** 已交付） |
+| [SPEC](docs/SPEC.md) | 規格（**0.13.0** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |

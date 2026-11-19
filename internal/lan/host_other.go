@@ -32,10 +32,10 @@ func (otherHost) Interfaces() ([]Iface, error) { return SystemInterfaces() }
 
 func (otherHost) PortInUse(context.Context, int) (bool, error) { return false, nil }
 
-func (otherHost) AppFirewall(context.Context, string) (FirewallState, error) {
-	return FirewallUnknown, nil
+func (otherHost) AppRules(context.Context, string) ([]FwRule, error) {
+	return nil, errors.New("firewall rules can only be read on Windows")
 }
 
-func (otherHost) AllowApp(context.Context, string) error {
+func (otherHost) RunElevated(context.Context, string, string) error {
 	return errors.New("firewall rules can only be added on Windows")
 }

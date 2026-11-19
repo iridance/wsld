@@ -15,7 +15,8 @@ import (
 )
 
 // 透過 Windows 防火牆的 COM API（HNetCfg.FwPolicy2，與「具有進階安全性的 Windows Defender 防火牆」同一套）讀寫規則。
-// 讀取不需提權；寫入只在以 UAC 啟動的「wsld-gui.exe --allow-firewall」行程中進行（AddAppRule）。
+// 讀取不需提權；寫入一般由提權的 netsh.exe 進行（Manager.AllowFirewall），
+// 有封鎖規則或既有 wsld 規則時才在以 UAC 啟動的「wsld-gui.exe --allow-firewall」行程中進行（AddAppRule）。
 
 const (
 	fwDirIn      = 1
@@ -174,7 +175,7 @@ func AddAppRule(exe string) error {
 			val  any
 		}{
 			{"Name", AppRuleName},
-			{"Description", "Lets devices on the same network reach container ports forwarded by wsld-gui (LAN access)."},
+			{"Description", AppRuleDescription},
 			{"Grouping", AppRuleGroup},
 			{"ApplicationName", exe},
 			{"Protocol", int32(FwProtoTCP)},
@@ -207,14 +208,8 @@ func HRESULTOf(err error) uint32 {
 	return 1
 }
 
-// AppFirewall 實作 Host。
-func (SystemHost) AppFirewall(_ context.Context, exe string) (FirewallState, error) {
-	rules, err := ReadAppRules(exe)
-	if err != nil {
-		return FirewallUnknown, err
-	}
-	return EvaluateFirewall(rules, exe), nil
-}
+// AppRules 實作 Host。
+func (SystemHost) AppRules(_ context.Context, exe string) ([]FwRule, error) { return ReadAppRules(exe) }
 
 // shellExecuteInfo 對應 SHELLEXECUTEINFOW。
 type shellExecuteInfo struct {
@@ -243,14 +238,17 @@ const (
 
 var procShellExecuteExW = windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
 
-// AllowApp 實作 Host：以 ShellExecuteEx「runas」啟動 exe --allow-firewall（UAC 顯示的是 wsld-gui 本身），等它結束並取回結束碼。
-func (SystemHost) AllowApp(ctx context.Context, exe string) error {
+// RunElevated 實作 Host：以 ShellExecuteEx「runas」啟動 file params（UAC），等它結束並取回結束碼。
+func (SystemHost) RunElevated(ctx context.Context, path, args string) error {
 	verb, _ := windows.UTF16PtrFromString("runas")
-	file, err := windows.UTF16PtrFromString(exe)
+	file, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return err
 	}
-	params, _ := windows.UTF16PtrFromString(AllowFirewallFlag)
+	params, err := windows.UTF16PtrFromString(args)
+	if err != nil {
+		return err
+	}
 	sei := shellExecuteInfo{
 		fMask:        seeMaskNoCloseProcess | seeMaskNoAsync | seeMaskFlagNoUI,
 		hwnd:         windows.GetForegroundWindow(), // UAC 視窗以使用者剛點擊的 wsld-gui 為父視窗，不會只在工作列閃爍
@@ -287,7 +285,7 @@ func (SystemHost) AllowApp(ctx context.Context, exe string) error {
 		return err
 	}
 	if code != 0 {
-		return fmt.Errorf("adding the firewall rule failed (0x%08X)", code)
+		return fmt.Errorf("adding the firewall rule failed (exit 0x%08X)", code)
 	}
 	return nil
 }

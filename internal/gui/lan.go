@@ -25,10 +25,48 @@ type LANStatus struct {
 	// Mirrored 表示 WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT 才能轉發）。
 	Mirrored bool `json:"mirrored"`
 	// Firewall 是 wsld-gui.exe 的防火牆對內授權狀態（allowed／missing／blocked／unknown）。
-	// 授權屬於 app 層級（wsld-gui 啟動時請求），與區網存取開關無關，因此一律查詢。
+	// 授權屬於 app 層級，與區網存取開關無關，因此一律查詢。missing／blocked 時不在內網 IP 監聽。
 	Firewall lan.FirewallState `json:"firewall"`
-	// FirewallPending 表示正在等使用者回應防火牆的 UAC（啟動時的請求或設定頁按鈕）。
+	// FirewallMethod 是授權時會提權的程式（netsh／helper），供說明對話框告訴使用者 UAC 會顯示什麼。
+	FirewallMethod lan.FirewallMethod `json:"firewall_method,omitempty"`
+	// Exe 是規則綁定的 wsld-gui.exe 路徑（說明對話框顯示）。
+	Exe string `json:"exe,omitempty"`
+	// FirewallPending 表示正在等使用者回應防火牆的 UAC（設定頁的授權按鈕）。
 	FirewallPending bool `json:"firewall_pending"`
+}
+
+// fwCacheTTL 是背景同步沿用防火牆狀態的時間（讀取規則需逐條走 COM，較慢）。
+const fwCacheTTL = 30 * time.Second
+
+// firewall 回傳 wsld-gui.exe 的防火牆狀態；快取逾時（或已失效）時重新讀取。
+func (s *Server) firewall(ctx context.Context) lan.FirewallInfo {
+	s.fwCacheMu.Lock()
+	defer s.fwCacheMu.Unlock()
+	if s.fwCacheAt.IsZero() || time.Since(s.fwCacheAt) > fwCacheTTL {
+		s.fwCache = s.LAN.FirewallInfo(ctx)
+		s.fwCacheAt = time.Now()
+	}
+	return s.fwCache
+}
+
+// invalidateFirewall 讓下一次 firewall() 重新讀取規則。
+func (s *Server) invalidateFirewall() {
+	s.fwCacheMu.Lock()
+	s.fwCacheAt = time.Time{}
+	s.fwCacheMu.Unlock()
+}
+
+// firewallBlocksLAN：尚未授權（missing／blocked）時不在內網 IP 監聽，
+// 避免 Windows 自己跳「安全性警訊」（在那裡按取消會產生封鎖規則）。查不到狀態（unknown）時照常監聽。
+func (s *Server) firewallBlocksLAN(ctx context.Context) bool {
+	if s.LAN == nil {
+		return false
+	}
+	switch s.firewall(ctx).State {
+	case lan.FirewallMissing, lan.FirewallBlocked:
+		return true
+	}
+	return false
 }
 
 // SyncLAN 依設定與執行中容器更新轉發：關閉時全部停止；引擎查不到容器時維持現狀。
@@ -39,7 +77,7 @@ func (s *Server) SyncLAN(ctx context.Context) {
 	s.lanMu.Lock()
 	defer s.lanMu.Unlock()
 	cfg := s.cfg()
-	if !cfg.LANAccess {
+	if !cfg.LANAccess || s.firewallBlocksLAN(ctx) {
 		s.Forwarder.Close()
 		return
 	}
@@ -96,7 +134,8 @@ func (s *Server) lanStatus(ctx context.Context) LANStatus {
 		if l, err := s.LAN.Legacy(ctx); err == nil {
 			st.Mirrored = l.Mirrored
 		}
-		st.Firewall = s.LAN.Firewall(ctx)
+		fi := s.firewall(ctx)
+		st.Firewall, st.FirewallMethod, st.Exe = fi.State, fi.Method, s.LAN.Exe
 	}
 	st.FirewallPending = s.fwPending.Load()
 	return st
@@ -114,6 +153,7 @@ func (s *Server) handleGetLAN(w http.ResponseWriter, r *http.Request) {
 	if !s.lanAvailable(w) {
 		return
 	}
+	s.invalidateFirewall() // 設定頁開啟／刷新時重新讀取規則（使用者可能在 Windows 端改過）
 	s.SyncLAN(r.Context())
 	writeJSON(w, http.StatusOK, s.lanStatus(r.Context()))
 }
@@ -139,7 +179,8 @@ func (s *Server) handlePutLAN(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "error", err)
 		return
 	}
-	// 只改設定並立即監聽；防火牆規則在 wsld-gui 啟動時已請求（EnsureFirewall），這裡不提權
+	// 只改設定並立即監聽（已授權時）；不提權：未授權時由前端先顯示說明對話框，使用者確認後才 POST /api/lan/firewall
+	s.invalidateFirewall()
 	s.SyncLAN(r.Context())
 	writeJSON(w, http.StatusOK, s.lanStatus(r.Context()))
 }
@@ -190,34 +231,23 @@ func (s *Server) handleLANOpen(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// EnsureFirewall 在 wsld-gui 啟動時呼叫：wsld-gui.exe 尚未通過 Windows 防火牆（missing／blocked）時以 UAC 加入對內允許規則。
-// 已允許或無法查詢（unknown）時不做事。之後開啟區網存取只需改設定，不再提權。
-func (s *Server) EnsureFirewall(ctx context.Context) error {
-	if s.LAN == nil {
-		return nil
-	}
-	switch s.LAN.Firewall(ctx) {
-	case lan.FirewallMissing, lan.FirewallBlocked:
-		return s.allowFirewall(ctx)
-	}
-	return nil
-}
-
 // allowFirewall 以 UAC 加入規則；同一時間只跑一個（等待期間 /api/lan 回報 firewall_pending）。
 func (s *Server) allowFirewall(ctx context.Context) error {
 	s.fwMu.Lock()
 	defer s.fwMu.Unlock()
 	// 排隊等待期間可能已由另一個請求授權完成
-	if s.LAN.Firewall(ctx) == lan.FirewallAllowed {
+	s.invalidateFirewall()
+	if s.firewall(ctx).State == lan.FirewallAllowed {
 		return nil
 	}
 	s.fwPending.Store(true)
 	defer s.fwPending.Store(false)
+	defer s.invalidateFirewall()
 	return s.LAN.AllowFirewall(ctx)
 }
 
 // handleAllowFirewall：以 UAC 替 wsld-gui.exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段）。
-// 啟動時的請求被取消後，設定頁以此重試。
+// 只在使用者於說明對話框按「繼續」後呼叫（開啟區網存取或設定頁的授權按鈕）；wsld-gui 啟動時不提權。
 func (s *Server) handleAllowFirewall(w http.ResponseWriter, r *http.Request) {
 	if !s.lanAvailable(w) {
 		return
@@ -233,6 +263,7 @@ func (s *Server) handleAllowFirewall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "error", err)
 		return
 	}
+	s.SyncLAN(ctx) // 授權完成：立即開始轉發
 	writeJSON(w, http.StatusOK, s.lanStatus(ctx))
 }
 

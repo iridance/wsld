@@ -48,9 +48,10 @@
 - **Machines**：每個發行版一張卡片（狀態、WSL 版本、角色標籤、目前那台顯示 API 端點；設為主要、**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止主要發行版前會確認（Docker 與容器一併停止）。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
-  - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）→ wsld-gui 立即在內網 IP 監聽；只改設定，不提權。防火牆授權在 wsld-gui 啟動時請求（`Server.EnsureFirewall`：`firewall` 為 `missing`／`blocked` 時以 UAC 執行 `wsld-gui.exe --allow-firewall`；一般啟動在 DOM ready、`--tray` 在第一次顯示視窗，每次執行一次）。
-  - 沒有獨立的防火牆列。`GET /api/lan` 一律回報 `firewall`（與開關無關）與 `firewall_pending`（UAC 等待中）。區網存取開啟、非 mirrored 且未授權／被封鎖／等待中時顯示 `settings-lan-fw-warn`（`data-state`＝missing／blocked／pending）與「授權防火牆」`settings-lan-fw-allow`（`POST /api/lan/firewall`；等待中停用，前端每 1.5 秒重查）；取消 UAC（409 `canceled`）的原因顯示在 error banner，警告與按鈕保留可重試。
-  - 狀態文字 `settings-lan-status`：查詢中／關閉／正在轉發 N 個位址／沒有 published 埠／有位址無法監聽／mirrored 阻擋／還原中。設定頁不列位址。
+  - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）；不提權。已授權防火牆時 wsld-gui 立即在內網 IP 監聽；`firewall` 為 `missing`／`blocked` 時**不監聽**（避免 Windows 自己跳安全性警訊），並接著開啟防火牆說明對話框。wsld-gui 啟動時不提權。
+  - 防火牆說明對話框 `fw-dialog`：標題 `fw-dialog-title`；規則 `fw-dialog-rule`（名稱、程式路徑 `exe`、TCP、私人＋公用、僅同網段）；`fw-dialog-method`（`data-method`＝netsh／helper，說明 UAC 會顯示 netsh.exe「網路命令殼層」或 wsld-gui）；「稍後」`fw-dialog-later`、「繼續」`fw-dialog-continue`（盾牌圖示）→ `POST /api/lan/firewall`。
+  - 沒有獨立的防火牆列。`GET /api/lan` 一律回報 `firewall`（與開關無關）、`firewall_method`（netsh／helper）、`exe` 與 `firewall_pending`（UAC 等待中）；GET 會重新讀取規則，背景同步沿用 30 秒快取。區網存取開啟、非 mirrored 且未授權／被封鎖／等待中時顯示 `settings-lan-fw-warn`（`data-state`＝missing／blocked／pending，文字說明轉發已暫停）與「授權防火牆」`settings-lan-fw-allow`（先開 `fw-dialog`；等待中停用，前端每 1.5 秒重查）；取消 UAC（409 `canceled`）的原因顯示在 error banner，警告與按鈕保留可重試。
+  - 狀態文字 `settings-lan-status`：查詢中／關閉／正在轉發 N 個位址／等待防火牆授權／沒有 published 埠／有位址無法監聽／mirrored 阻擋／還原中。設定頁不列位址。
   - 偵測到 0.9.0 的 mirrored 模式時顯示 `settings-lan-mirrored` 與「還原 NAT」`settings-lan-restore`：
     - 流程：確認框（確定鈕「還原 NAT」，非 danger）→ `POST /api/lan/restore-nat` → UAC → `wsl --shutdown` → 等 API 埠釋放 → 啟動引擎。
     - 取消 UAC 等失敗時，原因顯示在 error banner。
@@ -84,7 +85,7 @@
 | Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
-| Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
+| Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、防火牆說明對話框（netsh／helper、稍後、等待 UAC、取消 UAC）、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
 | i18n | Settings「外觀」語言下拉（立即生效） | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 
@@ -122,7 +123,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.12.0 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.13.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 

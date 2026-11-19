@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.12.0（git tag `v0.12.0`）  
-狀態：**0.12.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.13.0（git tag `v0.13.0`）  
+狀態：**0.13.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-19
 
 ## 1. 問題與目標
@@ -131,9 +131,13 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 - 做法：**wsld-gui 內建轉發器**：
   - 在每個內網 IPv4 上監聽執行中容器的 published TCP 埠，轉到 `127.0.0.1:<埠>`（WSL localhost 轉發）。
   - 每 3 秒依容器清單同步。
-  - 由 Windows 程式監聽，需通過 Windows 防火牆：wsld-gui 啟動時（第一次顯示視窗）若 wsld-gui.exe 尚無涵蓋私人＋公用的對內允許規則，以 UAC 提權**自身**（`ShellExecuteEx runas` → `wsld-gui.exe --allow-firewall`，不經 PowerShell）透過 `HNetCfg.FwPolicy2` 加入規則 `wsld-gui (LAN access)`：TCP、私人＋公用、RemoteAddresses=LocalSubnet；並停用該 exe 的對內封鎖規則。結束碼為 HRESULT。讀取狀態不需提權（`GET /api/lan` 的 `firewall`）。
+  - 由 Windows 程式監聽，需通過 Windows 防火牆：規則 `wsld-gui (LAN access)`：TCP、私人＋公用、RemoteAddresses=LocalSubnet，綁定 wsld-gui.exe 路徑。
+    - **只在使用者操作時請求**（開啟區網存取時尚未授權，或設定頁「授權防火牆」）；wsld-gui 啟動時不提權。提權前先顯示 wsld 說明對話框（規則內容、UAC 會顯示的程式），按「繼續」才 `ShellExecuteEx runas`。
+    - 一般提權 `%SystemRoot%\System32\netsh.exe advfirewall firewall add rule …`（UAC 顯示 Microsoft 已驗證的「網路命令殼層」）。
+    - 有該 exe 的對內封鎖規則、已有 wsld 規則，或 exe 位於 UNC 路徑時，改提權 `wsld-gui.exe --allow-firewall`：透過 `HNetCfg.FwPolicy2` 新增或更新規則並停用封鎖規則；結束碼為 HRESULT。
+    - 讀取狀態不需提權（`GET /api/lan` 的 `firewall`、`firewall_method`）。missing／blocked 時不在內網 IP 監聽（避免 Windows 自行跳出安全性警訊、按取消產生封鎖規則）。
 - 開關存在 `config.toml` 的 `lan_access`。只在 wsld-gui 執行時（含系統匣）有效。
-- WSL 維持 NAT：不改 `.wslconfig`、不重啟 WSL；只有加入防火牆規則時需要一次 UAC（啟動時請求，規則綁定 exe 路徑）；開關區網存取只改設定。
+- WSL 維持 NAT：不改 `.wslconfig`、不重啟 WSL；只有加入防火牆規則時需要一次 UAC（使用者確認說明後請求，規則綁定 exe 路徑）；開關區網存取只改設定。
 - 不轉發：
   - 明確綁 `127.0.0.1` 的埠
   - Docker API 埠
@@ -229,7 +233,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
 | Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
-| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列的地球按鈕以系統瀏覽器開啟區網位址（多埠跳選單），Info 以文字列出 |
+| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；未授權防火牆時先顯示說明對話框；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列的地球按鈕以系統瀏覽器開啟區網位址（多埠跳選單），Info 以文字列出 |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |
 | 破壞性操作 | 一律確認；unregister 需輸入名稱；Remove 容器可含 running（會停止） |

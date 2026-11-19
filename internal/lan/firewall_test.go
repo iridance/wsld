@@ -1,6 +1,9 @@
 package lan
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEvaluateFirewall(t *testing.T) {
 	const exe = `C:\Users\me\wsld\wsld-gui.exe`
@@ -52,5 +55,63 @@ func TestSamePath(t *testing.T) {
 		if got := SamePath(c.a, c.b); got != c.want {
 			t.Errorf("SamePath(%q, %q) = %v want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+func TestPlanFirewall(t *testing.T) {
+	const exe = `C:\Users\me\wsld\wsld-gui.exe`
+	both := FwProfilePrivate | FwProfilePublic
+	cases := []struct {
+		name  string
+		exe   string
+		rules []FwRule
+		want  FirewallMethod
+	}{
+		{"no rules", exe, nil, MethodNetsh},
+		{"windows prompt allowed public only", exe, []FwRule{{Name: "wsld-gui", App: exe, Inbound: true, Allow: true, Enabled: true, Protocol: FwProtoTCP, Profiles: FwProfilePublic}}, MethodNetsh},
+		{"enabled block rule", exe, []FwRule{{Name: "wsld-gui", App: exe, Inbound: true, Enabled: true, Protocol: FwProtoTCP, Profiles: both}}, MethodHelper},
+		{"disabled block rule", exe, []FwRule{{Name: "wsld-gui", App: exe, Inbound: true, Protocol: FwProtoTCP, Profiles: both}}, MethodHelper},
+		{"outbound block is ignored", exe, []FwRule{{Name: "x", App: exe, Enabled: true, Protocol: FwProtoTCP, Profiles: both}}, MethodNetsh},
+		{"own rule exists (disabled)", exe, []FwRule{{Name: AppRuleName, App: exe, Inbound: true, Allow: true, Protocol: FwProtoTCP, Profiles: both}}, MethodHelper},
+		{"other exe's block rule", exe, []FwRule{{Name: "x", App: `D:\other.exe`, Inbound: true, Enabled: true, Protocol: FwProtoTCP, Profiles: both}}, MethodNetsh},
+		{"UNC dev build", `\\wsl.localhost\Ubuntu\home\me\dist\wsld-gui.exe`, nil, MethodHelper},
+	}
+	for _, c := range cases {
+		if got := PlanFirewall(c.rules, c.exe); got != c.want {
+			t.Errorf("%s: got %s want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNetshAddRuleArgs(t *testing.T) {
+	got := NetshAddRuleArgs(`C:\Program Files\wsld\wsld-gui.exe`)
+	for _, want := range []string{
+		`advfirewall firewall add rule `,
+		`name="wsld-gui (LAN access)"`,
+		`dir=in`,
+		`action=allow`,
+		`program="C:\Program Files\wsld\wsld-gui.exe"`,
+		`protocol=TCP`,
+		`profile=private,public`,
+		`remoteip=localsubnet`,
+		`enable=yes`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.HasPrefix(got, "netsh") {
+		t.Errorf("args must not include the program: %s", got)
+	}
+}
+
+func TestNetshPath(t *testing.T) {
+	t.Setenv("SystemRoot", `D:\WINDOWS`)
+	if got := NetshPath(); got != `D:\WINDOWS\System32\netsh.exe` {
+		t.Fatalf("got %s", got)
+	}
+	t.Setenv("SystemRoot", "")
+	if got := NetshPath(); got != `C:\Windows\System32\netsh.exe` {
+		t.Fatalf("got %s", got)
 	}
 }

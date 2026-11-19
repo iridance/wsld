@@ -101,8 +101,12 @@ type Server struct {
 
 	lanMu sync.Mutex // 序列化區網轉發同步（背景迴圈與 API 共用）
 
-	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC（啟動時的請求與設定頁按鈕共用）
+	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC
 	fwPending atomic.Bool
+
+	fwCacheMu sync.Mutex // 防火牆狀態快取（背景同步每 3 秒讀一次，規則查詢較慢）
+	fwCache   lan.FirewallInfo
+	fwCacheAt time.Time
 
 	installOnce sync.Once
 	install     *installTracker

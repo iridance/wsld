@@ -152,3 +152,68 @@ func TestLANAddresses(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestFirewallInfo(t *testing.T) {
+	m, h := newTestManager(t)
+	if fi := m.FirewallInfo(context.Background()); fi.State != FirewallUnknown {
+		t.Fatalf("no exe must be unknown: %+v", fi)
+	}
+	m.Exe = `C:\wsld\wsld-gui.exe`
+	h.AppState = FirewallMissing
+	if fi := m.FirewallInfo(context.Background()); fi.State != FirewallMissing || fi.Method != MethodNetsh {
+		t.Fatalf("missing: %+v", fi)
+	}
+	h.AppState = FirewallBlocked
+	if fi := m.FirewallInfo(context.Background()); fi.State != FirewallBlocked || fi.Method != MethodHelper {
+		t.Fatalf("blocked: %+v", fi)
+	}
+	h.AppState = FirewallUnknown
+	if fi := m.FirewallInfo(context.Background()); fi.State != FirewallUnknown {
+		t.Fatalf("unknown: %+v", fi)
+	}
+}
+
+func TestAllowFirewallUsesNetshWhenNoRules(t *testing.T) {
+	t.Setenv("SystemRoot", `C:\Windows`)
+	m, h := newTestManager(t)
+	m.Exe = `C:\wsld\wsld-gui.exe`
+	h.AppState = FirewallMissing
+	if err := m.AllowFirewall(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Elevated) != 1 || h.Elevated[0].File != `C:\Windows\System32\netsh.exe` ||
+		!strings.Contains(h.Elevated[0].Params, `program="C:\wsld\wsld-gui.exe"`) {
+		t.Fatalf("elevated = %+v", h.Elevated)
+	}
+	if fi := m.FirewallInfo(context.Background()); fi.State != FirewallAllowed {
+		t.Fatalf("after allow: %+v", fi)
+	}
+}
+
+func TestAllowFirewallUsesHelperWhenBlocked(t *testing.T) {
+	m, h := newTestManager(t)
+	m.Exe = `C:\wsld\wsld-gui.exe`
+	h.AppState = FirewallBlocked
+	if err := m.AllowFirewall(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Elevated) != 1 || h.Elevated[0].File != m.Exe || h.Elevated[0].Params != AllowFirewallFlag {
+		t.Fatalf("elevated = %+v", h.Elevated)
+	}
+}
+
+func TestAllowFirewallCanceled(t *testing.T) {
+	m, h := newTestManager(t)
+	m.Exe = `C:\wsld\wsld-gui.exe`
+	h.AppState, h.AllowErr = FirewallMissing, ErrUACCanceled
+	if err := m.AllowFirewall(context.Background()); !errors.Is(err, ErrUACCanceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if fi := m.FirewallInfo(context.Background()); fi.State != FirewallMissing {
+		t.Fatalf("state must stay missing: %+v", fi)
+	}
+	m.Exe = ""
+	if err := m.AllowFirewall(context.Background()); err == nil {
+		t.Fatal("empty exe must fail")
+	}
+}
