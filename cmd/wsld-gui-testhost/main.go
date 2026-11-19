@@ -63,7 +63,7 @@ func main() {
 		log.Fatal(err)
 	}
 	lanHost := &lan.FakeHost{Dir: lanDir}
-	lanMgr := &lan.Manager{Host: lanHost, Sleep: func(time.Duration) {}}
+	lanMgr := &lan.Manager{Host: lanHost, Exe: `C:\wsld\wsld-gui.exe`, Sleep: func(time.Duration) {}}
 	var lanMu sync.Mutex
 	lanBusy := map[int]bool{} // /__test/lan?busy=8080：模擬該埠監聽失敗
 	forwarder := &lan.Forwarder{Listen: func(network, addr string) (net.Listener, error) {
@@ -81,7 +81,10 @@ func main() {
 	resetLAN := func() {
 		_ = os.Remove(lanConfigPath)
 		_ = os.Remove(lanConfigPath + ".wsld.bak")
-		lanHost.Set(func(h *lan.FakeHost) { h.Rules, h.FirewallErr, h.RemoveCalls = 0, nil, 0 })
+		lanHost.Set(func(h *lan.FakeHost) {
+			h.Rules, h.FirewallErr, h.RemoveCalls = 0, nil, 0
+			h.AppState, h.AllowErr, h.AllowCalls = "", nil, 0
+		})
 		lanMu.Lock()
 		lanBusy = map[int]bool{}
 		lanMu.Unlock()
@@ -224,7 +227,8 @@ func main() {
 		}
 		ok(w)
 	})
-	// /__test/lan?mirrored=1&fail=1&busy=8080：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用。
+	// /__test/lan?mirrored=1&fail=1&busy=8080&fw=missing&fwfail=1：模擬 0.9.0 遺留的 mirrored 設定、取消 UAC、埠被佔用、
+	// wsld-gui 尚未通過防火牆（missing／blocked）、加入防火牆規則時取消 UAC。
 	mux.HandleFunc("POST /__test/lan", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("mirrored") == "1" {
@@ -238,6 +242,15 @@ func main() {
 			case "0":
 				h.FirewallErr = nil
 			}
+			if fw := q.Get("fw"); fw != "" {
+				h.AppState = lan.FirewallState(fw)
+			}
+			switch q.Get("fwfail") {
+			case "1":
+				h.AllowErr = lan.ErrUACCanceled
+			case "0":
+				h.AllowErr = nil
+			}
 		})
 		if p, err := strconv.Atoi(q.Get("busy")); err == nil {
 			lanMu.Lock()
@@ -248,11 +261,11 @@ func main() {
 	})
 	mux.HandleFunc("GET /__test/lan", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := os.ReadFile(lanConfigPath)
-		var removes int
-		lanHost.Set(func(h *lan.FakeHost) { removes = h.RemoveCalls })
+		var removes, allows int
+		lanHost.Set(func(h *lan.FakeHost) { removes, allows = h.RemoveCalls, h.AllowCalls })
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"wslconfig": string(b), "firewall_removes": removes, "shutdowns": fwsl.Shutdowns(),
+			"wslconfig": string(b), "firewall_removes": removes, "firewall_allows": allows, "shutdowns": fwsl.Shutdowns(),
 		})
 	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {

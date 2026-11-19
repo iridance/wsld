@@ -54,7 +54,7 @@ func TestLanOnOffSavesConfig(t *testing.T) {
 		t.Fatal("lan_access must be saved")
 	}
 	out := h.out.String()
-	for _, want := range []string{"Private / Public", "LAN access: on", "http://192.168.1.20:<published port>", "wsld-gui"} {
+	for _, want := range []string{"Windows firewall", "LAN access: on", "http://192.168.1.20:<published port>", "wsld-gui"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}

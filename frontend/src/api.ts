@@ -166,6 +166,8 @@ export interface LANStatus {
   forwards: LANForward[];
   /** WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT） */
   mirrored: boolean;
+  /** wsld-gui.exe 的 Windows 防火牆對內授權；區網存取關閉時為空字串 */
+  firewall: "allowed" | "missing" | "blocked" | "unknown" | "";
 }
 
 export class ApiError extends Error {
@@ -272,6 +274,7 @@ export const api = {
   getLAN: () => call<LANStatus>("GET", "/api/lan"),
   putLAN: (enabled: boolean) => call<LANStatus>("PUT", "/api/lan", { enabled }),
   restoreNAT: () => call<LANStatus>("POST", "/api/lan/restore-nat"),
+  allowFirewall: () => call<LANStatus>("POST", "/api/lan/firewall"),
   lanForwards: (signal?: AbortSignal) => call<LANForwards>("GET", "/api/lan/forwards", undefined, false, signal),
   openLAN: (url: string) => call<void>("POST", "/api/lan/open", { url }),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),

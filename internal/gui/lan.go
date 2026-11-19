@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/iridance/wsld/internal/i18n"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
@@ -23,6 +24,8 @@ type LANStatus struct {
 	Forwards []lan.Forward `json:"forwards"`
 	// Mirrored 表示 WSL 仍是 0.9.0 留下的 mirrored 模式（需還原 NAT 才能轉發）。
 	Mirrored bool `json:"mirrored"`
+	// Firewall 是 wsld-gui.exe 的防火牆對內授權狀態（allowed／missing／blocked／unknown）；區網存取關閉時不查詢（空字串）。
+	Firewall lan.FirewallState `json:"firewall"`
 }
 
 // SyncLAN 依設定與執行中容器更新轉發：關閉時全部停止；引擎查不到容器時維持現狀。
@@ -89,6 +92,9 @@ func (s *Server) lanStatus(ctx context.Context) LANStatus {
 	if s.LAN != nil {
 		if l, err := s.LAN.Legacy(ctx); err == nil {
 			st.Mirrored = l.Mirrored
+		}
+		if st.Enabled {
+			st.Firewall = s.LAN.Firewall(ctx)
 		}
 	}
 	return st
@@ -180,6 +186,25 @@ func (s *Server) handleLANOpen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAllowFirewall：以 UAC 替 wsld-gui.exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段）。
+func (s *Server) handleAllowFirewall(w http.ResponseWriter, r *http.Request) {
+	if !s.lanAvailable(w) {
+		return
+	}
+	// 等使用者回應 UAC；不綁 request context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := s.LAN.AllowFirewall(ctx); err != nil {
+		if errors.Is(err, lan.ErrUACCanceled) {
+			writeErr(w, http.StatusConflict, "canceled", errors.New(i18n.T("gui.lan.fw.canceled")))
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "error", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.lanStatus(ctx))
 }
 
 // handleRestoreNAT：清掉 0.9.0 的 mirrored 設定（UAC 移除防火牆規則、改 .wslconfig），再重啟 WSL。

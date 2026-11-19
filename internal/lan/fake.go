@@ -24,6 +24,12 @@ type FakeHost struct {
 	PortBusyPolls int
 	// PortChecks 記錄 PortInUse 被呼叫的埠。
 	PortChecks []int
+	// AppState 是 AppFirewall 回傳的狀態（空字串 = FirewallAllowed）。
+	AppState FirewallState
+	// AllowErr 非 nil 時 AllowApp 回傳它（例如 ErrUACCanceled）。
+	AllowErr error
+	// AllowCalls 記錄 AllowApp 的呼叫次數。
+	AllowCalls int
 }
 
 // ConfigPath 實作 Host。
@@ -68,6 +74,28 @@ func (f *FakeHost) PortInUse(_ context.Context, port int) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// AppFirewall 實作 Host。
+func (f *FakeHost) AppFirewall(context.Context, string) (FirewallState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AppState == "" {
+		return FirewallAllowed, nil
+	}
+	return f.AppState, nil
+}
+
+// AllowApp 實作 Host：成功後狀態變為 FirewallAllowed。
+func (f *FakeHost) AllowApp(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.AllowCalls++
+	if f.AllowErr != nil {
+		return f.AllowErr
+	}
+	f.AppState = FirewallAllowed
+	return nil
 }
 
 // Set 在鎖內修改 FakeHost（testhost 控制端點用）。

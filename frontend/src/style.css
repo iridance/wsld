@@ -602,6 +602,7 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 }
 .lan-warn p { margin: 0; }
 .lan-warn > div { margin-top: 6px; }
+.warn-text { color: var(--warn); font-weight: 500; }
 [data-testid="confirm-text"] { white-space: pre-line; }
 .set-control .tf.num { width: 160px; }
 .set-control .tf.select { width: 200px; }

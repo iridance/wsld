@@ -34,6 +34,10 @@ type Host interface {
 	Interfaces() ([]Iface, error)
 	// PortInUse 回報 Windows 上是否仍有任何 TCP 連線／監聽佔用此本機埠（含 TIME_WAIT）。
 	PortInUse(ctx context.Context, port int) (bool, error)
+	// AppFirewall 回傳 exe 的對內防火牆授權狀態（讀取規則，不需提權）。
+	AppFirewall(ctx context.Context, exe string) (FirewallState, error)
+	// AllowApp 以系統管理員身分（UAC）執行「exe --allow-firewall」替 exe 加入對內允許規則；取消 UAC 回 ErrUACCanceled。
+	AllowApp(ctx context.Context, exe string) error
 }
 
 // Iface 是一張網卡的名稱與位址。
@@ -51,9 +55,11 @@ type Legacy struct {
 	Rules int `json:"rules"`
 }
 
-// Manager 處理遺留設定與 WSL 重啟時的埠等待。
+// Manager 處理遺留設定、WSL 重啟時的埠等待與 wsld-gui.exe 的防火牆授權。
 type Manager struct {
 	Host Host
+	// Exe 是負責轉發的 wsld-gui.exe 完整路徑（防火牆規則綁定此路徑）；空字串 = 不檢查防火牆。
+	Exe string
 	// Sleep 供 WaitPortFree 等待（測試可替換；nil = time.Sleep）。
 	Sleep func(time.Duration)
 }
@@ -80,6 +86,26 @@ func (m *Manager) RestoreNAT(ctx context.Context) error {
 		}
 	}
 	return m.editConfig(func(c string) string { return RemoveKey(c, "wsl2", "networkingMode") })
+}
+
+// Firewall 回傳 Exe 的防火牆授權狀態；Exe 未設定或查詢失敗時回 FirewallUnknown。
+func (m *Manager) Firewall(ctx context.Context) FirewallState {
+	if m.Exe == "" {
+		return FirewallUnknown
+	}
+	st, err := m.Host.AppFirewall(ctx, m.Exe)
+	if err != nil {
+		return FirewallUnknown
+	}
+	return st
+}
+
+// AllowFirewall 以 UAC 替 Exe 加入對內允許規則（私人＋公用網路、TCP、僅同網段），並停用針對 Exe 的對內封鎖規則。
+func (m *Manager) AllowFirewall(ctx context.Context) error {
+	if m.Exe == "" {
+		return errors.New("wsld-gui executable path unknown")
+	}
+	return m.Host.AllowApp(ctx, m.Exe)
 }
 
 // PortWaitTimeout 是 wsl --shutdown 後等 Windows 釋放 API 埠的上限（TIME_WAIT 預設 120 秒）。

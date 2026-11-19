@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func withLAN(t *testing.T, e *env) *lanEnv {
 	t.Helper()
 	le := &lanEnv{host: &lan.FakeHost{Dir: t.TempDir()}, wsl: NewFakeWSL()}
 	e.s.WSL = le.wsl
-	e.s.LAN = &lan.Manager{Host: le.host, Sleep: func(time.Duration) {}}
+	e.s.LAN = &lan.Manager{Host: le.host, Exe: `C:\wsld\wsld-gui.exe`, Sleep: func(time.Duration) {}}
 	e.s.Forwarder = &lan.Forwarder{Listen: func(network, addr string) (net.Listener, error) {
 		le.listen = append(le.listen, addr)
 		return net.Listen("tcp", "127.0.0.1:0") // 測試不綁 192.168.x.x
@@ -172,6 +173,40 @@ func TestLANRestoreNATCanceledUAC(t *testing.T) {
 	}
 }
 
+func TestLANFirewallStatus(t *testing.T) {
+	e := newEnv(t, "")
+	le := withLAN(t, e)
+	le.host.AppState = lan.FirewallMissing
+	if st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", ""))); st.Firewall != "" {
+		t.Fatalf("firewall must not be queried while off: %q", st.Firewall)
+	}
+	st := decodeLAN(t, mustBody(e.req(t, "PUT", "/api/lan", `{"enabled":true}`)))
+	if st.Firewall != lan.FirewallMissing || le.host.AllowCalls != 0 {
+		t.Fatalf("enable must report missing without elevating: %+v allow=%d", st, le.host.AllowCalls)
+	}
+	resp, b := e.req(t, "POST", "/api/lan/firewall", "")
+	if resp.StatusCode != 200 || decodeLAN(t, b).Firewall != lan.FirewallAllowed || le.host.AllowCalls != 1 {
+		t.Fatalf("status=%d body=%s allow=%d", resp.StatusCode, b, le.host.AllowCalls)
+	}
+}
+
+func TestLANFirewallCanceledUAC(t *testing.T) {
+	e := newEnv(t, "")
+	le := withLAN(t, e)
+	le.host.AppState = lan.FirewallBlocked
+	le.host.AllowErr = lan.ErrUACCanceled
+	resp, b := e.req(t, "POST", "/api/lan/firewall", "")
+	var ae apiError
+	_ = json.Unmarshal(b, &ae)
+	if resp.StatusCode != 409 || ae.Code != "canceled" || !strings.Contains(ae.Error, "UAC") {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	_, _ = e.req(t, "PUT", "/api/lan", `{"enabled":true}`)
+	if st := decodeLAN(t, mustBody(e.req(t, "GET", "/api/lan", ""))); st.Firewall != lan.FirewallBlocked {
+		t.Fatalf("firewall=%q", st.Firewall)
+	}
+}
+
 func TestLANForwardsEndpoint(t *testing.T) {
 	e := newEnv(t, "")
 	withLAN(t, e)
@@ -212,3 +247,5 @@ func TestLANOpenOnlyForwardedURLs(t *testing.T) {
 		t.Fatalf("rejected URLs must not open: %v", e.window)
 	}
 }
+
+func mustBody(_ *http.Response, b []byte) []byte { return b }

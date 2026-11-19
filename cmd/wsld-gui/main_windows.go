@@ -43,6 +43,18 @@ var trayIcon []byte
 var version = "dev"
 
 func main() {
+	// 以 UAC 啟動的子行程：只替自己加入防火牆規則（區網存取）後結束；結束碼 = HRESULT，供父行程回報
+	if len(os.Args) == 2 && os.Args[1] == lan.AllowFirewallFlag {
+		exe, err := os.Executable()
+		if err == nil {
+			err = lan.AddAppRule(exe)
+		}
+		if err != nil {
+			os.Exit(int(lan.HRESULTOf(err)))
+		}
+		os.Exit(0)
+	}
+
 	startHidden := false
 	for _, a := range os.Args[1:] {
 		if a == "--tray" || a == "--hidden" {
@@ -113,7 +125,7 @@ func main() {
 		NewEngine:      func(c config.Config) gui.Engine { return dockerClient(c) },
 		NewLifecycle:   func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:   gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
-		LAN:            &lan.Manager{Host: lan.NewHost()},
+		LAN:            &lan.Manager{Host: lan.NewHost(), Exe: exe},
 		Forwarder:      &lan.Forwarder{},
 	}
 	base, stop, err := srv.ListenLoopback()

@@ -46,8 +46,11 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 - **開啟**：GUI 的 Settings › 網路 › 區網存取（立即生效），或 `wsld lan on`（寫入 `config.toml` 的 `lan_access = true`）。
   - **wsld-gui** 會在這台電腦的每個內網 IPv4 上，替執行中容器的 published TCP 埠監聽，並把連線轉到 `127.0.0.1:<埠>`（WSL localhost 轉發）。每 3 秒依容器清單同步：新埠自動加入，停掉的容器自動關閉。
-  - 第一次監聽時，**Windows 防火牆會自己跳出「允許 wsld-gui 在私人／公用網路上通訊」**。在那個視窗勾選要開放的網路即可。之後要改：Windows 安全性 › 防火牆與網路保護 ›「允許應用程式通過防火牆」› wsld-gui。
-  - WSL 維持 NAT：不改 `.wslconfig`、不重啟 WSL、不影響其他發行版，也不需要 UAC（除非 Windows 防火牆視窗本身要求）。
+  - **防火牆**：GUI 開啟時若 wsld-gui 尚未通過 Windows 防火牆，會跳一次 **UAC**（顯示的是 wsld-gui 本身），替 wsld-gui.exe 加入對內允許規則 `wsld-gui (LAN access)`（群組 `wsld`）：TCP、**私人＋公用網路**、遠端位址限 **LocalSubnet**（只接受同網段設備）。同時停用針對這個 exe 的對內封鎖規則（例如在 Windows 視窗按過取消）。
+    - 規則綁定 exe 的完整路徑：搬移或改名 wsld-gui.exe 後要重新授權（設定頁會顯示「未授權」與「授權防火牆」按鈕）。
+    - 取消 UAC：區網存取仍為開啟，但其他設備會被防火牆擋下，設定頁顯示警告與重試按鈕。
+    - 授權狀態以防火牆 COM API（`HNetCfg.FwPolicy2`）讀取，不需提權。判定「已允許」：該 exe 的啟用中對內允許規則（TCP 或任何協定）合起來涵蓋私人與公用；有啟用中的封鎖規則則判定「已封鎖」。
+  - WSL 維持 NAT：不改 `.wslconfig`、不重啟 WSL、不影響其他發行版。
 - **只在 wsld-gui 執行時有效**（縮到系統匣也算）。只用 CLI 不會轉發。
 - **開放範圍**：
   - 只轉發「綁所有介面」的 published 埠（`-p 8080:80`）。明確綁本機的（`-p 127.0.0.1:5432:5432`）不轉發。
@@ -59,7 +62,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
   - `wsld lan status`（可加 `--json`）會顯示設定與內網 IPv4。
 - **關閉**：GUI 開關，或 `wsld lan off`。轉發會立即（GUI）或在下一次同步時停止。
 - **連不到時**：
-  - 確認 Windows 防火牆有允許 wsld-gui 使用目前的網路類型（私人／公用）。
+  - 看設定頁 › 網路 › 防火牆是否為「已允許」；否則按「授權防火牆」。從 `\\wsl.localhost\...` 執行開發版時，路徑不同於下載版，需另外授權。
   - 路由器的 AP／用戶端隔離（例如訪客 Wi-Fi）也會讓設備互相連不到。這不在 wsld 控制範圍內。
 - **0.9.0 遺留的 mirrored 模式**：
   - 0.9.0 以 WSL mirrored 網路＋Hyper-V 防火牆規則實作區網存取。mirrored 模式下容器埠直接佔用 Windows 的埠，轉發器無法監聽。

@@ -48,7 +48,8 @@
 - **Machines**：每個發行版一張卡片（狀態、WSL 版本、角色標籤、目前那台顯示 API 端點；設為目前、Info、資料夾、終端、刪除）。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
-  - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）→ wsld-gui 立即在內網 IP 監聽；第一次時 Windows 防火牆自己跳「允許私人／公用網路」。
+  - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）→ wsld-gui 立即在內網 IP 監聽。回應的 `firewall` 為 `missing`／`blocked` 時，前端接著 `POST /api/lan/firewall`（UAC 以 `wsld-gui.exe --allow-firewall` 提權加規則），成功顯示「已加入防火牆規則」。
+  - 防火牆列 `settings-lan-firewall`（`data-state`＝allowed／missing／blocked／unknown；只在開啟且非 mirrored 時顯示）。未授權或被封鎖時顯示 `settings-lan-fw-warn` 與「授權防火牆」`settings-lan-fw-allow`；取消 UAC（409 `canceled`）的原因顯示在 error banner，警告與按鈕保留可重試。
   - 狀態文字 `settings-lan-status`：查詢中／關閉／正在轉發 N 個位址／沒有 published 埠／有位址無法監聽／mirrored 阻擋／還原中。設定頁不列位址。
   - 偵測到 0.9.0 的 mirrored 模式時顯示 `settings-lan-mirrored` 與「還原 NAT」`settings-lan-restore`：
     - 流程：確認框（確定鈕「還原 NAT」，非 danger）→ `POST /api/lan/restore-nat` → UAC → `wsl --shutdown` → 等 API 埠釋放 → 啟動引擎。
@@ -121,7 +122,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.10.0 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.11.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 

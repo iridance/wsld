@@ -31,3 +31,11 @@ func (otherHost) FirewallRules(context.Context) int { return 0 }
 func (otherHost) Interfaces() ([]Iface, error) { return SystemInterfaces() }
 
 func (otherHost) PortInUse(context.Context, int) (bool, error) { return false, nil }
+
+func (otherHost) AppFirewall(context.Context, string) (FirewallState, error) {
+	return FirewallUnknown, nil
+}
+
+func (otherHost) AllowApp(context.Context, string) error {
+	return errors.New("firewall rules can only be added on Windows")
+}

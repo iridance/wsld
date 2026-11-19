@@ -79,7 +79,7 @@ interface State {
   lan?: LANStatus;
   lanLoading?: boolean;
   /** 套用中：toggle＝儲存並同步轉發；restore＝還原 NAT（等待 UAC／WSL 重啟） */
-  lanApplying?: "toggle" | "restore";
+  lanApplying?: "toggle" | "restore" | "firewall";
   /** 容器頁的區網轉發（隨容器清單刷新；未開啟區網存取時為空） */
   lanForwards: LANForward[];
   /** 區網存取已開啟（容器列顯示瀏覽器按鈕） */
@@ -2332,13 +2332,38 @@ export class App {
     if (this.st.view === "settings") this.renderViewBody();
   }
 
-  /** 開／關區網存取：立即生效（wsld-gui 開始在內網 IP 監聽；Windows 會自己跳防火牆的私人／公用確認）。 */
+  /** 開／關區網存取：立即生效（wsld-gui 開始在內網 IP 監聽）。開啟時若 wsld-gui 尚未通過防火牆，接著請求 UAC 加入規則。 */
   private async setLAN(enabled: boolean): Promise<void> {
     this.st.lanApplying = "toggle";
     this.renderViewBody();
+    let ok = false;
     try {
       this.st.lan = await api.putLAN(enabled);
-      this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
+      ok = true;
+    } catch (e) {
+      this.st.lastError = e instanceof ApiError ? e.message : String(e);
+      this.renderBanner();
+    } finally {
+      this.st.lanApplying = undefined;
+    }
+    const fw = this.st.lan?.firewall;
+    if (ok && enabled && (fw === "missing" || fw === "blocked")) {
+      await this.allowFirewall();
+      return;
+    }
+    if (ok) this.notify(t(enabled ? "gui.lan.done_on" : "gui.lan.done_off"));
+    this.renderViewBody();
+  }
+
+  /** 以 UAC 替 wsld-gui.exe 加入 Windows 防火牆的對內允許規則（私人＋公用網路、僅同網段）。 */
+  private async allowFirewall(): Promise<void> {
+    this.st.lanApplying = "firewall";
+    this.st.lastError = undefined;
+    this.renderBanner();
+    this.renderViewBody();
+    try {
+      this.st.lan = await api.allowFirewall();
+      this.notify(t("gui.lan.fw.done"));
     } catch (e) {
       this.st.lastError = e instanceof ApiError ? e.message : String(e);
       this.renderBanner();
@@ -2404,7 +2429,22 @@ export class App {
     else if (s) statusText = t("gui.lan.status.on").replace("%d", String(okForwards.length));
     const status = el("span", { "data-testid": "settings-lan-status", text: statusText });
 
+    const rows: HTMLElement[] = [];
     const extra: HTMLElement[] = [];
+    const fw = s?.enabled && !s.mirrored ? s.firewall : "";
+    if (fw || applying === "firewall") {
+      const fwText = applying === "firewall" ? t("gui.lan.fw.allowing") : t(`gui.lan.fw.${fw}`);
+      const fwStatus = el("span", { "data-testid": "settings-lan-firewall", "data-state": fw, class: fw === "missing" || fw === "blocked" ? "warn-text" : "", text: fwText });
+      rows.push(row(el("span", { text: t("gui.settings.lan_fw") }), t("gui.settings.lan_fw_hint"), fwStatus));
+    }
+    if ((fw === "missing" || fw === "blocked") && applying !== "firewall") {
+      const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-fw-warn", role: "note" }, el("p", { text: t("gui.lan.fw.warn") }));
+      const allow = btn({ type: "button", "data-testid": "settings-lan-fw-allow" }, "shield", t("gui.lan.fw.allow"));
+      allow.disabled = !!applying;
+      allow.onclick = () => void this.allowFirewall();
+      box.append(el("div", {}, allow));
+      extra.push(box);
+    }
     if (s?.mirrored) {
       const box = el("div", { class: "lan-warn", "data-testid": "settings-lan-mirrored", role: "note" }, el("p", { text: t("gui.lan.warn.mirrored") }));
       const restore = btn({ type: "button", "data-testid": "settings-lan-restore" }, "power", t("gui.lan.restore"));
@@ -2417,6 +2457,7 @@ export class App {
       el("h2", { text: t("gui.settings.group.network") }),
       row(el("span", { "data-testid": "settings-lan-label", text: t("gui.settings.lan") }), t("gui.settings.lan_hint"), el("span", { class: "switch" }, state, toggle)),
       row(el("span", { text: t("gui.settings.lan_status") }), t("gui.settings.lan_status_hint"), status),
+      ...rows,
       ...extra,
     );
   }
