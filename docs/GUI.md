@@ -49,12 +49,16 @@
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
   - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）→ wsld-gui 立即在內網 IP 監聽；第一次時 Windows 防火牆自己跳「允許私人／公用網路」。
-  - 狀態文字 `settings-lan-status`：查詢中／關閉／正在轉發 N 個位址／沒有 published 埠／有位址無法監聽／mirrored 阻擋／還原中。
-  - 轉發清單 `settings-lan-forwards`，每列 `settings-lan-forward`：`http://<IP>:<埠> → 容器`；無法監聽時加 `error` class 並顯示原因。
+  - 狀態文字 `settings-lan-status`：查詢中／關閉／正在轉發 N 個位址／沒有 published 埠／有位址無法監聽／mirrored 阻擋／還原中。設定頁不列位址。
   - 偵測到 0.9.0 的 mirrored 模式時顯示 `settings-lan-mirrored` 與「還原 NAT」`settings-lan-restore`：
     - 流程：確認框（確定鈕「還原 NAT」，非 danger）→ `POST /api/lan/restore-nat` → UAC → `wsl --shutdown` → 等 API 埠釋放 → 啟動引擎。
     - 取消 UAC 等失敗時，原因顯示在 error banner。
   - 進入設定頁時查詢一次狀態（`GET /api/lan`，會先同步轉發）。背景每 3 秒同步轉發（`Server.RunLAN`）。
+- **容器頁的區網位址**：
+  - 開啟區網存取後，每個服務列的名稱欄在狀態下方多一行 `ct-lan-<名稱>`：「區網」標籤＋`192.168.x.x:<埠>`。
+  - 成功的是連結 `ct-lan-link`：點擊以系統瀏覽器開啟（`POST /api/lan/open`，只接受目前轉發中的位址）。監聽失敗的是紅色刪除線 `ct-lan-error`，原因放在 title。
+  - 容器 Info（`info-lan`）與 compose 群組 Info 的服務清單也列出。
+  - 資料來自 `GET /api/lan/forwards`，隨容器清單一起刷新。
 - **輸入元件**（設計稿「Input controls」）：全部自繪、不用瀏覽器預設外觀。文字欄位外框 `.tf`（34px、底邊較深；焦點＝藍色底線、錯誤＝紅色底線、停用＝灰底）；數字隱藏原生 spinner，改欄內 −／＋ 與單位，超出 min／max 標錯；下拉 `appearance:none`＋自繪箭頭；搜尋有清除鈕（Esc 亦可）；核取方塊／選項按鈕 18px 以 CSS 畫勾與點；開關 40×20、左側顯示開／關文字；輸入名稱確認在完全相符時顯示綠色勾。鍵盤焦點：小型控制項 2px 外框、文字欄位用底線。
 - **引擎未就緒**：資源列表改顯示「引擎尚未啟動」卡片：啟動引擎按鈕＋由 `/api/status` 推得的檢查清單（找到發行版、執行中、systemd、docker.service、API 可連線）。
 - **InfoBar**：錯誤／未就緒／動作結果浮在內容欄底部，不擠動列表；結果 8 秒後自動消失。
@@ -78,7 +82,7 @@
 | Machines | 設為目前、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要；取代 ⓘ dialog | 隨 0.5 |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
-| Settings › 網路 | 區網存取開關（即時、不重啟 WSL）、轉發清單、監聽失敗原因、無 published 埠提示、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW | `lan.spec.ts` |
+| Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的區網位址（點擊開瀏覽器）、監聽失敗原因、Info 區網欄 | `lan.spec.ts` |
 | i18n | Settings「外觀」語言下拉（立即生效） | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 

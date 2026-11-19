@@ -153,6 +153,12 @@ export interface LANForward {
   error?: string;
 }
 
+/** 容器頁用的轉發清單（GET /api/lan/forwards）。 */
+export interface LANForwards {
+  enabled: boolean;
+  forwards: LANForward[];
+}
+
 /** 區網存取狀態（GET/PUT /api/lan）。 */
 export interface LANStatus {
   enabled: boolean;
@@ -266,6 +272,8 @@ export const api = {
   getLAN: () => call<LANStatus>("GET", "/api/lan"),
   putLAN: (enabled: boolean) => call<LANStatus>("PUT", "/api/lan", { enabled }),
   restoreNAT: () => call<LANStatus>("POST", "/api/lan/restore-nat"),
+  lanForwards: (signal?: AbortSignal) => call<LANForwards>("GET", "/api/lan/forwards", undefined, false, signal),
+  openLAN: (url: string) => call<void>("POST", "/api/lan/open", { url }),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),

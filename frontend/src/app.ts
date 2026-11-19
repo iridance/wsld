@@ -4,6 +4,7 @@ import {
   type Container,
   type Image,
   type InstallProgress,
+  type LANForward,
   type LANStatus,
   type MachinesResponse,
   type Meta,
@@ -79,6 +80,8 @@ interface State {
   lanLoading?: boolean;
   /** 套用中：toggle＝儲存並同步轉發；restore＝還原 NAT（等待 UAC／WSL 重啟） */
   lanApplying?: "toggle" | "restore";
+  /** 容器頁的區網轉發（隨容器清單刷新；未開啟區網存取時為空） */
+  lanForwards: LANForward[];
   imgFilter: ImgFilter;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
@@ -181,6 +184,7 @@ export class App {
       ctFilter: "all",
       ctQuery: "",
       imgFilter: "all",
+      lanForwards: [],
     };
     if (!VIEWS.some((v) => v.id === this.st.view)) this.st.view = "containers";
     this.build();
@@ -263,6 +267,7 @@ export class App {
     switch (this.st.view) {
       case "containers":
         this.st.containers = await api.containers(signal);
+        this.st.lanForwards = await this.loadLANForwards(signal);
         break;
       case "images":
         this.st.images = await api.images(signal);
@@ -1134,12 +1139,14 @@ export class App {
       rowAttrs["aria-selected"] = "true";
     }
     const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
+    const lan = this.lanLinks(c);
     return el(
       "tr",
       rowAttrs,
       el("td", { class: `name-cell ${project ? "indent" : ""}`.trim() },
         el("span", { class: "ct-name", "data-testid": "ct-name", text: display, title: `${n}\n${c.Id}` }),
         el("span", { class: "ct-sub", "data-testid": `ct-status-${n}`, text: c.Status || c.State }),
+        ...(lan ? [lan] : []),
       ),
       el("td", { text: c.Image, title: c.Image }),
       el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
@@ -1262,6 +1269,7 @@ export class App {
           infoField(t("gui.info.started"), d.started || "—"),
           infoField(t("gui.info.command"), d.command || "—", "info-command"),
           infoField(t("gui.col.ports"), d.ports || ports(c!) || "—", "info-ports"),
+          ...(c && this.lanText(c) ? [infoField(t("gui.lan.tag"), this.lanText(c), "info-lan")] : []),
           infoField(t("gui.info.networks"), nets, "info-networks"),
           infoField(t("gui.info.mounts"), mounts, "info-mounts"),
           infoField(t("gui.info.restart"), d.restart_policy || "—", "info-restart"),
@@ -1281,6 +1289,7 @@ export class App {
           infoField(t("gui.col.image"), c.Image),
           infoField(t("gui.col.state"), c.State, "info-state"),
           infoField(t("gui.col.ports"), ports(c) || "—", "info-ports"),
+          ...(this.lanText(c) ? [infoField(t("gui.lan.tag"), this.lanText(c), "info-lan")] : []),
           infoField(t("gui.col.id"), c.Id),
           el("p", { class: "muted", text: "…" }),
         );
@@ -1350,6 +1359,7 @@ export class App {
           el("div", { class: `state ${c.State}`, text: c.State }),
           el("div", { class: "muted", text: c.Status }),
           el("div", { class: "muted", text: ports(c) || "—" }),
+          ...(this.lanLinks(c) ? [this.lanLinks(c)!] : []),
         ),
       );
     }
@@ -2061,6 +2071,57 @@ export class App {
     else root.setAttribute("data-theme", theme);
   }
 
+  /** 容器頁的區網轉發；未開啟或查詢失敗時回空（不影響容器清單）。 */
+  private async loadLANForwards(signal?: AbortSignal): Promise<LANForward[]> {
+    if (!this.st.meta.lan_supported) return [];
+    try {
+      const r = await api.lanForwards(signal);
+      return r.enabled ? r.forwards : [];
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      return [];
+    }
+  }
+
+  /** 該容器的區網連線位址（服務列下方）：成功的可點開瀏覽器，監聽失敗的標紅並以 title 顯示原因。 */
+  private lanLinks(c: Container): HTMLElement | null {
+    const n = name(c);
+    const mine = this.st.lanForwards.filter((f) => f.container === n);
+    if (mine.length === 0) return null;
+    const wrap = el("span", { class: "ct-lan", "data-testid": `ct-lan-${n}` }, el("span", { class: "ct-lan-tag", text: t("gui.lan.tag") }));
+    for (const f of mine) {
+      const host = f.address.includes(":") ? `[${f.address}]` : f.address;
+      const label = `${host}:${f.port}`;
+      if (f.error) {
+        wrap.append(el("span", { class: "lan-err", "data-testid": "ct-lan-error", text: label, title: f.error }));
+        continue;
+      }
+      const url = `http://${label}`;
+      const a = el("a", { class: "lan-link mono", href: url, "data-testid": "ct-lan-link", title: fmt(t("gui.lan.open"), url), text: label }) as HTMLAnchorElement;
+      a.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void api.openLAN(url).catch((err) => {
+          this.st.lastError = err instanceof ApiError ? err.message : String(err);
+          this.renderBanner();
+        });
+      };
+      wrap.append(a);
+    }
+    return wrap;
+  }
+
+  /** Info 用：該容器的區網位址文字（每行一個；失敗的附原因）。 */
+  private lanText(c: Container): string {
+    return this.st.lanForwards
+      .filter((f) => f.container === name(c))
+      .map((f) => {
+        const host = f.address.includes(":") ? `[${f.address}]` : f.address;
+        return f.error ? `${host}:${f.port} — ${f.error}` : `http://${host}:${f.port}`;
+      })
+      .join("\n");
+  }
+
   // ---- 區網存取（設定頁「網路」） ---------------------------------------------
 
   private async loadLAN(): Promise<void> {
@@ -2156,17 +2217,6 @@ export class App {
       restore.onclick = () => void this.restoreNAT();
       box.append(el("div", {}, restore));
       extra.push(box);
-    }
-    if (s?.enabled && (s.forwards.length > 0 || !s.mirrored)) {
-      const list = el("div", { class: "lan-addresses", "data-testid": "settings-lan-forwards" });
-      for (const f of s.forwards) {
-        const item = el("div", { class: f.error ? "lan-forward error" : "lan-forward", "data-testid": "settings-lan-forward" });
-        item.append(el("span", { class: "mono", text: `http://${f.address}:${f.port}` }), el("span", { class: "muted", text: `→ ${f.container}` }));
-        if (f.error) item.append(el("span", { class: "lan-forward-err", text: f.error }));
-        list.append(item);
-      }
-      if (s.forwards.length === 0) list.append(el("span", { class: "muted", text: t("gui.lan.no_ports") }));
-      extra.push(row(el("span", { text: t("gui.settings.lan_addresses") }), t("gui.lan.hint.firewall"), list));
     }
     return el("section", { class: "set-group", "data-testid": "settings-lan-group" },
       el("h2", { text: t("gui.settings.group.network") }),

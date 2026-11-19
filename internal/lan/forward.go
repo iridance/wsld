@@ -26,6 +26,9 @@ type Forward struct {
 	Error string `json:"error,omitempty"`
 }
 
+// ForwardURL 回傳轉發位址的 http URL（IPv6 會加中括號）。
+func ForwardURL(f Forward) string { return "http://" + key(f.Address, f.Port) }
+
 // Forwarder 在區網 IP 上監聽容器 published 埠，並把連線轉到 Windows 的 127.0.0.1（WSL localhost 轉發）。
 // 由 Windows 程式監聽非 loopback 位址，第一次時 Windows 防火牆會跳出「允許私人／公用網路」的確認視窗。
 type Forwarder struct {

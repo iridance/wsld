@@ -160,3 +160,12 @@ func TestPublishedTargets(t *testing.T) {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
 }
+
+func TestForwardURL(t *testing.T) {
+	if got := ForwardURL(Forward{Address: "192.168.1.20", Port: 8080}); got != "http://192.168.1.20:8080" {
+		t.Fatal(got)
+	}
+	if got := ForwardURL(Forward{Address: "fe80::1", Port: 80}); got != "http://[fe80::1]:80" {
+		t.Fatal(got)
+	}
+}

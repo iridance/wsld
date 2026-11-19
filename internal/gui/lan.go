@@ -136,6 +136,52 @@ func (s *Server) handlePutLAN(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.lanStatus(r.Context()))
 }
 
+// LANForwards 是 GET /api/lan/forwards 的回應（容器頁每次刷新取用；不查 .wslconfig／防火牆）。
+type LANForwards struct {
+	Enabled  bool          `json:"enabled"`
+	Forwards []lan.Forward `json:"forwards"`
+}
+
+func (s *Server) handleLANForwards(w http.ResponseWriter, r *http.Request) {
+	if !s.lanAvailable(w) {
+		return
+	}
+	s.SyncLAN(r.Context())
+	writeJSON(w, http.StatusOK, LANForwards{Enabled: s.cfg().LANAccess, Forwards: s.Forwarder.Forwards()})
+}
+
+// handleLANOpen 以系統瀏覽器開啟一個轉發位址；只接受目前成功轉發中的 http://<位址>:<埠>。
+func (s *Server) handleLANOpen(w http.ResponseWriter, r *http.Request) {
+	if !s.lanAvailable(w) {
+		return
+	}
+	var in struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", err)
+		return
+	}
+	allowed := false
+	for _, f := range s.Forwarder.Forwards() {
+		if f.Error == "" && in.URL == lan.ForwardURL(f) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("not a forwarded LAN address"))
+		return
+	}
+	if s.OnOpenURL != nil {
+		if err := s.OnOpenURL(in.URL); err != nil {
+			writeErr(w, http.StatusInternalServerError, "error", err)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleRestoreNAT：清掉 0.9.0 的 mirrored 設定（UAC 移除防火牆規則、改 .wslconfig），再重啟 WSL。
 func (s *Server) handleRestoreNAT(w http.ResponseWriter, r *http.Request) {
 	if !s.lanAvailable(w) {

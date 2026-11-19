@@ -229,7 +229,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
 | Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
-| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；列出轉發位址與監聽失敗原因；偵測到 mirrored 時「還原 NAT」） |
+| Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；偵測到 mirrored 時「還原 NAT」）。區網位址顯示在 Containers 各服務列下方與 Info（點擊以系統瀏覽器開啟） |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |
 | 破壞性操作 | 一律確認；unregister 需輸入名稱；Remove 容器可含 running（會停止） |

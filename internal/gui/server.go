@@ -149,6 +149,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/lan", s.handleGetLAN)
 	mux.HandleFunc("PUT /api/lan", s.handlePutLAN)
 	mux.HandleFunc("POST /api/lan/restore-nat", s.handleRestoreNAT)
+	mux.HandleFunc("GET /api/lan/forwards", s.handleLANForwards)
+	mux.HandleFunc("POST /api/lan/open", s.handleLANOpen)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)

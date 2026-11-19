@@ -62,7 +62,7 @@ DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d --name t -v "$PWD:/app" alpine s
 DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d -p 8080:80 nginx:alpine
 # wsld-gui › Settings › 網路 › 區網存取 開啟 → Windows 跳「允許 wsld-gui 私人／公用網路」→ 允許
 # 另一台設備：http://<內網IP>:8080 → nginx 首頁；curl http://<內網IP>:23750/_ping → 必須連不到（API 不轉發）
-# 停掉容器：清單中該位址消失；關閉開關：另一台設備連不到，本機 127.0.0.1:8080 仍可用
+# 容器頁 nginx 列下方出現「區網 <內網IP>:8080」，點擊開瀏覽器；停掉容器：該位址消失；關閉開關：另一台設備連不到，本機 127.0.0.1:8080 仍可用
 ```
 
 2026-09-06 於 Ubuntu-26.04（WSL2）實測：Docker CE 29.8.0、Compose v5.5.1、埠 23750、doctor 11 OK。

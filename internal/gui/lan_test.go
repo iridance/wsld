@@ -171,3 +171,44 @@ func TestLANRestoreNATCanceledUAC(t *testing.T) {
 		t.Fatalf("status=%d body=%s shutdowns=%d", resp.StatusCode, b, le.wsl.Shutdowns())
 	}
 }
+
+func TestLANForwardsEndpoint(t *testing.T) {
+	e := newEnv(t, "")
+	withLAN(t, e)
+	_, b := e.req(t, "GET", "/api/lan/forwards", "")
+	var off LANForwards
+	_ = json.Unmarshal(b, &off)
+	if off.Enabled || len(off.Forwards) != 0 {
+		t.Fatalf("off=%+v", off)
+	}
+	_, _ = e.req(t, "PUT", "/api/lan", `{"enabled":true}`)
+	resp, b := e.req(t, "GET", "/api/lan/forwards", "")
+	var on LANForwards
+	if err := json.Unmarshal(b, &on); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	if !on.Enabled || len(on.Forwards) != 1 || on.Forwards[0].Container != "web" || on.Forwards[0].Port != 8080 {
+		t.Fatalf("on=%+v", on)
+	}
+}
+
+func TestLANOpenOnlyForwardedURLs(t *testing.T) {
+	e := newEnv(t, "")
+	withLAN(t, e)
+	_, _ = e.req(t, "PUT", "/api/lan", `{"enabled":true}`)
+	e.window = nil
+	if resp, b := e.req(t, "POST", "/api/lan/open", `{"url":"http://192.168.1.20:8080"}`); resp.StatusCode != 204 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	if len(e.window) != 1 || e.window[0] != "open-url:http://192.168.1.20:8080" {
+		t.Fatalf("window=%v", e.window)
+	}
+	for _, bad := range []string{`{"url":"http://192.168.1.20:9999"}`, `{"url":"file:///C:/Windows"}`, `{"url":"http://evil.example"}`, `nope`} {
+		if resp, _ := e.req(t, "POST", "/api/lan/open", bad); resp.StatusCode != 400 {
+			t.Fatalf("%s: status %d", bad, resp.StatusCode)
+		}
+	}
+	if len(e.window) != 1 {
+		t.Fatalf("rejected URLs must not open: %v", e.window)
+	}
+}
