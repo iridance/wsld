@@ -82,6 +82,8 @@ interface State {
   lanApplying?: "toggle" | "restore";
   /** 容器頁的區網轉發（隨容器清單刷新；未開啟區網存取時為空） */
   lanForwards: LANForward[];
+  /** 區網存取已開啟（容器列顯示瀏覽器按鈕） */
+  lanEnabled: boolean;
   imgFilter: ImgFilter;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
@@ -185,6 +187,7 @@ export class App {
       ctQuery: "",
       imgFilter: "all",
       lanForwards: [],
+      lanEnabled: false,
     };
     if (!VIEWS.some((v) => v.id === this.st.view)) this.st.view = "containers";
     this.build();
@@ -267,7 +270,7 @@ export class App {
     switch (this.st.view) {
       case "containers":
         this.st.containers = await api.containers(signal);
-        this.st.lanForwards = await this.loadLANForwards(signal);
+        await this.loadLANForwards(signal);
         break;
       case "images":
         this.st.images = await api.images(signal);
@@ -1139,18 +1142,17 @@ export class App {
       rowAttrs["aria-selected"] = "true";
     }
     const stateText = pending ? t(`gui.ct.${pending}`) : c.State;
-    const lan = this.lanLinks(c);
+    const lanBtn = this.lanButton(c);
     return el(
       "tr",
       rowAttrs,
       el("td", { class: `name-cell ${project ? "indent" : ""}`.trim() },
         el("span", { class: "ct-name", "data-testid": "ct-name", text: display, title: `${n}\n${c.Id}` }),
         el("span", { class: "ct-sub", "data-testid": `ct-status-${n}`, text: c.Status || c.State }),
-        ...(lan ? [lan] : []),
       ),
       el("td", { text: c.Image, title: c.Image }),
       el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
-      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, infoBtn, rmBtn),
+      el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, ...(lanBtn ? [lanBtn] : []), infoBtn, rmBtn),
     );
   }
 
@@ -1359,7 +1361,7 @@ export class App {
           el("div", { class: `state ${c.State}`, text: c.State }),
           el("div", { class: "muted", text: c.Status }),
           el("div", { class: "muted", text: ports(c) || "—" }),
-          ...(this.lanLinks(c) ? [this.lanLinks(c)!] : []),
+          ...(this.lanText(c) ? [el("div", { class: "muted mono", "data-testid": "info-service-lan", text: this.lanText(c) })] : []),
         ),
       );
     }
@@ -2071,54 +2073,83 @@ export class App {
     else root.setAttribute("data-theme", theme);
   }
 
-  /** 容器頁的區網轉發；未開啟或查詢失敗時回空（不影響容器清單）。 */
-  private async loadLANForwards(signal?: AbortSignal): Promise<LANForward[]> {
-    if (!this.st.meta.lan_supported) return [];
-    try {
-      const r = await api.lanForwards(signal);
-      return r.enabled ? r.forwards : [];
-    } catch (e) {
-      if (signal?.aborted) throw e;
-      return [];
+  /** 容器頁的區網轉發；未開啟或查詢失敗時清空（不影響容器清單）。 */
+  private async loadLANForwards(signal?: AbortSignal): Promise<void> {
+    let enabled = false;
+    let forwards: LANForward[] = [];
+    if (this.st.meta.lan_supported) {
+      try {
+        const r = await api.lanForwards(signal);
+        enabled = r.enabled;
+        forwards = r.enabled ? r.forwards : [];
+      } catch (e) {
+        if (signal?.aborted) throw e;
+      }
     }
+    this.st.lanEnabled = enabled;
+    this.st.lanForwards = forwards;
   }
 
-  /** 該容器的區網連線位址（服務列下方）：成功的可點開瀏覽器，監聽失敗的標紅並以 title 顯示原因。 */
-  private lanLinks(c: Container): HTMLElement | null {
+  /** 容器列的「在瀏覽器開啟（區網）」按鈕；區網存取關閉時不顯示（各列一致，圖示對齊）。
+   *  一個位址直接開啟；多個位址（多個 published 埠）跳小選單；沒有位址時停用；全部監聽失敗時紅色並以 title 說明原因。 */
+  private lanButton(c: Container): HTMLButtonElement | null {
+    if (!this.st.lanEnabled) return null;
     const n = name(c);
     const mine = this.st.lanForwards.filter((f) => f.container === n);
-    if (mine.length === 0) return null;
-    const wrap = el("span", { class: "ct-lan", "data-testid": `ct-lan-${n}` }, el("span", { class: "ct-lan-tag", text: t("gui.lan.tag") }));
-    for (const f of mine) {
-      const host = f.address.includes(":") ? `[${f.address}]` : f.address;
-      const label = `${host}:${f.port}`;
-      if (f.error) {
-        wrap.append(el("span", { class: "lan-err", "data-testid": "ct-lan-error", text: label, title: f.error }));
-        continue;
-      }
-      const url = `http://${label}`;
-      const a = el("a", { class: "lan-link mono", href: url, "data-testid": "ct-lan-link", title: fmt(t("gui.lan.open"), url), text: label }) as HTMLAnchorElement;
-      a.onclick = (e) => {
-        e.preventDefault();
+    const urls = mine.filter((f) => !f.error).map(lanURL);
+    const failed = mine.filter((f) => f.error);
+    let label = t("gui.lan.none_for_ct");
+    if (urls.length) label = fmt(t("gui.lan.open"), urls.join("\n"));
+    else if (failed.length) label = failed.map((f) => `${lanURL(f)} — ${f.error}`).join("\n");
+    const b = iconBtn({ "data-testid": `btn-lan-${n}`, class: failed.length && !urls.length ? "warn" : "" }, "globe", label);
+    b.disabled = urls.length === 0;
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (urls.length === 1) this.openLANURL(urls[0]);
+      else this.toggleLANMenu(b, urls);
+    };
+    return b;
+  }
+
+  private openLANURL(url: string): void {
+    void api.openLAN(url).catch((err) => {
+      this.st.lastError = err instanceof ApiError ? err.message : String(err);
+      this.renderBanner();
+    });
+  }
+
+  /** 多個區網位址時的小選單（掛在按鈕下方；點外面或選一項即關閉）。 */
+  private toggleLANMenu(anchor: HTMLElement, urls: string[]): void {
+    const existing = document.querySelector<HTMLElement>('[data-testid="lan-menu"]');
+    existing?.remove();
+    if (existing && existing.dataset.for === anchor.dataset.testid) return;
+    const menu = el("div", { class: "lan-menu", role: "menu", "data-testid": "lan-menu", "data-for": anchor.dataset.testid ?? "" });
+    for (const u of urls) {
+      const item = el("button", { type: "button", role: "menuitem", class: "mono", "data-testid": "lan-menu-item", text: u.replace(/^http:\/\//, "") }) as HTMLButtonElement;
+      item.onclick = (e) => {
         e.stopPropagation();
-        void api.openLAN(url).catch((err) => {
-          this.st.lastError = err instanceof ApiError ? err.message : String(err);
-          this.renderBanner();
-        });
+        menu.remove();
+        this.openLANURL(u);
       };
-      wrap.append(a);
+      menu.append(item);
     }
-    return wrap;
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = `${r.bottom + 4}px`;
+    menu.style.left = `${Math.max(8, r.right - 220)}px`;
+    document.body.append(menu);
+    const close = (ev: Event) => {
+      if (ev.target instanceof Node && menu.contains(ev.target)) return;
+      menu.remove();
+      document.removeEventListener("click", close, true);
+    };
+    setTimeout(() => document.addEventListener("click", close, true));
   }
 
   /** Info 用：該容器的區網位址文字（每行一個；失敗的附原因）。 */
   private lanText(c: Container): string {
     return this.st.lanForwards
       .filter((f) => f.container === name(c))
-      .map((f) => {
-        const host = f.address.includes(":") ? `[${f.address}]` : f.address;
-        return f.error ? `${host}:${f.port} — ${f.error}` : `http://${host}:${f.port}`;
-      })
+      .map((f) => (f.error ? `${lanURL(f)} — ${f.error}` : lanURL(f)))
       .join("\n");
   }
 
@@ -2433,7 +2464,7 @@ const COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 220, min: 80, resizable: true },
   { key: "image", label: "gui.col.image", def: 260, min: 80, resizable: true },
   { key: "state", label: "gui.col.state", def: 130, min: 90, resizable: true },
-	{ key: "actions", label: "gui.col.actions", def: 210, min: 180, resizable: false },
+	{ key: "actions", label: "gui.col.actions", def: 240, min: 210, resizable: false },
 ];
 
 const IMAGE_COLS: Col[] = [
@@ -2515,6 +2546,11 @@ function saveJSON(key: string, v: unknown): void {
   } catch {
     /* ignore quota / privacy errors */
   }
+}
+
+/** 區網轉發的 URL（IPv6 加中括號）。 */
+function lanURL(f: LANForward): string {
+  return `http://${f.address.includes(":") ? `[${f.address}]` : f.address}:${f.port}`;
 }
 
 /** 已發佈埠；dual-stack（0.0.0.0 與 ::）會各回一筆，去重後依對外埠排序。 */

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/i18n"
 	"github.com/iridance/wsld/internal/lan"
@@ -157,7 +158,14 @@ func main() {
 		if proj := q.Get("project"); proj != "" {
 			engine.AddComposeContainer(proj, q.Get("service"), q.Get("image"), state)
 		} else {
-			engine.AddContainer(q.Get("name"), q.Get("image"), state, nil)
+			// ports=3000,3001：以 0.0.0.0 發佈（區網轉發測試用）
+			var ports []dockerapi.Port
+			for _, p := range strings.Split(q.Get("ports"), ",") {
+				if n, err := strconv.Atoi(p); err == nil {
+					ports = append(ports, dockerapi.Port{IP: "0.0.0.0", PrivatePort: n, PublicPort: n, Type: "tcp"})
+				}
+			}
+			engine.AddContainer(q.Get("name"), q.Get("image"), state, ports)
 		}
 		ok(w)
 	})
