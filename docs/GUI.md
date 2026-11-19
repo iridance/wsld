@@ -122,7 +122,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.11.1 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.12.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
