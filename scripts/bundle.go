@@ -13,11 +13,17 @@ var bootstrapMain string
 //go:embed lib/bootstrap-lib.sh
 var bootstrapLib string
 
-// BootstrapBundle 把 lib 與主腳本合成單一自足腳本（移除 source 行）。
+//go:embed lib/distros.tsv
+var distrosTable string
+
+// BootstrapBundle 把分類表、lib 與主腳本合成單一自足腳本（移除 source 行）。
 func BootstrapBundle() []byte {
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
-	b.WriteString("# --- generated bundle: lib/bootstrap-lib.sh + 02-bootstrap-docker.sh ---\n")
+	b.WriteString("# --- generated bundle: lib/distros.tsv + lib/bootstrap-lib.sh + 02-bootstrap-docker.sh ---\n")
+	b.WriteString("WSLD_DISTROS_TABLE='")
+	b.WriteString(distrosTable)
+	b.WriteString("'\n")
 	b.WriteString(stripShebang(bootstrapLib))
 	b.WriteString("\n# --- main ---\n")
 	for _, line := range strings.Split(stripShebang(bootstrapMain), "\n") {

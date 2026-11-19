@@ -225,7 +225,7 @@ func TestBindActivePromotesConfigMissingLifecycle(t *testing.T) {
 	}
 	e.engine.SetDown(true)
 
-	// 模擬「無 config 開 GUI → 設為目前」：寫入占位後應升級 Life 並 Init+Start
+	// 模擬「無 config 開 GUI → 設為主要」：寫入占位後應升級 Life 並 Init+Start
 	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("use = %d %s", resp.StatusCode, b)

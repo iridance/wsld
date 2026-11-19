@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.11.0（git tag `v0.11.0`）  
-狀態：**0.11.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.11.1（git tag `v0.11.1`）  
+狀態：**0.11.1 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-19
 
 ## 1. 問題與目標
@@ -19,7 +19,7 @@
 | 角色 | 責任 |
 |------|------|
 | WSL Ubuntu | 「machine」：原始碼、git、shell；同機執行 **rootful dockerd** |
-| `wsld`（CLI） | 建立／啟動 WSL、ensure dockerd、腳本化管理；可切換 active machine |
+| `wsld`（CLI） | 建立／啟動 WSL、ensure dockerd、腳本化管理；可切換主要 machine |
 | `wsld-gui`（GUI） | Tray + 主視窗；與 CLI **共用** Go `internal` core |
 
 ### 1.3 基底（Phase 1–4，已落地）
@@ -197,7 +197,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 |------|------|
 | `init` | distro 策略、bootstrap、寫／更新該 machine profile（含 API port）並可設 active |
 | `start` | 喚醒 active distro、ensure docker、探測 API |
-| `use` | 切換 active machine（與 GUI「設為目前」同寫 config） |
+| `use` | 切換主要 machine（與 GUI「設為主要」同寫 config） |
 | `unmanage` | 停該 distro docker 後刪 profile（保留 WSL） |
 | `unregister` | `wsl --unregister`（需 `--confirm <name>`）＋刪 profile |
 | `status` | WSL／docker／API 狀態（對準 active） |
@@ -228,7 +228,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Images | 列表、移除、清除未使用；使用中不強制刪 |
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
-| Machines | 列表＋設為目前／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
+| Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
 | Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列的地球按鈕以系統瀏覽器開啟區網位址（多埠跳選單），Info 以文字列出 |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |

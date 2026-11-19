@@ -1,7 +1,7 @@
 # wsld Roadmap
 
-版本：0.11.0（git tag `v0.11.0`）  
-對應規格：[SPEC.md](SPEC.md)（**0.11.0 已交付**；Phase 0–4 基底已落地）
+版本：0.11.1（git tag `v0.11.1`）  
+對應規格：[SPEC.md](SPEC.md)（**0.11.1 已交付**；Phase 0–4 基底已落地）
 
 ## 總覽
 
@@ -21,7 +21,7 @@ Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-W
   6e Machines/Settings/Terminal/Tray
   6f Parity 驗證 + cutover（→ v2.0.0）
 
-0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT；**0.11.0**（`v0.11.0`）= 區網存取的防火牆授權（UAC 提權 wsld-gui 自身加規則）＋容器列地球按鈕＋自繪下拉選單
+0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT；**0.11.0**（`v0.11.0`）= 區網存取的防火牆授權（UAC 提權 wsld-gui 自身加規則）＋容器列地球按鈕＋自繪下拉選單；**0.11.1**（`v0.11.1`）= 修正 Kali 等 Debian 衍生版 bootstrap 404＋WSL 發行版分類表（`scripts/lib/distros.tsv`）＋「設為目前」改稱「設為主要」
 之後 v2.0 = Phase 6（6a–6f）
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -119,15 +119,15 @@ Extra ≠ 0.5／v2.0 完成條件
 - Config：多 machine profile＋單一 `active`；舊扁平 `config.toml` **自動遷移**
 - 全局設定：`lang`、`tray_autostart`、`refresh_interval_sec`、`exec_shell`、`theme`
 - 每 machine：`distro`、`user`、`api_endpoint`（各自埠，避免並行 dockerd 搶埠）
-- GUI：Machines「設為目前」；CLI：`wsld use <distro>`（同寫 config）
-- 「設為目前」即寫**占位 profile**；未 init 可 active → 橫幅提示；**Start engine**（或 `wsld init`）自動 bootstrap／補齊 endpoint／user／port 後再拉起引擎
+- GUI：Machines「設為主要」；CLI：`wsld use <distro>`（同寫 config）
+- 「設為主要」即寫**占位 profile**；未 init 可 active → 橫幅提示；**Start engine**（或 `wsld init`）自動 bootstrap／補齊 endpoint／user／port 後再拉起引擎
 - 切換 active：不停舊引擎；硬切 Logs／Terminal／Info／快取／pending
 - 取消管理：一律先停該 distro docker → 刪 profile（不刪 WSL）
 - Unregister 發行版：GUI＋CLI；輸入 distro 名稱雙重確認
 
 #### Machines／Containers UI
 
-- Machines actions：設為目前、Open folder、Terminal（**底部 panel**、該 distro WSL shell、cwd＝user home）、取消管理、unregister、Info（右側 drawer）、Add distro
+- Machines actions：設為主要、Open folder、Terminal（**底部 panel**、該 distro WSL shell、cwd＝user home）、取消管理、unregister、Info（右側 drawer）、Add distro
 - Machines Info（右側，對齊 Containers）：基本欄、`.wslconfig` 的 memory／processors、`/etc/wsl.conf`、該 machine 的 **API endpoint（tcp）**、CPU／記憶體用量摘要（非 process 表）；取代 ⓘ dialog
 - Containers：Remove（running 可刪，確認會停止）；Info summary：Name、ID、Image、State、Created、Started、Command、Ports、Networks（+IP）、Mounts、Labels（可摺疊）、Restart policy
 
@@ -149,7 +149,7 @@ Extra ≠ 0.5／v2.0 完成條件
 ### 完成定義
 
 - [x] 多 profile＋active；遷移舊 config；每 machine 自有埠
-- [x] GUI「設為目前」與 `wsld use` 同步；切換硬切面板／快取；未 init active 顯示未就緒
+- [x] GUI「設為主要」與 `wsld use` 同步；切換硬切面板／快取；未 init active 顯示未就緒
 - [x] 取消管理（停 docker＋刪 profile）；unregister（打名稱確認）
 - [x] Machines：folder／terminal（home）／右側 Info（含 `.wslconfig` memory／processors、wsl.conf、tcp、用量摘要）
 - [x] Containers：Remove（含 running）；Info summary 欄位齊全（必要時 inspect）
@@ -353,7 +353,7 @@ Extra ≠ 0.5／v2.0 完成條件
 
 #### 交付
 
-- Machines 視圖（設為目前／folder／terminal／Info／unmanage／unregister／Add distro）
+- Machines 視圖（設為主要／folder／terminal／Info／unmanage／unregister／Add distro）
 - Settings 視圖（refresh／exec_shell／tray_autostart／Theme）
 - Logs／Exec 面板的終端 widget（子 spike：`vte`／`alacritty_terminal` parser 驅動自訂 XAML 控制項，無現成範例）
 - Tray（`Shell_NotifyIcon`）、single-instance mutex、autostart 登錄檔

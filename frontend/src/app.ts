@@ -60,7 +60,7 @@ interface State {
   networks: Network[];
   machines?: MachinesResponse;
   lastError?: string;
-  /** 最近一次「啟動引擎／設為目前」失敗的原因；引擎就緒前輪詢不覆蓋，避免真正原因被「無法連線 API」蓋掉 */
+  /** 最近一次「啟動引擎／設為主要」失敗的原因；引擎就緒前輪詢不覆蓋，避免真正原因被「無法連線 API」蓋掉 */
   bringUpError?: string;
   notice?: string;
   starting: boolean;
@@ -1872,7 +1872,7 @@ export class App {
     this.st.bringUpError = undefined;
     this.renderHeader();
     this.renderBanner();
-    this.renderViewBody(); // 鎖住其他「設為目前」
+    this.renderViewBody(); // 鎖住其他「設為主要」
     try {
       await api.useMachine(name);
       this.hardCutActive();

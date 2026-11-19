@@ -38,7 +38,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 - 自動往上找後寫回 `config.toml` 的 `api_endpoint`。
 - API **只綁 127.0.0.1**（這條規則只針對 Docker API；容器 published 埠要讓內網連入，請見「區網存取」）。`doctor` 的「API 只綁 loopback」會抓到 `0.0.0.0` 誤綁；「Docker API _ping」會抓到「埠有人聽但不是 Docker」。
 - 手動改埠：改 `/etc/docker/daemon.json` 的 `hosts` 與 `config.toml` 的 `api_endpoint` 兩處，然後 `systemctl restart docker`。
-- 若某 machine 已佔到衝突埠：對該 distro 再跑一次 `wsld init -d <name>`（或 GUI 重新設為目前）會改選空閒埠。
+- 若某 machine 已佔到衝突埠：對該 distro 再跑一次 `wsld init -d <name>`（或 GUI 重新設為主要）會改選空閒埠。
 
 ## 區網存取（讓其他設備連到容器）
 
@@ -109,12 +109,12 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 ## Machines：管理多個 WSL 發行版
 
 - GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
-- **0.5**：可「設為目前」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
-- 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。之後「設為目前」會 bootstrap（安裝 Docker）、寫入該 machine 的 user＋endpoint 並啟動引擎。支援 Ubuntu/Debian、Arch、openSUSE 系。
+- **0.5**：可「設為主要」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
+- 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。之後「設為主要」會 bootstrap（安裝 Docker）、寫入該 machine 的 user＋endpoint 並啟動引擎。支援 Ubuntu/Debian、Arch、openSUSE 系。
   - 密碼只經由 stdin 交給發行版內的 `chpasswd`，不會出現在指令參數中，也不會寫入設定檔或 log。
   - 密碼留空則帳號沒有密碼，`sudo` 無法使用；事後可補設：`wsl -d <machine> -u root passwd <帳號>`。
   - CLI `wsld init`（以及 `start`／`use` 觸發的初始化）遇到只有 root 的發行版、需要新建帳號時，會以隱藏輸入詢問密碼（輸入兩次確認，留空略過）；非互動環境可用 `wsld init --distro <name> --password-stdin`，從 stdin 第一行讀取。既有帳號的密碼一律不更動。
-- 「啟動引擎」或「設為目前」失敗時，banner 保留失敗原因直到引擎就緒，不會被輪詢的「無法連線 Docker API」蓋掉。
+- 「啟動引擎」或「設為主要」失敗時，banner 保留失敗原因直到引擎就緒，不會被輪詢的「無法連線 Docker API」蓋掉。
 
 ## 已知限制
 

@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { engine, listHold, listRelease, open, reset, waitListHeld } from "./helpers";
+import { engine, listHold, listRelease, open, reset, setLang, waitListHeld } from "./helpers";
 
 test.beforeEach(async ({ request }) => {
   await reset(request);
@@ -170,6 +170,21 @@ test("Machines: lists local WSL distros with state, version and role badges", as
   await expect(dd.getByTestId("machine-flag-active")).toHaveCount(0);
 });
 
+test("Machines: primary machine is labelled Primary and others offer Set as primary", async ({ page }) => {
+  await go(page, "machines");
+  const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
+  await expect(u.getByTestId("machine-flag-active")).toHaveText("primary");
+  await expect(page.getByTestId("btn-machine-use-docker-desktop")).toContainText("Set as primary");
+});
+
+test("Machines: zh-TW labels the primary machine 主要 and the button 設為主要", async ({ page, request }) => {
+  await setLang(request, "zh-TW");
+  await go(page, "machines");
+  const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
+  await expect(u.getByTestId("machine-flag-active")).toHaveText("主要");
+  await expect(page.getByTestId("btn-machine-use-docker-desktop")).toContainText("設為主要");
+});
+
 test("Machines: Info opens a right-side drawer with wsl.conf and usage bars", async ({ page, request }) => {
   await request.put("/api/settings", {
     data: {
@@ -277,7 +292,7 @@ test("Machines: Add machine lists online distributions and installs the chosen o
   await expect(page.getByTestId("notice")).toContainText("Debian1 installed");
   await expect(page.getByTestId("notice")).not.toContainText("wsl -d");
   await expect(page.getByTestId("notice")).not.toContainText("no password");
-  await expect(page.getByTestId("notice")).toContainText("Set it as current");
+  await expect(page.getByTestId("notice")).toContainText("Set it as primary");
   await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]')).toBeVisible();
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
   const acct = await (await request.get("/__test/wsl/account?distro=Debian1&user=irice")).json();
@@ -454,7 +469,7 @@ test("Machines: Start engine shows Starting… pending on the active row until s
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
 });
 
-test("Machines: Set as current shows Switching… pending on the target row until use finishes", async ({ page }) => {
+test("Machines: Set as primary shows Switching… pending on the target row until use finishes", async ({ page }) => {
   await go(page, "machines");
 
   let release!: () => void;
@@ -549,7 +564,7 @@ test("Machines: Terminal opens bottom panel exec session like containers", async
   await expect(panel).toBeHidden();
 });
 
-test("Machines: Set as current shows header Loading/Switching until complete", async ({ page }) => {
+test("Machines: Set as primary shows header Loading/Switching until complete", async ({ page }) => {
   await open(page);
   await page.getByTestId("nav-machines").click();
 
@@ -579,7 +594,7 @@ test("Machines: Set as current shows header Loading/Switching until complete", a
   await expect(page.getByTestId("notice")).toContainText("docker-desktop");
 });
 
-test("Machines: Set as current switches active, hard-cuts panels, and finishes init", async ({ page }) => {
+test("Machines: Set as primary switches active, hard-cuts panels, and finishes init", async ({ page }) => {
   await open(page);
   // open a panel first
   await page.getByTestId("btn-logs-web").click();
@@ -595,7 +610,7 @@ test("Machines: Set as current switches active, hard-cuts panels, and finishes i
   await expect(page.getByTestId("btn-start-engine")).toBeDisabled();
 });
 
-test("Machines: Set as current on uninitialized distro auto inits and starts", async ({ page }) => {
+test("Machines: Set as primary on uninitialized distro auto inits and starts", async ({ page }) => {
   await open(page);
   await page.getByTestId("nav-machines").click();
   await page.getByTestId("btn-machine-use-docker-desktop").click();

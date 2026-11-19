@@ -60,11 +60,40 @@ wsld_detect_distro_id() {
   sed -n 's/^ID=//p' "$f" | tr -d '"' | head -1
 }
 
-# $1 = os-release 路徑。stdout = debian | arch | suse；不支援則 unknown 且 exit 1。
-# 先看 ID，再以 ID_LIKE 判斷衍生版。
+# --- 發行版分類表（scripts/lib/distros.tsv）-------------------------------
+
+# stdout = 分類表（已去掉註解與空行）。bundle 模式由 WSLD_DISTROS_TABLE 內嵌；
+# 否則讀 WSLD_DISTROS_FILE（預設與本檔同目錄的 distros.tsv）。
+wsld_distros_table() {
+  local f
+  if [ -n "${WSLD_DISTROS_TABLE:-}" ]; then
+    printf '%s\n' "$WSLD_DISTROS_TABLE"
+  else
+    f="${WSLD_DISTROS_FILE:-$(dirname "${BASH_SOURCE[0]:-.}")/distros.tsv}"
+    [ -r "$f" ] || return 1
+    cat "$f"
+  fi | sed -e 's/#.*//' -e '/^[[:space:]]*$/d'
+}
+
+# $1 = os-release ID。stdout = "<family> <docker_repo> <docker_codename>"；查無 exit 1。
+wsld_distro_lookup() {
+  local id="$1"
+  [ -n "$id" ] || return 1
+  wsld_distros_table | awk -v id="$id" '
+    $1 == id { print $2, $3, $4; found = 1; exit }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+# $1 = os-release 路徑。stdout = family（debian | arch | suse | rhel | azure）；不明則 unknown 且 exit 1。
+# 先查分類表，查無再以 ID／ID_LIKE 推斷衍生版。
 wsld_distro_family() {
-  local f="${1:-/etc/os-release}" id like
+  local f="${1:-/etc/os-release}" id like row
   id="$(wsld_detect_distro_id "$f" || true)"
+  if row="$(wsld_distro_lookup "$id")"; then
+    echo "${row%% *}"
+    return 0
+  fi
   like=""
   [ -r "$f" ] && like="$(sed -n 's/^ID_LIKE=//p' "$f" | tr -d '"' | head -1)"
   for cand in $id $like; do
@@ -85,6 +114,51 @@ wsld_distro_family() {
   done
   echo unknown
   return 1
+}
+
+# Docker 官方 apt 來源只有 ubuntu／debian（及其 codename），衍生版（kali、pop、mint…）要對應回去。
+# 先查分類表；表中沒有的衍生版再依 UBUNTU_CODENAME／ID_LIKE／DEBIAN_CODENAME 推斷。
+# $1 = os-release 路徑。stdout = "<repo_id> <codename>"，例如 "debian trixie"。
+WSLD_DOCKER_DEBIAN_CODENAMES="bullseye bookworm trixie"
+WSLD_DOCKER_DEBIAN_FALLBACK="trixie"
+wsld_docker_apt_repo() {
+  local f="${1:-/etc/os-release}" id like ver ubu deb c
+  [ -r "$f" ] || return 1
+  _wsld_osr() { sed -n "s/^$1=//p" "$f" | tr -d '"' | head -1; }
+  id="$(_wsld_osr ID)"
+  like="$(_wsld_osr ID_LIKE)"
+  ver="$(_wsld_osr VERSION_CODENAME)"
+  ubu="$(_wsld_osr UBUNTU_CODENAME)"
+  deb="$(_wsld_osr DEBIAN_CODENAME)"
+  unset -f _wsld_osr
+
+  local row t_repo t_code
+  if row="$(wsld_distro_lookup "$id")"; then
+    read -r _ t_repo t_code <<< "$row"
+    if [ "$t_repo" != "-" ]; then
+      if [ "$t_code" = "-" ]; then
+        if [ "$t_repo" = "ubuntu" ]; then t_code="${ubu:-$ver}"; else t_code="${ver:-$WSLD_DOCKER_DEBIAN_FALLBACK}"; fi
+      fi
+      echo "$t_repo $t_code"
+      return 0
+    fi
+  fi
+
+  if [ "$id" = "ubuntu" ] || [ -n "$ubu" ] || [[ " $like " == *" ubuntu "* ]]; then
+    echo "ubuntu ${ubu:-$ver}"
+    return 0
+  fi
+  if [ "$id" = "debian" ] && [ -n "$ver" ]; then
+    echo "debian $ver"
+    return 0
+  fi
+  # Debian 衍生版：DEBIAN_CODENAME → 已知 debian codename → 目前穩定版（kali-rolling 等滾動版）
+  for c in $deb $ver; do
+    case " $WSLD_DOCKER_DEBIAN_CODENAMES " in
+      *" $c "*) echo "debian $c"; return 0 ;;
+    esac
+  done
+  echo "debian $WSLD_DOCKER_DEBIAN_FALLBACK"
 }
 
 # dockerd 在 PATH 上即視為引擎已安裝（跨 apt／pacman）。

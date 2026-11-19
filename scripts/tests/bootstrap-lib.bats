@@ -295,10 +295,97 @@ SCRIPT
   [ "$status" -eq 0 ]
   [ "$output" = "debian" ]
 
-  printf 'ID=fedora\n' > "$TMPD/os-release"
+  printf 'ID=gentoo\n' > "$TMPD/os-release"
   run wsld_distro_family "$TMPD/os-release"
   [ "$status" -ne 0 ]
   [ "$output" = "unknown" ]
+}
+
+# ---------- distros.tsv 分類表 ----------
+
+@test "distros table classifies every os_id with a known family" {
+  run wsld_distros_table
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  while read -r id family repo codename names; do
+    [ -n "$names" ] || { echo "row missing columns: $id"; return 1; }
+    case "$family" in debian|arch|suse|rhel|azure) ;; *) echo "bad family $family for $id"; return 1 ;; esac
+    case "$repo" in ubuntu|debian|-) ;; *) echo "bad repo $repo for $id"; return 1 ;; esac
+  done <<< "$output"
+}
+
+@test "distro_lookup returns family repo codename by os-release ID" {
+  run wsld_distro_lookup kali
+  [ "$status" -eq 0 ]
+  [ "$output" = "debian debian trixie" ]
+
+  run wsld_distro_lookup ubuntu
+  [ "$output" = "debian ubuntu -" ]
+
+  run wsld_distro_lookup no-such-distro
+  [ "$status" -ne 0 ]
+}
+
+@test "distro_family uses the table for WSL catalogue distros" {
+  for pair in kali:debian elxr:debian arch:arch sles:suse opensuse-leap:suse \
+              fedora:rhel almalinux:rhel rocky:rhel ol:rhel azurelinux:azure; do
+    printf 'ID=%s\n' "${pair%%:*}" > "$TMPD/os-release"
+    run wsld_distro_family "$TMPD/os-release"
+    [ "$status" -eq 0 ] || { echo "status $status for $pair"; return 1; }
+    [ "$output" = "${pair##*:}" ] || { echo "got $output for $pair"; return 1; }
+  done
+}
+
+@test "WSLD_DISTROS_TABLE overrides the table file (bundle mode)" {
+  WSLD_DISTROS_TABLE=$'# comment\nfoo  debian  debian  bookworm  Foo\n'
+  run wsld_distro_lookup foo
+  [ "$output" = "debian debian bookworm" ]
+  run wsld_distro_lookup kali
+  [ "$status" -ne 0 ]
+}
+
+@test "docker_apt_repo keeps ubuntu/debian ID and codename" {
+  printf 'ID=ubuntu\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ubuntu noble" ]
+
+  printf 'ID=debian\nVERSION_CODENAME=bookworm\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$output" = "debian bookworm" ]
+}
+
+@test "docker_apt_repo maps ubuntu derivatives to ubuntu + UBUNTU_CODENAME" {
+  printf 'ID=pop\nID_LIKE="ubuntu debian"\nVERSION_CODENAME=jammy\nUBUNTU_CODENAME=jammy\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$output" = "ubuntu jammy" ]
+
+  printf 'ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_CODENAME=wilma\nUBUNTU_CODENAME=noble\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$output" = "ubuntu noble" ]
+}
+
+@test "docker_apt_repo maps kali-rolling to debian stable codename" {
+  printf 'ID=kali\nID_LIKE=debian\nVERSION_CODENAME=kali-rolling\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$status" -eq 0 ]
+  [ "$output" = "debian trixie" ]
+}
+
+@test "docker_apt_repo uses DEBIAN_CODENAME or a known debian codename for debian derivatives" {
+  printf 'ID=linuxmint\nID_LIKE=debian\nVERSION_CODENAME=faye\nDEBIAN_CODENAME=bookworm\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$output" = "debian bookworm" ]
+
+  printf 'ID=someos\nID_LIKE=debian\nVERSION_CODENAME=bullseye\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$output" = "debian bullseye" ]
+}
+
+@test "docker_apt_repo uses the table codename for eLxr" {
+  printf 'ID=elxr\nVERSION_CODENAME=aria\n' > "$TMPD/os-release"
+  run wsld_docker_apt_repo "$TMPD/os-release"
+  [ "$output" = "debian bookworm" ]
 }
 
 @test "docker_engine_installed is true when dockerd is on PATH" {

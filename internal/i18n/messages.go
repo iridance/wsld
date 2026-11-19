@@ -11,7 +11,7 @@ Usage: wsld <command> [options]
 Commands:
   init       Pick/install Ubuntu, bootstrap Docker, write config
   start      Wake distro, ensure docker.service, wait for API
-  use        Set active machine (first time runs init + start)
+  use        Set primary machine (first time runs init + start)
   unmanage   Stop docker for a machine and remove its profile (keeps WSL)
   unregister Unregister a WSL distro (requires --confirm <name>)
   status     Show WSL / docker / API status (--json)
@@ -33,7 +33,7 @@ Config: %s`,
 命令：
   init       選擇／安裝 Ubuntu、bootstrap Docker、寫入 config
   start      喚醒 distro、確保 docker.service、等待 API
-  use        設為目前 machine（首次會自動 init + start）
+  use        設為主要 machine（首次會自動 init + start）
   unmanage   停止該 machine 的 docker 並刪除 profile（保留 WSL）
   unregister 解除註冊 WSL 發行版（需 --confirm <名稱>）
   status     顯示 WSL／docker／API 狀態（--json）
@@ -62,7 +62,7 @@ Config: %s`,
 	"cli.config_saved":    {EN: "config written: %s", ZhTW: "已寫入設定：%s"},
 	"cli.init_done":       {EN: "init complete. Next: wsld start / wsld ps, or open wsld-gui.", ZhTW: "init 完成。下一步：wsld start／wsld ps，或開啟 wsld-gui。"},
 	"cli.start_done":      {EN: "engine ready at %s", ZhTW: "引擎就緒：%s"},
-	"cli.use_done":        {EN: "active machine set to %s", ZhTW: "已將目前 machine 設為 %s"},
+	"cli.use_done":        {EN: "primary machine set to %s", ZhTW: "已將主要 machine 設為 %s"},
 	"cli.unmanage_done":   {EN: "unmanaged %s (WSL distro kept)", ZhTW: "已取消管理 %s（保留 WSL 發行版）"},
 	"cli.unregister_done": {EN: "unregistered %s", ZhTW: "已解除註冊 %s"},
 	"cli.unregister_confirm": {
@@ -70,10 +70,10 @@ Config: %s`,
 		ZhTW: "拒絕 unregister：請傳 --confirm %s（須與發行版名稱完全一致）",
 	},
 	"cli.machine_missing": {EN: "machine %q is not managed", ZhTW: "尚未管理 machine %q"},
-	"cli.no_active":       {EN: "no active machine — run `wsld use <distro>` or `wsld init`", ZhTW: "尚無 active machine — 請執行 wsld use <distro> 或 wsld init"},
+	"cli.no_active":       {EN: "no primary machine — run `wsld use <distro>` or `wsld init`", ZhTW: "尚無主要 machine — 請執行 wsld use <distro> 或 wsld init"},
 	"cli.active_not_ready": {
-		EN:   "active machine %q is not initialized — set it as current again (wsld use %s) or run wsld start",
-		ZhTW: "目前 machine %q 尚未 init — 請再設為目前（wsld use %s）或執行 wsld start",
+		EN:   "primary machine %q is not initialized — set it as primary again (wsld use %s) or run wsld start",
+		ZhTW: "主要 machine %q 尚未 init — 請再設為主要（wsld use %s）或執行 wsld start",
 	},
 	"cli.no_containers":     {EN: "no containers", ZhTW: "沒有容器"},
 	"cli.container_started": {EN: "started %s", ZhTW: "已啟動 %s"},
@@ -426,16 +426,16 @@ Config: %s`,
 	"gui.machines.password_invalid":      {EN: "Password must not contain line breaks", ZhTW: "密碼不可包含換行"},
 	"gui.machines.password_hint":         {EN: "Used for sudo inside the distro. wsld does not store it. Leave empty to skip (sudo will not work until you set one).", ZhTW: "用於發行版內的 sudo，wsld 不會保存。留空則不設定（設定前無法使用 sudo）。"},
 	"gui.machines.user_failed":           {EN: "%s was installed, but creating the Linux user failed", ZhTW: "%s 已安裝，但建立 Linux 帳號失敗"},
-	"gui.machines.installed_no_password": {EN: "%s installed. Linux user %s has no password, so sudo will not work until you set one. Set it as current to finish setup (installs Docker, starts the engine).", ZhTW: "%s 已安裝。Linux 帳號 %s 尚未設定密碼，設定前無法使用 sudo。設為目前即可完成設定（安裝 Docker 並啟動引擎）。"},
-	"gui.machines.installed":             {EN: "%s installed. Set it as current to finish setup (creates a Linux user if needed, installs Docker, starts the engine).", ZhTW: "%s 已安裝。設為目前即可完成設定（必要時自動建立 Linux 使用者、安裝 Docker 並啟動引擎）。"},
+	"gui.machines.installed_no_password": {EN: "%s installed. Linux user %s has no password, so sudo will not work until you set one. Set it as primary to finish setup (installs Docker, starts the engine).", ZhTW: "%s 已安裝。Linux 帳號 %s 尚未設定密碼，設定前無法使用 sudo。設為主要即可完成設定（安裝 Docker 並啟動引擎）。"},
+	"gui.machines.installed":             {EN: "%s installed. Set it as primary to finish setup (creates a Linux user if needed, installs Docker, starts the engine).", ZhTW: "%s 已安裝。設為主要即可完成設定（必要時自動建立 Linux 使用者、安裝 Docker 並啟動引擎）。"},
 	"gui.machines.loading":               {EN: "Loading available distributions…", ZhTW: "載入可安裝的發行版…"},
 	"gui.machines.config":                {EN: "Settings", ZhTW: "設定"},
 	"gui.machines.systemd_on":            {EN: "systemd enabled", ZhTW: "systemd 已啟用"},
 	"gui.machines.systemd_off":           {EN: "systemd disabled", ZhTW: "systemd 未啟用"},
 	"gui.machines.no_conf":               {EN: "(no /etc/wsl.conf)", ZhTW: "（沒有 /etc/wsl.conf）"},
 	"gui.machines.default":               {EN: "default", ZhTW: "預設"},
-	"gui.machines.active":                {EN: "active", ZhTW: "目前"},
-	"gui.machines.use":                   {EN: "Set as current", ZhTW: "設為目前"},
+	"gui.machines.active":                {EN: "primary", ZhTW: "主要"},
+	"gui.machines.use":                   {EN: "Set as primary", ZhTW: "設為主要"},
 	"gui.machines.used":                  {EN: "Now using %s", ZhTW: "已切換至 %s"},
 	"gui.machines.unmanage":              {EN: "Unmanage", ZhTW: "取消管理"},
 	"gui.machines.remove":                {EN: "Remove distro", ZhTW: "刪除發行版"},
@@ -448,8 +448,8 @@ Config: %s`,
 	"gui.machines.folder":   {EN: "Open folder", ZhTW: "開啟資料夾"},
 	"gui.machines.terminal": {EN: "Open terminal", ZhTW: "開啟終端"},
 	"gui.machines.not_ready": {
-		EN:   "Active machine is not ready yet — set it as current again to finish init, or click Start engine.",
-		ZhTW: "目前 machine 尚未就緒 — 請再設為目前以完成 init，或按 Start engine。",
+		EN:   "Primary machine is not ready yet — set it as primary again to finish init, or click Start engine.",
+		ZhTW: "主要 machine 尚未就緒 — 請再設為主要以完成 init，或按 Start engine。",
 	},
 	"gui.machines.info": {EN: "Info", ZhTW: "資訊"},
 	"gui.close":         {EN: "Close", ZhTW: "關閉"},

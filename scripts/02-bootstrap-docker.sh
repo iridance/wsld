@@ -41,7 +41,7 @@ DISTRO_ID="$(wsld_detect_distro_id || true)"
 FAMILY="$(wsld_distro_family || true)"
 case "$FAMILY" in
   debian|arch|suse) ;;
-  *) die "目前僅支援 Ubuntu/Debian、Arch 或 openSUSE 系發行版（偵測到: ${DISTRO_ID:-unknown}）" 5 ;;
+  *) die "目前僅支援 Ubuntu/Debian、Arch 或 openSUSE 系發行版（偵測到: ${DISTRO_ID:-unknown}，family=${FAMILY:-unknown}）" 5 ;;
 esac
 
 id "$WSLD_USER" >/dev/null 2>&1 || die "使用者不存在: $WSLD_USER" 2
@@ -75,15 +75,16 @@ install_docker_debian() {
   run $SUDO apt-get update -y
   run $SUDO apt-get install -y ca-certificates curl gnupg
   run $SUDO install -m 0755 -d /etc/apt/keyrings
+  read -r repo_id codename <<< "$(wsld_docker_apt_repo)"
+  log "Docker apt 來源：linux/${repo_id} ${codename}"
   if [ "$WSLD_DRY_RUN" = "1" ]; then
-    printf '[dry-run] fetch https://download.docker.com/linux/%s/gpg -> /etc/apt/keyrings/docker.asc\n' "$DISTRO_ID"
+    printf '[dry-run] fetch https://download.docker.com/linux/%s/gpg -> /etc/apt/keyrings/docker.asc\n' "$repo_id"
     printf '[dry-run] write /etc/apt/sources.list.d/docker.list\n'
   else
-    $SUDO curl -fsSL "https://download.docker.com/linux/${DISTRO_ID}/gpg" -o /etc/apt/keyrings/docker.asc
+    $SUDO curl -fsSL "https://download.docker.com/linux/${repo_id}/gpg" -o /etc/apt/keyrings/docker.asc
     $SUDO chmod a+r /etc/apt/keyrings/docker.asc
-    codename="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")"
     arch="$(dpkg --print-architecture)"
-    echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${DISTRO_ID} ${codename} stable" \
+    echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${repo_id} ${codename} stable" \
       | $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
   fi
   run $SUDO apt-get update -y

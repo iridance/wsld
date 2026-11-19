@@ -1,0 +1,26 @@
+# wsld 發行版分類表：bootstrap（02-bootstrap-docker.sh）與 Go 端（scripts.DistroRows）共用。
+# 來源：`wsl --list --online`（2026-11-19 快照）。新增發行版時補一列，並更新 scripts/bundle_test.go 的快照。
+#
+# 欄位（空白分隔，# 開頭為註解）：
+#   os_id            /etc/os-release 的 ID（bootstrap 在發行版內以此查表；WSL 名稱可能被自訂）
+#   family           debian | arch | suse 為 bootstrap 支援；rhel | azure 尚未支援
+#   docker_repo      Docker 官方 apt 來源 download.docker.com/linux/<repo>；非 apt 系為 -
+#   docker_codename  apt 來源 codename；- 表示沿用 os-release（UBUNTU_CODENAME／VERSION_CODENAME）
+#   wsl_names        `wsl --install <name>` 的名稱，逗號分隔
+#
+# 不可含單引號（bundle 會以單引號字串內嵌）。
+#
+# os_id               family  docker_repo  docker_codename  wsl_names
+ubuntu                debian  ubuntu       -                Ubuntu,Ubuntu-26.04,Ubuntu-24.04,Ubuntu-22.04
+debian                debian  debian       -                Debian
+kali                  debian  debian       trixie           kali-linux
+elxr                  debian  debian       bookworm         eLxr
+arch                  arch    -            -                archlinux
+opensuse-tumbleweed   suse    -            -                openSUSE-Tumbleweed
+opensuse-leap         suse    -            -                openSUSE-Leap-16.1
+sles                  suse    -            -                SUSE-Linux-Enterprise-15-SP7,SUSE-Linux-Enterprise-16.1,SUSE-Linux-Enterprise-15-SP6
+rocky                 rhel    -            -                RLCPlus-9,RLCPlus-10
+almalinux             rhel    -            -                AlmaLinux-8,AlmaLinux-9,AlmaLinux-Kitten-10,AlmaLinux-10
+fedora                rhel    -            -                FedoraLinux-45,FedoraLinux-44
+ol                    rhel    -            -                OracleLinux_7_9,OracleLinux_8_10,OracleLinux_9_5
+azurelinux            azure   -            -                AzureLinux-4

@@ -33,9 +33,9 @@ bash scripts/02-bootstrap-docker.sh --dry-run
 
 | 步驟 | 動作 | 冪等行為 |
 |---|---|---|
-| 0 | 檢查 WSL2 核心、發行版系列（Ubuntu/Debian／Arch／openSUSE，先看 `ID` 再看 `ID_LIKE`）、使用者存在 | 非 WSL2 exit 3；不支援的系列 exit 5；使用者不存在 exit 2 |
+| 0 | 檢查 WSL2 核心、發行版系列（Ubuntu/Debian／Arch／openSUSE；先以 `ID` 查[分類表](#發行版分類表)，查無再看 `ID_LIKE`）、使用者存在 | 非 WSL2 exit 3；不支援的系列 exit 5；使用者不存在 exit 2 |
 | 1 | `/etc/wsl.conf` 寫入 `[boot] systemd=true` | 已存在則略過；新寫入時要求 `wsl --shutdown` 後重跑（exit 3） |
-| 2 | Debian：官方 apt 安裝 docker-ce…；Arch：`pacman` 安裝 `docker`／`docker-compose`／`docker-buildx`；openSUSE：`zypper` 安裝 `docker`／`docker-compose`／`docker-buildx` | 已安裝則略過 |
+| 2 | Debian：官方 apt 安裝 docker-ce…（apt 來源與 codename 依分類表；表中沒有的衍生版對應回 `linux/ubuntu` 或 `linux/debian`，滾動版用 Debian 穩定版 `trixie`）；Arch：`pacman` 安裝 `docker`／`docker-compose`／`docker-buildx`；openSUSE：`zypper` 安裝 `docker`／`docker-compose`／`docker-buildx` | 已安裝則略過 |
 | 3 | `usermod -aG docker <user>` | 已在群組則略過 |
 | 4 | 選埠：從 `--port` 起遞增找空埠；寫 `/etc/docker/daemon.json`（`hosts` = unix socket + `tcp://127.0.0.1:<port>`）與 systemd drop-in 清掉 `-H fd://`（openSUSE 的 `containerd.service` 與 docker 互斥，drop-in 不帶 `--containerd`，由 dockerd 自管 containerd） | 既有 daemon.json 已是同埠或 dockerd 正在監聽則沿用；含其他設定時先備份 `.wsld.bak` |
 | 5 | `systemctl enable --now docker`、`loginctl enable-linger <user>` | — |
@@ -77,7 +77,8 @@ WSL2 會把 WSL 內 `127.0.0.1` 監聽的埠轉發到 Windows 的 `localhost`；
 make test-scripts          # bats（bootstrap-lib）+ shellcheck + Pester（WslHelpers，透過 powershell.exe）
 ```
 
-- `scripts/tests/bootstrap-lib.bats`：埠選擇、daemon.json 渲染／loopback 驗證、systemd drop-in、wsl.conf 冪等、參數解析、WSL／distro 偵測。
+- `scripts/tests/bootstrap-lib.bats`：埠選擇、daemon.json 渲染／loopback 驗證、systemd drop-in、wsl.conf 冪等、參數解析、WSL／distro 偵測、分類表查詢與 Docker apt 來源對應。
+- `scripts/bundle_test.go`：bundle 自足（含內嵌分類表）、分類表格式、`wsl --list --online` 快照全部有分類。
 - `scripts/tests/WslHelpers.Tests.ps1`：`wsl -l -v` 解析（含 UTF-16 NUL）、Ubuntu 選擇、Win11 判定、重開機判定。
 - 主腳本的副作用（apt、systemctl）不在單元測試內，用 `--dry-run` / `-DryRun` 人工檢查步驟列表。
 
@@ -85,4 +86,13 @@ make test-scripts          # bats（bootstrap-lib）+ shellcheck + Pester（WslH
 
 - `.ps1` 需 UTF-8 **含 BOM**（Windows PowerShell 5.1 才會正確讀取中文）；`.gitattributes` 已設定。
 - 首次把使用者加入 `docker` 群組後，需重開 WSL shell 才能不加 `sudo` 使用 `docker`。
-- 只支援 Ubuntu／Debian 系 apt 發行版。
+- 只支援 Debian（apt）／Arch（pacman）／openSUSE（zypper）系；分類表中 `rhel`（Rocky、Alma、Fedora、Oracle）與 `azure`（Azure Linux）系會以 exit 5 結束。
+
+## 發行版分類表
+
+[`scripts/lib/distros.tsv`](../scripts/lib/distros.tsv) 依 `wsl --list --online` 列出每個發行版的 os-release `ID`、系列、Docker apt 來源與 codename、WSL 安裝名稱。
+
+- bootstrap 在發行版內以 `/etc/os-release` 的 `ID` 查表（WSL 註冊名稱可能被自訂，所以不用名稱查）。
+- `wsld init` 餵入的 bundle 以 `WSLD_DISTROS_TABLE='…'` 內嵌整張表，單獨執行 `02-bootstrap-docker.sh` 則讀同目錄 `lib/distros.tsv`。
+- Go 端可用 `scripts.DistroRows()`／`scripts.DistroForWSLName()` 查同一份資料。
+- WSL 出新發行版時：在表中補一列，並更新 `scripts/bundle_test.go` 的 `wslOnlineSnapshot`。

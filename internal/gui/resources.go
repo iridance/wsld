@@ -276,7 +276,7 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		// Distribution 為線上目錄名稱（select）；Name 為本機自訂名稱（--name）。
 		Distribution string `json:"distribution"`
 		Name         string `json:"name"`
-		// User／Password：安裝後建立的 Linux 使用者（空 User = 舊行為，留給「設為目前」建立）。
+		// User／Password：安裝後建立的 Linux 使用者（空 User = 舊行為，留給「設為主要」建立）。
 		// Password 只轉交 chpasswd（stdin），不記錄、不寫入設定。
 		User     string `json:"user"`
 		Password string `json:"password"`
@@ -368,7 +368,7 @@ func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if needBringUp {
-		// 首次設為目前，或 endpoint／API 不通：Init（重選可用埠）+ Start。
+		// 首次設為主要，或 endpoint／API 不通：Init（重選可用埠）+ Start。
 		s.startMu.Lock()
 		if s.starting {
 			s.startMu.Unlock()
