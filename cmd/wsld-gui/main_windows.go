@@ -116,6 +116,7 @@ func main() {
 		LoadConfig:     func() (config.Config, error) { return config.Load(cfgPath) },
 		SaveConfig:     func(c config.Config) error { return config.Save(cfgPath, c) },
 		WSL:            wsl.ExecRunner{},
+		DistroDisk:     wsl.VHDXSize,
 		Processes:      doctor.WindowsProcesses,
 		OnWindowAction: app.onWindowAction,
 		OnDistroAction: app.onDistroAction,

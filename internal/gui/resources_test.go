@@ -2,6 +2,7 @@ package gui
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -435,5 +436,92 @@ func TestMachineStartStop(t *testing.T) {
 	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/start", "")
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("no wsl = %d", resp.StatusCode)
+	}
+}
+
+func TestDiskUsageEndpoint(t *testing.T) {
+	e := newEnv(t, "")
+	resp, b := e.req(t, http.MethodGet, "/api/disk", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, b)
+	}
+	var d DiskResponse
+	if err := json.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	s := d.Summary
+	if s.Images.Count != 3 || s.Images.Size != 98_000_000 || s.Containers.Count != 2 || s.Volumes.Count != 2 || s.BuildCache.Count == 0 {
+		t.Fatalf("summary = %+v", s)
+	}
+	if s.Total != s.Images.Size+s.Containers.Size+s.Volumes.Size+s.BuildCache.Size || s.Reclaimable <= 0 {
+		t.Fatalf("totals = %+v", s)
+	}
+	webID := strings.ReplaceAll(e.engine.idFor("web"), " ", "0")
+	if d.Containers[webID].SizeRw <= 0 || d.Containers[webID].SizeRootFs < d.Containers[webID].SizeRw {
+		t.Fatalf("containers = %+v", d.Containers)
+	}
+	if d.Volumes["pgdata"].Size <= 0 || d.Volumes["pgdata"].RefCount != 1 || d.Volumes["orphan"].RefCount != 0 {
+		t.Fatalf("volumes = %+v", d.Volumes)
+	}
+
+	// 快取：引擎狀態改變但沒透過 API → 仍回快取；透過 API 刪除 → 失效
+	e.engine.AddVolume("extra", false)
+	_, b = e.req(t, http.MethodGet, "/api/disk", "")
+	_ = json.Unmarshal(b, &d)
+	if d.Summary.Volumes.Count != 2 {
+		t.Fatalf("expected cached volume count 2, got %+v", d.Summary.Volumes)
+	}
+	if resp, _ := e.req(t, http.MethodDelete, "/api/volumes/orphan", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete orphan = %d", resp.StatusCode)
+	}
+	_, b = e.req(t, http.MethodGet, "/api/disk", "")
+	d = DiskResponse{}
+	_ = json.Unmarshal(b, &d)
+	if d.Summary.Volumes.Count != 2 || d.Volumes["extra"].Size <= 0 || d.Volumes["orphan"].Size != 0 {
+		t.Fatalf("after delete = %+v / %+v", d.Summary.Volumes, d.Volumes)
+	}
+
+	// 引擎離線 → 502（快取先失效）
+	e.s.invalidateDisk()
+	e.engine.SetDown(true)
+	if resp, _ := e.req(t, http.MethodGet, "/api/disk", ""); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("down = %d", resp.StatusCode)
+	}
+}
+
+func TestMachinesDiskUsage(t *testing.T) {
+	defer wsl.BypassSampleSleepForTest()()
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.DistroDisk = w.VHDXSize
+
+	_, b := e.req(t, http.MethodGet, "/api/machines", "")
+	var m MachinesResponse
+	_ = json.Unmarshal(b, &m)
+	if len(m.Machines) != 2 || m.Machines[0].DiskBytes != 8_500_000_000 || m.Machines[1].DiskBytes != 1_200_000_000 {
+		t.Fatalf("disk_bytes = %+v", m.Machines)
+	}
+
+	// 執行中：VHDX 大小＋發行版內 df
+	_, b = e.req(t, http.MethodGet, "/api/machines/Ubuntu-26.04/config", "")
+	var cfg MachineConfig
+	_ = json.Unmarshal(b, &cfg)
+	if cfg.DiskBytes != 8_500_000_000 || cfg.DiskUsedBytes != 6_000_000_000 || cfg.DiskTotalBytes != 1_000_000_000_000 {
+		t.Fatalf("running disk = %+v", cfg)
+	}
+	// 停止中：只有 VHDX 大小，不跑 df（不喚醒）
+	cfg = MachineConfig{}
+	_, b = e.req(t, http.MethodGet, "/api/machines/docker-desktop/config", "")
+	_ = json.Unmarshal(b, &cfg)
+	if cfg.DiskBytes != 1_200_000_000 || cfg.DiskUsedBytes != 0 || cfg.DiskTotalBytes != 0 {
+		t.Fatalf("stopped disk = %+v", cfg)
+	}
+
+	// 取不到大小（非 Windows／登錄檔缺）→ 省略欄位
+	e.s.DistroDisk = func(string) (int64, error) { return 0, errors.New("unsupported") }
+	_, b = e.req(t, http.MethodGet, "/api/machines", "")
+	if strings.Contains(string(b), "disk_bytes") {
+		t.Fatalf("disk_bytes should be omitted: %s", b)
 	}
 }

@@ -29,6 +29,7 @@ type Resources interface {
 	ListNetworks(ctx context.Context) ([]dockerapi.Network, error)
 	RemoveNetwork(ctx context.Context, idOrName string) error
 	PruneNetworks(ctx context.Context) (dockerapi.PruneReport, error)
+	DiskUsage(ctx context.Context) (dockerapi.DiskUsage, error)
 }
 
 // ---- images -----------------------------------------------------------------
@@ -50,6 +51,7 @@ func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -59,6 +61,7 @@ func (s *Server) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	writeJSON(w, http.StatusOK, rep)
 }
 
@@ -81,6 +84,7 @@ func (s *Server) handleVolumeRemove(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -90,6 +94,7 @@ func (s *Server) handleVolumesPrune(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	writeJSON(w, http.StatusOK, rep)
 }
 
@@ -112,6 +117,7 @@ func (s *Server) handleNetworkRemove(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -121,7 +127,84 @@ func (s *Server) handleNetworksPrune(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// ---- disk usage（docker system df）----------------------------------------
+
+// defaultDiskCacheTTL：/system/df 會對 volume 跑 du，避免每次列表刷新都重算。
+const defaultDiskCacheTTL = 15 * time.Second
+
+// ContainerDisk 是單一容器的大小（SizeRw＝可寫層；SizeRootFs＝含映像的虛擬大小）。
+type ContainerDisk struct {
+	SizeRw     int64 `json:"size_rw"`
+	SizeRootFs int64 `json:"size_root_fs"`
+}
+
+// VolumeDisk 是單一 volume 的大小；Size == -1 表示 daemon 未統計。
+type VolumeDisk struct {
+	Size     int64 `json:"size"`
+	RefCount int64 `json:"ref_count"`
+}
+
+// DiskResponse 是 /api/disk 回應：四類摘要＋逐容器／逐 volume 大小。
+type DiskResponse struct {
+	Summary    dockerapi.DiskSummary    `json:"summary"`
+	Containers map[string]ContainerDisk `json:"containers"`
+	Volumes    map[string]VolumeDisk    `json:"volumes"`
+}
+
+func diskResponse(du dockerapi.DiskUsage) DiskResponse {
+	out := DiskResponse{
+		Summary:    du.Summarize(),
+		Containers: make(map[string]ContainerDisk, len(du.Containers)),
+		Volumes:    make(map[string]VolumeDisk, len(du.Volumes)),
+	}
+	for _, c := range du.Containers {
+		out.Containers[c.ID] = ContainerDisk{SizeRw: c.SizeRw, SizeRootFs: c.SizeRootFs}
+	}
+	for _, v := range du.Volumes {
+		out.Volumes[v.Name] = VolumeDisk{Size: v.UsageData.Size, RefCount: v.UsageData.RefCount}
+	}
+	return out
+}
+
+func (s *Server) diskTTL() time.Duration {
+	if s.DiskCacheTTL == 0 {
+		return defaultDiskCacheTTL
+	}
+	return s.DiskCacheTTL
+}
+
+// invalidateDisk 讓下一次 /api/disk 重新查詢（刪除／prune／啟停後呼叫）。
+func (s *Server) invalidateDisk() {
+	s.diskMu.Lock()
+	s.diskAt = time.Time{}
+	s.diskFor = nil
+	s.diskMu.Unlock()
+}
+
+func (s *Server) handleDisk(w http.ResponseWriter, r *http.Request) {
+	eng := s.engine()
+	s.diskMu.Lock()
+	if s.diskFor == eng && !s.diskAt.IsZero() && time.Since(s.diskAt) < s.diskTTL() {
+		v := s.diskVal
+		s.diskMu.Unlock()
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	s.diskMu.Unlock()
+	du, err := eng.DiskUsage(r.Context())
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	v := diskResponse(du)
+	s.diskMu.Lock()
+	s.diskVal, s.diskAt, s.diskFor = v, time.Now(), eng
+	s.diskMu.Unlock()
+	writeJSON(w, http.StatusOK, v)
 }
 
 // ---- machines（本機 WSL 發行版）--------------------------------------------
@@ -136,6 +219,7 @@ type Machine struct {
 	Managed     bool   `json:"managed"`
 	Ready       bool   `json:"ready"`
 	APIEndpoint string `json:"api_endpoint,omitempty"`
+	DiskBytes   int64  `json:"disk_bytes,omitempty"` // 虛擬磁碟（ext4.vhdx）在 Windows 上的大小；取不到則省略
 }
 
 // MachinesResponse 是 /api/machines 回應；Available=false 表示此環境沒有 wsl.exe（例如測試主機未注入）。
@@ -146,18 +230,33 @@ type MachinesResponse struct {
 
 // MachineConfig 是 /api/machines/{name}/config 回應。
 type MachineConfig struct {
-	Name          string  `json:"name"`
-	WSLConf       string  `json:"wsl_conf"`
-	Systemd       bool    `json:"systemd"`
-	APIEndpoint   string  `json:"api_endpoint,omitempty"`
-	User          string  `json:"user,omitempty"`
-	Managed       bool    `json:"managed"`
-	Ready         bool    `json:"ready"`
-	Memory        string  `json:"memory,omitempty"`     // .wslconfig
-	Processors    string  `json:"processors,omitempty"` // .wslconfig
-	CPUPercent    float64 `json:"cpu_percent"`
-	MemoryUsedMB  int64   `json:"memory_used_mb"`
-	MemoryTotalMB int64   `json:"memory_total_mb"`
+	Name           string  `json:"name"`
+	WSLConf        string  `json:"wsl_conf"`
+	Systemd        bool    `json:"systemd"`
+	APIEndpoint    string  `json:"api_endpoint,omitempty"`
+	User           string  `json:"user,omitempty"`
+	Managed        bool    `json:"managed"`
+	Ready          bool    `json:"ready"`
+	Memory         string  `json:"memory,omitempty"`     // .wslconfig
+	Processors     string  `json:"processors,omitempty"` // .wslconfig
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemoryUsedMB   int64   `json:"memory_used_mb"`
+	MemoryTotalMB  int64   `json:"memory_total_mb"`
+	DiskBytes      int64   `json:"disk_bytes,omitempty"`       // ext4.vhdx 檔案大小
+	DiskUsedBytes  int64   `json:"disk_used_bytes,omitempty"`  // 執行中：df / used
+	DiskTotalBytes int64   `json:"disk_total_bytes,omitempty"` // 執行中：df / size
+}
+
+// distroDisk 回傳 distro 虛擬磁碟大小；未注入或失敗回 0（欄位省略）。
+func (s *Server) distroDisk(name string) int64 {
+	if s.DistroDisk == nil {
+		return 0
+	}
+	n, err := s.DistroDisk(name)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +272,7 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg()
 	out := make([]Machine, 0, len(list))
 	for _, d := range list {
-		m := Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, cfg.Active)}
+		m := Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, cfg.Active), DiskBytes: s.distroDisk(d.Name)}
 		if pm, ok := cfg.FindMachine(d.Name); ok {
 			m.Managed = true
 			m.Ready = pm.Ready()
@@ -214,11 +313,13 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	mem, procs := readWSLConfigLimits()
 	mc.Memory, mc.Processors = mem, procs
+	mc.DiskBytes = s.distroDisk(d.Name)
 	if strings.EqualFold(d.State, "Running") {
 		cpu, used, total := wsl.SampleDistroUsage(r.Context(), s.WSL, d.Name)
 		mc.CPUPercent = cpu
 		mc.MemoryUsedMB = int64(used)
 		mc.MemoryTotalMB = int64(total)
+		mc.DiskUsedBytes, mc.DiskTotalBytes = wsl.SampleDistroDisk(r.Context(), s.WSL, d.Name)
 	}
 	writeJSON(w, http.StatusOK, mc)
 }

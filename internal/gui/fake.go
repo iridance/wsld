@@ -42,6 +42,7 @@ type FakeEngine struct {
 type fakeVolume struct {
 	dockerapi.Volume
 	InUse bool
+	Size  int64 // /system/df UsageData.Size
 }
 
 // SetActionDelay 設定 Start/Stop 的延遲。
@@ -147,6 +148,10 @@ func (f *FakeEngine) Reset() {
 	f.mu.Unlock()
 	f.AddVolume("pgdata", true)
 	f.AddVolume("orphan", false)
+	f.mu.Lock()
+	f.volumes["pgdata"].Size = 120_000_000
+	f.volumes["orphan"].Size = 5_000_000
+	f.mu.Unlock()
 }
 
 // AddVolume 新增 volume；inUse=true 時 Remove/Prune 會拒絕。
@@ -155,7 +160,7 @@ func (f *FakeEngine) AddVolume(name string, inUse bool) {
 	defer f.mu.Unlock()
 	f.volumes[name] = &fakeVolume{Volume: dockerapi.Volume{
 		Name: name, Driver: "local", Scope: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data", CreatedAt: "2026-09-03T00:00:00Z",
-	}, InUse: inUse}
+	}, InUse: inUse, Size: 1_000_000}
 }
 
 // AddImage 新增映像；containers 為使用中的容器數。
@@ -779,3 +784,52 @@ func (UnsupportedAutostart) Enabled() (bool, error) { return false, nil }
 
 // Set 實作 Autostart。
 func (UnsupportedAutostart) Set(bool) error { return errUnsupported }
+
+// fakeContainerSizeRw 依狀態給固定可寫層大小（執行中 2 MB、其他 1 MB）。
+func fakeContainerSizeRw(state string) int64 {
+	if state == "running" {
+		return 2_000_000
+	}
+	return 1_000_000
+}
+
+// DiskUsage 實作 Resources：以假資料組出 /system/df（映像不共用層、固定建置快取）。
+func (f *FakeEngine) DiskUsage(context.Context) (dockerapi.DiskUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.down(); err != nil {
+		return dockerapi.DiskUsage{}, err
+	}
+	du := dockerapi.DiskUsage{
+		Images:     []dockerapi.DFImage{},
+		Containers: []dockerapi.DFContainer{},
+		Volumes:    []dockerapi.DFVolume{},
+		BuildCache: []dockerapi.DFBuildCache{
+			{ID: "bc1", Size: 30_000_000, InUse: false},
+			{ID: "bc2", Size: 10_000_000, InUse: true},
+		},
+	}
+	imgSize := map[string]int64{}
+	for _, im := range f.images {
+		du.LayersSize += im.Size
+		du.Images = append(du.Images, dockerapi.DFImage{ID: im.ID, Size: im.Size, Containers: im.Containers})
+		for _, tag := range im.RepoTags {
+			imgSize[tag] = im.Size
+		}
+	}
+	for _, c := range f.containers {
+		rw := fakeContainerSizeRw(c.State)
+		du.Containers = append(du.Containers, dockerapi.DFContainer{ID: c.ID, Names: c.Names, State: c.State, SizeRw: rw, SizeRootFs: rw + imgSize[c.Image]})
+	}
+	sort.Slice(du.Containers, func(i, j int) bool { return du.Containers[i].ID < du.Containers[j].ID })
+	for _, v := range f.volumes {
+		dv := dockerapi.DFVolume{Name: v.Name}
+		dv.UsageData.Size = v.Size
+		if v.InUse {
+			dv.UsageData.RefCount = 1
+		}
+		du.Volumes = append(du.Volumes, dv)
+	}
+	sort.Slice(du.Volumes, func(i, j int) bool { return du.Volumes[i].Name < du.Volumes[j].Name })
+	return du, nil
+}

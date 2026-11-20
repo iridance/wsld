@@ -131,3 +131,36 @@ func CPUPercentFromDelta(idle1, total1, idle2, total2 uint64) float64 {
 	}
 	return busy
 }
+
+// ParseDF 解析 `df -B1 --output=used,size /` 的輸出（第一行為標題），回傳 used／total（bytes）。
+func ParseDF(data []byte) (used, total int64, err error) {
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		return 0, 0, fmt.Errorf("df: missing data line")
+	}
+	fields := strings.Fields(lines[len(lines)-1])
+	if len(fields) < 2 {
+		return 0, 0, fmt.Errorf("df: too few fields")
+	}
+	if used, err = strconv.ParseInt(fields[0], 10, 64); err != nil {
+		return 0, 0, fmt.Errorf("df used: %w", err)
+	}
+	if total, err = strconv.ParseInt(fields[1], 10, 64); err != nil {
+		return 0, 0, fmt.Errorf("df size: %w", err)
+	}
+	return used, total, nil
+}
+
+// SampleDistroDisk 在 distro 內以 df 讀根檔案系統 used／total（bytes）；失敗回 0,0。
+// 會喚醒 distro，呼叫端應只對執行中的 distro 使用。
+func SampleDistroDisk(ctx context.Context, r Runner, distro string) (used, total int64) {
+	out, _, err := RunIn(ctx, r, distro, "root", nil, "df", "-B1", "--output=used,size", "/")
+	if err != nil {
+		return 0, 0
+	}
+	used, total, err = ParseDF(out)
+	if err != nil {
+		return 0, 0
+	}
+	return used, total
+}

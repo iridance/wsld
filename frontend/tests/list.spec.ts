@@ -45,7 +45,11 @@ test("layout: list fills the content column down to the window bottom (banner hi
   expect(list).not.toBeNull();
   // 只留內容區 24px 底邊距
   expect(640 - (list!.y + list!.height)).toBeLessThanOrEqual(32);
-  expect(list!.height).toBeGreaterThan(450);
+  // 列表緊接在磁碟用量卡下方，其餘高度全給列表
+  const slot = await page.getByTestId("disk-slot").boundingBox();
+  expect(slot).not.toBeNull();
+  expect(list!.y - (slot!.y + slot!.height)).toBeLessThanOrEqual(16);
+  expect(list!.height).toBeGreaterThan(330);
 });
 
 test("layout: notice floats at the bottom of the content column without shifting the list", async ({ page }) => {
@@ -286,7 +290,7 @@ test("header shows the connected WSL distro name next to the connection badge", 
 test("container toolbar: status filter and search narrow the list; header shows the running/stopped summary", async ({ page }) => {
   await open(page);
   await expect(row(page, "web")).toBeVisible();
-  await expect(page.getByTestId("page-sub")).toHaveText("1 running · 1 stopped");
+  await expect(page.getByTestId("page-sub")).toHaveText("1 running · 1 stopped · 2.9 MB");
   await expect(page.getByTestId("ct-filter-all")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("ct-filter-running")).toHaveText("Running 1");
 

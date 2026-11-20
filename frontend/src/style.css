@@ -21,6 +21,12 @@
   --ok-soft: #e3f2e3;
   --warn: #8a5300;
   --warn-soft: #fdf0dc;
+  /* 磁碟用量長條的類別色（dataviz 參考調色盤前 5 槽，順序即 CVD 安全機制，勿重排） */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
   --bad: #c42b1c;
   --bad-soft: #fbe7e5;
   --track: #e6e6e6;
@@ -58,6 +64,11 @@ html[data-theme="dark"] {
   --ok-soft: #1e3320;
   --warn: #f2b33d;
   --warn-soft: #3a2e14;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
   --bad: #ff8a80;
   --bad-soft: #3d2220;
   --track: #3a3a3a;
@@ -89,6 +100,11 @@ html[data-theme="dark"] {
     --ok-soft: #1e3320;
     --warn: #f2b33d;
     --warn-soft: #3a2e14;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
     --bad: #ff8a80;
     --bad-soft: #3d2220;
     --track: #3a3a3a;
@@ -235,6 +251,7 @@ main.with-panel > .panel { flex: 0 0 40%; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; flex: 0 1 auto; min-width: 0; }
 .toolbar:empty { display: none; }
 .disk-slot:empty { display: none; }
+.disk-slot { flex: none; }
 .toolbar .count { font-size: 13px; color: var(--muted); }
 .list {
   overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
@@ -533,7 +550,7 @@ td.num { font-variant-numeric: tabular-nums; }
 /* 卡片型列表（機器、設定）：不套白底大卡，由內部卡片自己畫 */
 .list.cards { background: transparent; border: none; box-shadow: none; border-radius: 0; }
 
-/* ---- 映像磁碟用量 -------------------------------------------------------- */
+/* ---- 磁碟用量 stat card -------------------------------------------------------- */
 .disk-card {
   display: flex; flex-direction: column; gap: 10px; padding: 14px 18px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
@@ -542,14 +559,19 @@ td.num { font-variant-numeric: tabular-nums; }
 .disk-head strong { font-size: 14px; font-weight: 600; }
 .disk-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: var(--track); }
 .disk-seg { min-width: 3px; }
-.disk-seg.inuse, .disk-swatch.inuse { background: var(--accent); }
-.disk-seg.unused, .disk-swatch.unused { background: color-mix(in srgb, var(--accent) 45%, var(--surface)); }
-.disk-seg.dangling, .disk-swatch.dangling { background: var(--warn); }
-.disk-seg.unknown, .disk-swatch.unknown { background: var(--border-strong); }
 .disk-legend { display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 13px; }
 .disk-key { display: inline-flex; align-items: center; gap: 8px; }
 .disk-key strong { font-variant-numeric: tabular-nums; font-weight: 600; }
 .disk-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.group-size { font-size: 12px; font-variant-numeric: tabular-nums; }
+/* 每項佔用：前 5 大各一色（依類別槽固定順序），其餘併為「其他」 */
+.disk-seg.s1, .disk-swatch.s1 { background: var(--series-1); }
+.disk-seg.s2, .disk-swatch.s2 { background: var(--series-2); }
+.disk-seg.s3, .disk-swatch.s3 { background: var(--series-3); }
+.disk-seg.s4, .disk-swatch.s4 { background: var(--series-4); }
+.disk-seg.s5, .disk-swatch.s5 { background: var(--series-5); }
+.disk-seg.other, .disk-swatch.other { background: var(--border-strong); }
+.disk-key .disk-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 機器卡片 -------------------------------------------------------------- */
 .machine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-content: start; }

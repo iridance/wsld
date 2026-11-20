@@ -104,6 +104,8 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 ## 清理磁碟：GUI 的 Images／Volumes
 
+- 先看用量：各頁上方的「磁碟用量」卡列出該頁每一項的佔用與占比（容器頁以 compose 專案為單位），標題右側是該類總計；容器與 Volume 列表也有 Size 欄；跨類別的總覽（含建置快取）用 `docker system df`。數字每 15 秒最多重算一次，刪除或 prune 後立即更新。
+- **Machines** 卡片的「磁碟」是發行版虛擬磁碟（ext4.vhdx）在 Windows 上實際佔用的大小；刪掉 Docker 資料後這個檔案不會自動縮小，需另外壓縮 VHDX（例如 `wsl --manage <distro> --set-sparse true`）。
 - **Images → 清除未使用**等同 `docker image prune -a`：刪掉所有沒有容器（含已停止容器）引用的映像，含有標籤者。
 - **Volumes → 清除未使用**等同 `docker volume prune -a`：連具名 volume 一起刪，只要沒有容器掛載；資料不可復原，確認框會提醒。
 - 單筆移除使用中的映像／volume／network 會收到 Docker 的 409（顯示在紅色 banner）。GUI 不會自動 `--force`：先停掉並移除相關容器再刪。

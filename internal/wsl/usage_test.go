@@ -59,3 +59,20 @@ func TestParseCPUStatBad(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestParseDF(t *testing.T) {
+	in := "        Used     1B-blocks\n 12884901888 1081101176832\n"
+	used, total, err := ParseDF([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used != 12884901888 || total != 1081101176832 {
+		t.Fatalf("used/total = %d/%d", used, total)
+	}
+	if _, _, err := ParseDF([]byte("Used 1B-blocks\n")); err == nil {
+		t.Fatal("expected error for missing data line")
+	}
+	if _, _, err := ParseDF([]byte("Used 1B-blocks\nx y\n")); err == nil {
+		t.Fatal("expected error for non-numeric")
+	}
+}

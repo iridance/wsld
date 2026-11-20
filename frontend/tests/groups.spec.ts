@@ -100,7 +100,9 @@ test("compose group header uses dark-friendly colors under Theme Dark", async ({
 
   await page.getByTestId("nav-containers").click();
   const cell = group(page, "shop").locator("td").first();
-  const colors = await cell.evaluate((e) => {
+  // 刷新會重建列表：evaluate 前後元素可能被換掉（computed style 變空字串），等到讀到連線中的元素
+  const read = () => cell.evaluate((e) => {
+    if (!e.isConnected) return null;
     const cs = getComputedStyle(e);
     const parse = (c: string) => {
       const m = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
@@ -111,6 +113,9 @@ test("compose group header uses dark-friendly colors under Theme Dark", async ({
     const lum = (r: number, g: number, b: number) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
     return { bgLum: lum(br, bg, bb), fgLum: lum(fr, fg, fb) };
   });
+  let colors = await read();
+  await expect.poll(async () => (colors = colors ?? (await read()))).not.toBeNull();
+  colors = colors!;
   expect(colors.bgLum).toBeLessThan(0.35); // 不可再是淺灰底
   expect(colors.fgLum).toBeGreaterThan(0.6); // 文字要夠亮
 });

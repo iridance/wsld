@@ -99,12 +99,14 @@ func main() {
 
 	srv := &gui.Server{
 		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
-		LAN:        lanMgr,
-		Forwarder:  forwarder,
-		Shell:      gui.FakeDistroShell{},
-		LoadConfig: func() (config.Config, error) { return config.Load(*cfgPath) },
-		SaveConfig: func(c config.Config) error { return config.Save(*cfgPath, c) },
-		Assets:     spaHandler(*dist),
+		DistroDisk:   fwsl.VHDXSize,
+		DiskCacheTTL: -1, // /__test/reset 等直接改 fake 狀態，不能吃到快取
+		LAN:          lanMgr,
+		Forwarder:    forwarder,
+		Shell:        gui.FakeDistroShell{},
+		LoadConfig:   func() (config.Config, error) { return config.Load(*cfgPath) },
+		SaveConfig:   func(c config.Config) error { return config.Save(*cfgPath, c) },
+		Assets:       spaHandler(*dist),
 		OnWindowAction: func(a string) {
 			winMu.Lock()
 			windowActions = append(windowActions, a)

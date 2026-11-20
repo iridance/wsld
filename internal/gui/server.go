@@ -91,6 +91,8 @@ type Server struct {
 	LAN *lan.Manager
 	// Forwarder 在內網 IP 上轉發容器 published 埠（區網存取）。
 	Forwarder *lan.Forwarder
+	// DistroDisk 回傳 distro 虛擬磁碟（ext4.vhdx）大小（Windows：wsl.VHDXSize；nil＝不顯示）。
+	DistroDisk func(name string) (int64, error)
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
 
@@ -110,6 +112,13 @@ type Server struct {
 
 	installOnce sync.Once
 	install     *installTracker
+
+	// DiskCacheTTL 是 /api/disk 快取時間（0＝預設 15 秒；負值＝不快取，測試主機用）。
+	DiskCacheTTL time.Duration
+	diskMu       sync.Mutex
+	diskVal      DiskResponse
+	diskAt       time.Time
+	diskFor      Engine
 }
 
 // NewToken 產生隨機 bearer token。
@@ -142,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/networks", s.handleNetworks)
 	mux.HandleFunc("DELETE /api/networks/{id}", s.handleNetworkRemove)
 	mux.HandleFunc("POST /api/networks/prune", s.handleNetworksPrune)
+	mux.HandleFunc("GET /api/disk", s.handleDisk)
 	mux.HandleFunc("GET /api/machines", s.handleMachines)
 	mux.HandleFunc("GET /api/machines/online", s.handleMachinesOnline)
 	mux.HandleFunc("GET /api/machines/{name}/config", s.handleMachineConfig)
@@ -495,6 +505,7 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	writeJSON(w, http.StatusOK, map[string]string{"result": "started"})
 }
 
@@ -507,6 +518,7 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	writeJSON(w, http.StatusOK, map[string]string{"result": "stopped"})
 }
 
@@ -516,6 +528,7 @@ func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.invalidateDisk()
 	w.WriteHeader(http.StatusNoContent)
 }
 

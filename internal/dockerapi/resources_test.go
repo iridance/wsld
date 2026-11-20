@@ -171,3 +171,55 @@ func TestRemoveNetworkAndPrune(t *testing.T) {
 		t.Fatalf("prune call = %v", calls[len(calls)-1])
 	}
 }
+
+func TestDiskUsage(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/system/df" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{
+		  "LayersSize": 1000,
+		  "Images": [
+		    {"Id":"sha256:a","Size":600,"SharedSize":100,"Containers":1},
+		    {"Id":"sha256:b","Size":300,"SharedSize":100,"Containers":0},
+		    {"Id":"sha256:c","Size":200,"SharedSize":0,"Containers":0}
+		  ],
+		  "Containers": [
+		    {"Id":"c1","Names":["/web"],"SizeRw":50,"SizeRootFs":650,"State":"running"},
+		    {"Id":"c2","Names":["/db"],"SizeRw":30,"SizeRootFs":330,"State":"exited"}
+		  ],
+		  "Volumes": [
+		    {"Name":"v1","UsageData":{"Size":400,"RefCount":1}},
+		    {"Name":"v2","UsageData":{"Size":70,"RefCount":0}},
+		    {"Name":"v3","UsageData":{"Size":-1,"RefCount":-1}}
+		  ],
+		  "BuildCache": [
+		    {"ID":"b1","Size":90,"InUse":false,"Shared":false},
+		    {"ID":"b2","Size":10,"InUse":true,"Shared":false},
+		    {"ID":"b3","Size":500,"InUse":false,"Shared":true}
+		  ]
+		}`)
+	}))
+	du, err := c.DiskUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if du.LayersSize != 1000 || len(du.Containers) != 2 || du.Containers[0].SizeRw != 50 || du.Containers[1].SizeRootFs != 330 {
+		t.Fatalf("decode = %+v", du)
+	}
+	if len(du.Volumes) != 3 || du.Volumes[0].UsageData.Size != 400 || du.Volumes[2].UsageData.Size != -1 {
+		t.Fatalf("volumes = %+v", du.Volumes)
+	}
+	s := du.Summarize()
+	want := DiskSummary{
+		Images:      DiskCategory{Count: 3, Size: 1000, Reclaimable: 500}, // 1000 − (600−100)
+		Containers:  DiskCategory{Count: 2, Size: 80, Reclaimable: 30},
+		Volumes:     DiskCategory{Count: 3, Size: 470, Reclaimable: 70, Unknown: 1},
+		BuildCache:  DiskCategory{Count: 3, Size: 100, Reclaimable: 90}, // shared 不計
+		Total:       1650,
+		Reclaimable: 690,
+	}
+	if s != want {
+		t.Fatalf("summary =\n %+v\nwant\n %+v", s, want)
+	}
+}

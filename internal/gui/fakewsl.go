@@ -66,6 +66,25 @@ func (f *FakeWSL) Reset() {
 	f.passwords = map[string]map[string]string{}
 }
 
+// VHDXSize 模擬 wsl.VHDXSize：Ubuntu-26.04 8.5 GB、docker-desktop 1.2 GB、其他（新安裝）1.5 GB。
+func (f *FakeWSL) VHDXSize(name string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.distros {
+		if !strings.EqualFold(d.Name, name) {
+			continue
+		}
+		switch d.Name {
+		case "Ubuntu-26.04":
+			return 8_500_000_000, nil
+		case "docker-desktop":
+			return 1_200_000_000, nil
+		}
+		return 1_500_000_000, nil
+	}
+	return 0, errors.New("fake wsl: no distro " + name)
+}
+
 // Password 回傳 chpasswd 為 distro 內 user 設定的密碼（測試用）。
 func (f *FakeWSL) Password(distro, user string) (string, bool) {
 	f.mu.Lock()
@@ -220,6 +239,9 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 				return []byte("cpu  100 0 50 850 0 0 0 0 0 0\n"), nil, nil
 			}
 			return []byte("cpu  160 0 70 870 0 0 0 0 0 0\n"), nil, nil
+		}
+		if strings.HasSuffix(joined, "-- df -B1 --output=used,size /") {
+			return []byte("        Used     1B-blocks\n6000000000 1000000000000\n"), nil, nil
 		}
 		if strings.HasSuffix(joined, "-- cat /proc/meminfo") {
 			return []byte("MemTotal:       8388608 kB\nMemAvailable:   6291456 kB\n"), nil, nil

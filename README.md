@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.14.0**（tag `v0.14.0`）已交付（容器列的瀏覽器按鈕常駐：開啟區網存取時開區網位址，未開時以 `http://localhost:<埠>` 開啟）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.15.0**（tag `v0.15.0`）已交付（各頁磁碟用量卡：容器／compose、映像、Volume、Machines 每項佔用的長條與總計，容器與 Volume 列表加大小欄）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -99,7 +99,7 @@ wsld-gui.exe --tray    # 只留系統匣
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.14.0；GUI 頂部列 v0.14.0）
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.15.0；GUI 頂部列 v0.15.0）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -108,7 +108,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（**0.14.0** 已交付） |
+| [SPEC](docs/SPEC.md) | 規格（**0.15.0** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |

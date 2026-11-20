@@ -59,6 +59,29 @@ export interface Network {
   Labels: Record<string, string> | null;
 }
 
+/** GET /api/disk：docker system df 摘要（各類 size／reclaimable，bytes）。 */
+export interface DiskCategory {
+  count: number;
+  size: number;
+  reclaimable: number;
+  unknown?: number; // daemon 未統計大小的項目數（volume）
+}
+
+export interface DiskSummary {
+  images: DiskCategory;
+  containers: DiskCategory;
+  volumes: DiskCategory;
+  build_cache: DiskCategory;
+  total: number;
+  reclaimable: number;
+}
+
+export interface DiskInfo {
+  summary: DiskSummary;
+  containers: Record<string, { size_rw: number; size_root_fs: number }>;
+  volumes: Record<string, { size: number; ref_count: number }>; // size = -1：未統計
+}
+
 export interface PruneReport {
   count: number;
   space_reclaimed: number;
@@ -73,6 +96,7 @@ export interface Machine {
   managed?: boolean;
   ready?: boolean;
   api_endpoint?: string;
+  disk_bytes?: number; // ext4.vhdx 在 Windows 上的大小；取不到則省略
 }
 
 export interface MachinesResponse {
@@ -93,6 +117,9 @@ export interface MachineConfig {
   cpu_percent?: number;
   memory_used_mb?: number;
   memory_total_mb?: number;
+  disk_bytes?: number;
+  disk_used_bytes?: number; // 執行中：df /
+  disk_total_bytes?: number;
 }
 
 export interface OnlineDistro {
@@ -247,6 +274,7 @@ export const api = {
   images: (signal?: AbortSignal) => call<Image[]>("GET", "/api/images", undefined, false, signal),
   removeImage: (ref: string, force = false) => call<void>("DELETE", `/api/images/${encodeURIComponent(ref)}${force ? "?force=1" : ""}`),
   pruneImages: () => call<PruneReport>("POST", "/api/images/prune"),
+  disk: (signal?: AbortSignal) => call<DiskInfo>("GET", "/api/disk", undefined, false, signal),
   volumes: (signal?: AbortSignal) => call<Volume[]>("GET", "/api/volumes", undefined, false, signal),
   removeVolume: (name: string, force = false) => call<void>("DELETE", `/api/volumes/${encodeURIComponent(name)}${force ? "?force=1" : ""}`),
   pruneVolumes: () => call<PruneReport>("POST", "/api/volumes/prune"),

@@ -217,3 +217,132 @@ func (c *Client) PruneNetworks(ctx context.Context) (PruneReport, error) {
 	}
 	return PruneReport{Count: len(v.NetworksDeleted), SpaceReclaimed: v.SpaceReclaimed}, nil
 }
+
+// ---- disk usage（GET /system/df，等同 docker system df）----------------------
+
+// DFImage 是 /system/df Images 的項目子集。
+type DFImage struct {
+	ID         string `json:"Id"`
+	Size       int64  `json:"Size"`
+	SharedSize int64  `json:"SharedSize"`
+	Containers int    `json:"Containers"`
+}
+
+// DFContainer 是 /system/df Containers 的項目子集（SizeRw＝可寫層）。
+type DFContainer struct {
+	ID         string   `json:"Id"`
+	Names      []string `json:"Names"`
+	SizeRw     int64    `json:"SizeRw"`
+	SizeRootFs int64    `json:"SizeRootFs"`
+	State      string   `json:"State"`
+}
+
+// DFVolume 是 /system/df Volumes 的項目子集；UsageData.Size == -1 表示 daemon 未統計。
+type DFVolume struct {
+	Name      string `json:"Name"`
+	UsageData struct {
+		Size     int64 `json:"Size"`
+		RefCount int64 `json:"RefCount"`
+	} `json:"UsageData"`
+}
+
+// DFBuildCache 是 /system/df BuildCache 的項目子集。
+type DFBuildCache struct {
+	ID     string `json:"ID"`
+	Size   int64  `json:"Size"`
+	InUse  bool   `json:"InUse"`
+	Shared bool   `json:"Shared"`
+}
+
+// DiskUsage 是 /system/df 回應。
+type DiskUsage struct {
+	LayersSize int64          `json:"LayersSize"`
+	Images     []DFImage      `json:"Images"`
+	Containers []DFContainer  `json:"Containers"`
+	Volumes    []DFVolume     `json:"Volumes"`
+	BuildCache []DFBuildCache `json:"BuildCache"`
+}
+
+// DiskCategory 是單一類別的摘要；Unknown＝daemon 未統計大小的項目數。
+type DiskCategory struct {
+	Count       int   `json:"count"`
+	Size        int64 `json:"size"`
+	Reclaimable int64 `json:"reclaimable"`
+	Unknown     int   `json:"unknown,omitempty"`
+}
+
+// DiskSummary 是四類用量與總計。
+type DiskSummary struct {
+	Images      DiskCategory `json:"images"`
+	Containers  DiskCategory `json:"containers"`
+	Volumes     DiskCategory `json:"volumes"`
+	BuildCache  DiskCategory `json:"build_cache"`
+	Total       int64        `json:"total"`
+	Reclaimable int64        `json:"reclaimable"`
+}
+
+// DiskUsage GET /system/df（daemon 會計算 volume 大小，可能較慢 → longHC）。
+func (c *Client) DiskUsage(ctx context.Context) (DiskUsage, error) {
+	resp, err := c.doWith(ctx, c.longHC, http.MethodGet, "/system/df", nil, nil)
+	if err != nil {
+		return DiskUsage{}, err
+	}
+	defer resp.Body.Close()
+	var v DiskUsage
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return DiskUsage{}, fmt.Errorf("decode system df: %w", err)
+	}
+	return v, nil
+}
+
+// Summarize 依 docker CLI（system df）的規則計算各類大小與可回收量。
+func (d DiskUsage) Summarize() DiskSummary {
+	var s DiskSummary
+
+	s.Images.Count = len(d.Images)
+	s.Images.Size = d.LayersSize
+	var used int64
+	for _, im := range d.Images {
+		if im.Containers != 0 && im.Size >= 0 && im.SharedSize >= 0 {
+			used += im.Size - im.SharedSize
+		}
+	}
+	s.Images.Reclaimable = max(d.LayersSize-used, 0)
+
+	s.Containers.Count = len(d.Containers)
+	for _, ct := range d.Containers {
+		s.Containers.Size += ct.SizeRw
+		switch ct.State {
+		case "running", "paused", "restarting":
+		default:
+			s.Containers.Reclaimable += ct.SizeRw
+		}
+	}
+
+	s.Volumes.Count = len(d.Volumes)
+	for _, v := range d.Volumes {
+		if v.UsageData.Size < 0 {
+			s.Volumes.Unknown++
+			continue
+		}
+		s.Volumes.Size += v.UsageData.Size
+		if v.UsageData.RefCount == 0 {
+			s.Volumes.Reclaimable += v.UsageData.Size
+		}
+	}
+
+	s.BuildCache.Count = len(d.BuildCache)
+	for _, b := range d.BuildCache {
+		if b.Shared {
+			continue
+		}
+		s.BuildCache.Size += b.Size
+		if !b.InUse {
+			s.BuildCache.Reclaimable += b.Size
+		}
+	}
+
+	s.Total = s.Images.Size + s.Containers.Size + s.Volumes.Size + s.BuildCache.Size
+	s.Reclaimable = s.Images.Reclaimable + s.Containers.Reclaimable + s.Volumes.Reclaimable + s.BuildCache.Reclaimable
+	return s
+}

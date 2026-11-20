@@ -2,6 +2,7 @@ import {
   api,
   ApiError,
   type Container,
+  type DiskInfo,
   type Image,
   type InstallProgress,
   type LANForward,
@@ -59,6 +60,8 @@ interface State {
   volumes: Volume[];
   networks: Network[];
   machines?: MachinesResponse;
+  /** docker system df（容器／映像／volume 頁一起查；失敗時保留上一次） */
+  disk?: DiskInfo;
   lastError?: string;
   /** 最近一次「啟動引擎／設為主要」失敗的原因；引擎就緒前輪詢不覆蓋，避免真正原因被「無法連線 API」蓋掉 */
   bringUpError?: string;
@@ -420,6 +423,7 @@ export class App {
         this.st.images = [];
         this.st.volumes = [];
         this.st.networks = [];
+        this.st.disk = undefined;
         // 用 i18n 前綴；細節走 status.APIError（renderBanner 會拼成「前綴 — 細節」）
         this.st.lastError = this.st.bringUpError ?? t("gui.error.api");
       }
@@ -434,6 +438,7 @@ export class App {
   }
 
   private async loadView(signal?: AbortSignal): Promise<void> {
+    if (this.st.view === "containers" || this.st.view === "volumes") await this.loadDisk(signal);
     switch (this.st.view) {
       case "containers":
         this.st.containers = await api.containers(signal);
@@ -451,6 +456,15 @@ export class App {
       case "machines":
         this.st.machines = await api.machines(signal);
         break;
+    }
+  }
+
+  /** 磁碟用量是附加資訊：查詢失敗不影響列表，保留上一次的值。 */
+  private async loadDisk(signal?: AbortSignal): Promise<void> {
+    try {
+      this.st.disk = await api.disk(signal);
+    } catch {
+      /* 保留上一次 */
     }
   }
 
@@ -787,19 +801,70 @@ export class App {
       case "containers": {
         if (!ready) return "";
         const running = this.st.containers.filter((c) => c.State === "running").length;
-        return fmt(t("gui.ct.summary"), String(running), String(this.st.containers.length - running));
+        const stopped = String(this.st.containers.length - running);
+        const size = this.containersSize();
+        return size === undefined
+          ? fmt(t("gui.ct.summary"), String(running), stopped)
+          : fmt(t("gui.ct.summary_size"), String(running), stopped, humanSize(size));
       }
       case "images":
         return ready ? fmt(t("gui.sub.items_size"), String(this.st.images.length), humanSize(this.st.images.reduce((a, im) => a + im.Size, 0))) : "";
-      case "volumes":
-        return ready ? fmt(t("gui.sub.items"), String(this.st.volumes.length)) : "";
+      case "volumes": {
+        if (!ready) return "";
+        const size = this.volumesSize();
+        return size === undefined
+          ? fmt(t("gui.sub.items"), String(this.st.volumes.length))
+          : fmt(t("gui.sub.items_size"), String(this.st.volumes.length), humanSize(size));
+      }
       case "networks":
         return ready ? fmt(t("gui.sub.items"), String(this.st.networks.length)) : "";
-      case "machines":
-        return this.st.machines?.available ? fmt(t("gui.sub.items"), String(this.st.machines.machines.length)) : "";
+      case "machines": {
+        const m = this.st.machines;
+        if (!m?.available) return "";
+        const sized = m.machines.filter((d) => (d.disk_bytes ?? 0) > 0);
+        return sized.length
+          ? fmt(t("gui.sub.items_total"), String(m.machines.length), humanSize(sized.reduce((a, d) => a + (d.disk_bytes ?? 0), 0)))
+          : fmt(t("gui.sub.items"), String(m.machines.length));
+      }
       default:
         return "";
     }
+  }
+
+  /** 列表中容器的可寫層總和（尚未取得 df 時 undefined）。 */
+  private containersSize(): number | undefined {
+    const d = this.st.disk;
+    if (!d) return undefined;
+    return this.st.containers.reduce((a, c) => a + (d.containers[c.Id]?.size_rw ?? 0), 0);
+  }
+
+  /** 容器頁的佔用分項：compose 專案整組一項，未分組的容器各一項（尚未取得 df 時為空）。 */
+  private containerUsageParts(): UsagePart[] {
+    const d = this.st.disk;
+    if (!d || this.st.status?.ready !== true) return [];
+    const size = (c: Container) => d.containers[c.Id]?.size_rw ?? 0;
+    const parts: UsagePart[] = [];
+    const groups = groupContainers(this.st.containers) ?? [{ project: "", items: this.st.containers }];
+    for (const g of groups) {
+      if (g.project) parts.push({ key: `compose:${g.project}`, label: g.project, size: g.items.reduce((a, c) => a + size(c), 0) });
+      else for (const c of g.items) parts.push({ key: c.Id, label: name(c), size: size(c) });
+    }
+    return parts;
+  }
+
+  /** 標題列下方的磁碟用量 stat card；沒有可顯示的大小時清空。 */
+  private renderDiskSlot(parts: UsagePart[]): void {
+    const slot = this.root.querySelector<HTMLElement>('[data-testid="disk-slot"]');
+    if (!slot) return;
+    const card = usageCard(parts);
+    slot.replaceChildren(...(card ? [card] : []));
+  }
+
+  /** 列表中 volume 的大小總和（未統計者不計；尚未取得 df 時 undefined）。 */
+  private volumesSize(): number | undefined {
+    const d = this.st.disk;
+    if (!d) return undefined;
+    return this.st.volumes.reduce((a, v) => a + Math.max(0, d.volumes[v.Name]?.size ?? 0), 0);
   }
 
   /** 分段篩選（SegmentedControl）：aria-pressed 標示目前選項。 */
@@ -950,17 +1015,21 @@ export class App {
     if (this.st.view === "containers") {
       main.replaceChildren(
         pageBar(this.containerToolbar()),
+        el("div", { class: "disk-slot", "data-testid": "disk-slot" }),
         el("div", { class: "list", "data-testid": "container-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
     } else if (this.st.view === "machines") {
       main.replaceChildren(
         pageBar(toolbar()),
+        el("div", { class: "disk-slot", "data-testid": "disk-slot" }),
         el("div", { class: "list", "data-testid": "machines-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
     } else if (this.st.view === "images") {
       main.replaceChildren(pageBar(toolbar()), el("div", { class: "disk-slot", "data-testid": "disk-slot" }), el("div", { class: "list", "data-testid": "images-list" }));
+    } else if (this.st.view === "volumes") {
+      main.replaceChildren(pageBar(toolbar()), el("div", { class: "disk-slot", "data-testid": "disk-slot" }), el("div", { class: "list", "data-testid": "volumes-list" }));
     } else {
       main.replaceChildren(pageBar(toolbar()), el("div", { class: "list", "data-testid": `${this.st.view}-list` }));
     }
@@ -1209,6 +1278,7 @@ export class App {
     const list = this.root.querySelector<HTMLElement>('[data-testid="container-list"]');
     if (!list) return;
     this.syncFilterButtons();
+    this.renderDiskSlot(this.containerUsageParts());
     if (this.st.containers.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty")));
       return;
@@ -1264,6 +1334,9 @@ export class App {
         toggle,
         el("span", { class: "group-name", "data-testid": "group-name", text: g.project || "-" }),
         el("span", { class: "group-count", "data-testid": "group-count", text: `${running}/${g.items.length}` }),
+        ...(this.st.disk
+          ? [el("span", { class: "group-size muted", "data-testid": "group-size", text: humanSize(g.items.reduce((a, c) => a + (this.st.disk?.containers[c.Id]?.size_rw ?? 0), 0)) })]
+          : []),
         el("span", { class: "spacer" }),
         ...actions,
       ),
@@ -1316,8 +1389,21 @@ export class App {
       ),
       el("td", { text: c.Image, title: c.Image }),
       el("td", {}, el("span", { class: `state ${pending ? "pending" : c.State}`, "data-testid": `state-${n}`, text: stateText })),
+      this.containerSizeCell(c, n),
       el("td", { class: "actions" }, startBtn, stopBtn, logsBtn, termBtn, browserBtn, infoBtn, rmBtn),
     );
+  }
+
+  private containerSizeCell(c: Container, n: string): HTMLElement {
+    const d = this.st.disk?.containers[c.Id];
+    if (!d) return el("td", { "data-testid": `size-${n}`, class: "num muted", text: "–" });
+    return el("td", {
+      "data-testid": `size-${n}`,
+      "data-size": String(d.size_rw),
+      class: "num",
+      text: humanSize(d.size_rw),
+      title: fmt(t("gui.ct.size_title"), humanSize(d.size_rw), humanSize(d.size_root_fs)),
+    });
   }
 
   private renderPanel(): void {
@@ -1488,6 +1574,10 @@ export class App {
           infoField(t("gui.machines.wslconfig"), `memory=${d.memory || "—"}; processors=${d.processors || "—"}`, "info-wslconfig"),
           usageMeter(t("gui.machines.cpu"), formatCPU(d.cpu_percent ?? 0), clampPct(d.cpu_percent ?? 0), "info-cpu-bar"),
           usageMeter(t("gui.machines.mem"), formatMem(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0), memPct(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0), "info-mem-bar"),
+          ...((d.disk_total_bytes ?? 0) > 0
+            ? [usageMeter(t("gui.machines.disk_fs"), formatDisk(d.disk_used_bytes ?? 0, d.disk_total_bytes ?? 0), memPct(d.disk_used_bytes ?? 0, d.disk_total_bytes ?? 0), "info-disk-bar")]
+            : []),
+          infoField(t("gui.machines.disk_hint"), (d.disk_bytes ?? 0) > 0 ? humanSize(d.disk_bytes ?? 0) : "—", "info-disk"),
           el("div", { class: `tag ${d.systemd ? "ok" : ""}`, "data-testid": "machine-config-systemd", text: d.systemd ? t("gui.machines.systemd_on") : t("gui.machines.systemd_off") }),
           el("pre", { class: "conf", "data-testid": "machine-config-conf", text: d.wsl_conf || t("gui.machines.no_conf") }),
         );
@@ -1564,8 +1654,7 @@ export class App {
     );
     bar.replaceChildren(seg, prune);
     // 磁碟用量在標題列下方獨佔一列
-    const disk = this.root.querySelector<HTMLElement>('[data-testid="disk-slot"]');
-    disk?.replaceChildren(...(ready && this.st.images.length ? [this.diskUsage(this.st.images)] : []));
+    this.renderDiskSlot(ready ? this.st.images.map((im) => ({ key: im.Id, label: imageName(im) === "<none>" ? shortID(im.Id) : imageName(im), size: im.Size })) : []);
 
     if (!ready || this.st.images.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty.images")));
@@ -1610,46 +1699,6 @@ export class App {
     list.replaceChildren(table);
   }
 
-  /** 映像磁碟用量：使用中／未使用／懸空（／daemon 未統計）依大小分段，顏色以明度區分。 */
-  private diskUsage(images: Image[]): HTMLElement {
-    const sizes: Record<ImgKind, number> = { inuse: 0, unused: 0, dangling: 0, unknown: 0 };
-    const counts: Record<ImgKind, number> = { inuse: 0, unused: 0, dangling: 0, unknown: 0 };
-    for (const im of images) {
-      const k = imageKind(im);
-      sizes[k] += im.Size;
-      counts[k]++;
-    }
-    const total = Object.values(sizes).reduce((a, b) => a + b, 0) || 1;
-    const order: ImgKind[] = ["inuse", "unused", "dangling", "unknown"];
-    const bar = el("div", { class: "disk-bar", role: "img", "data-testid": "disk-bar" });
-    const legend = el("div", { class: "disk-legend" });
-    const aria: string[] = [];
-    for (const k of order) {
-      if (!counts[k]) continue;
-      const seg = el("span", { class: `disk-seg ${k}`, "data-kind": k });
-      seg.style.width = `${(sizes[k] / total) * 100}%`;
-      bar.append(seg);
-      legend.append(
-        el("span", { class: "disk-key", "data-testid": `disk-${k}` },
-          el("span", { class: `disk-swatch ${k}`, "aria-hidden": "true" }),
-          t(KIND_LABEL[k]),
-          el("strong", { text: humanSize(sizes[k]) }),
-          el("span", { class: "muted", text: `· ${counts[k]}` }),
-        ),
-      );
-      aria.push(`${t(KIND_LABEL[k])} ${humanSize(sizes[k])}`);
-    }
-    bar.setAttribute("aria-label", aria.join(", "));
-    return el("section", { class: "disk-card", "data-testid": "disk-usage", "aria-label": t("gui.disk.title") },
-      el("div", { class: "disk-head" },
-        el("strong", { text: t("gui.disk.title") }),
-        el("span", { class: "muted", "data-testid": "disk-total", text: humanSize(images.reduce((a, im) => a + im.Size, 0)) }),
-      ),
-      bar,
-      legend,
-    );
-  }
-
   // ---- Volumes ----------------------------------------------------------------
 
   private renderVolumes(): void {
@@ -1665,6 +1714,8 @@ export class App {
         return fmt(t("gui.pruned"), String(rep.count), humanSize(rep.space_reclaimed));
       });
     bar.replaceChildren(el("span", { class: "spacer" }), prune);
+    const vd = this.st.disk?.volumes;
+    this.renderDiskSlot(ready && vd ? this.st.volumes.map((v) => ({ key: v.Name, label: v.Name, size: vd[v.Name]?.size ?? 0 })) : []);
 
     if (!ready || this.st.volumes.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty.volumes")));
@@ -1685,6 +1736,7 @@ export class App {
           { "data-testid": "volume-row", "data-name": v.Name },
           el("td", { "data-testid": "volume-name", class: "strong", text: v.Name, title: v.Name }),
           el("td", { "data-testid": "volume-driver", text: v.Driver }),
+          this.volumeSizeCell(v.Name),
           el("td", { "data-testid": "volume-mountpoint", class: "mono muted", text: v.Mountpoint, title: v.Mountpoint }),
           el("td", { class: "muted", text: fmtISO(v.CreatedAt) }),
           el("td", { class: "actions" }, rm),
@@ -1692,6 +1744,12 @@ export class App {
       );
     }
     list.replaceChildren(table);
+  }
+
+  private volumeSizeCell(name: string): HTMLElement {
+    const d = this.st.disk?.volumes[name];
+    const text = !d || d.size < 0 ? "–" : humanSize(d.size);
+    return el("td", { "data-testid": "volume-size", class: "num", text, ...(d && d.size >= 0 ? { "data-size": String(d.size) } : {}) });
   }
 
   // ---- Networks ---------------------------------------------------------------
@@ -1755,6 +1813,7 @@ export class App {
     add.disabled = !m?.available || this.st.busy.has("install") || removingAny || !!this.st.switching || this.st.starting;
     add.onclick = () => this.openAddMachine();
     bar.replaceChildren(el("span", { class: "spacer" }), add);
+    this.renderDiskSlot((m?.available ? m.machines : []).map((d) => ({ key: d.name, label: d.name, size: d.disk_bytes ?? 0 })));
 
     if (m && !m.available) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.machines.unavailable") }));
@@ -1842,6 +1901,10 @@ export class App {
         el("span", { class: `state ${pending ? "pending" : d.state.toLowerCase()}`, "data-testid": "machine-state", text: stateText }),
         el("span", { class: "muted" }, " · WSL ", el("span", { "data-testid": "machine-version", text: String(d.version) })),
       ];
+      if ((d.disk_bytes ?? 0) > 0) {
+        meta.push(el("span", { class: "muted", title: t("gui.machines.disk_hint") }, ` · ${t("gui.machines.disk")} `,
+          el("span", { "data-testid": "machine-disk", "data-size": String(d.disk_bytes), text: humanSize(d.disk_bytes ?? 0) })));
+      }
       if (d.active && (d.api_endpoint || this.st.meta.api_endpoint)) {
         meta.push(el("span", { class: "muted mono", "data-testid": "machine-endpoint", text: ` · ${d.api_endpoint || this.st.meta.api_endpoint}` }));
       }
@@ -1893,6 +1956,7 @@ export class App {
     this.st.images = [];
     this.st.volumes = [];
     this.st.networks = [];
+    this.st.disk = undefined;
   }
 
   private async useMachine(name: string): Promise<void> {
@@ -1983,6 +2047,15 @@ export class App {
       if (fill) fill.style.width = `${pct}%`;
       if (label) label.textContent = formatMem(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0);
       mem.setAttribute("data-pct", String(pct));
+    }
+    const disk = this.root.querySelector<HTMLElement>('[data-testid="info-disk-bar"]');
+    if (disk && (d.disk_total_bytes ?? 0) > 0) {
+      const pct = memPct(d.disk_used_bytes ?? 0, d.disk_total_bytes ?? 0);
+      const fill = disk.querySelector<HTMLElement>(".usage-fill");
+      const label = disk.querySelector<HTMLElement>(".usage-value");
+      if (fill) fill.style.width = `${pct}%`;
+      if (label) label.textContent = formatDisk(d.disk_used_bytes ?? 0, d.disk_total_bytes ?? 0);
+      disk.setAttribute("data-pct", String(pct));
     }
   }
 
@@ -2695,6 +2768,11 @@ function formatMem(used: number, total: number): string {
   return `${used}/${total} MB (${Number.isInteger(pct) ? pct : pct.toFixed(1)}%)`;
 }
 
+function formatDisk(used: number, total: number): string {
+  const pct = memPct(used, total);
+  return `${humanSize(used)} / ${humanSize(total)} (${Number.isInteger(pct) ? pct : pct.toFixed(1)}%)`;
+}
+
 /** 新增機器對話框的下載進度區塊（沿用 usage-meter 的 track／fill 樣式）。 */
 function installProgressBlock(): HTMLElement {
   const fill = el("div", { class: "usage-fill" });
@@ -2764,8 +2842,9 @@ interface Col {
 const COLS: Col[] = [
   // 總和 < 預設視窗內容寬（1100px − 側欄 232px − 邊距 48px），避免一開就出現水平捲軸
   { key: "name", label: "gui.col.name", def: 220, min: 80, resizable: true },
-  { key: "image", label: "gui.col.image", def: 260, min: 80, resizable: true },
+  { key: "image", label: "gui.col.image", def: 230, min: 80, resizable: true },
   { key: "state", label: "gui.col.state", def: 130, min: 90, resizable: true },
+  { key: "size", label: "gui.col.size", def: 90, min: 70, resizable: true },
 	{ key: "actions", label: "gui.col.actions", def: 240, min: 210, resizable: false },
 ];
 
@@ -2781,7 +2860,8 @@ const IMAGE_COLS: Col[] = [
 const VOLUME_COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 220, min: 100, resizable: true },
   { key: "driver", label: "gui.col.driver", def: 90, min: 60, resizable: true },
-  { key: "mountpoint", label: "gui.col.mountpoint", def: 320, min: 120, resizable: true },
+  { key: "size", label: "gui.col.size", def: 90, min: 70, resizable: true },
+  { key: "mountpoint", label: "gui.col.mountpoint", def: 300, min: 120, resizable: true },
   { key: "created", label: "gui.col.created", def: 160, min: 90, resizable: true },
   { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
 ];
@@ -2904,6 +2984,58 @@ const KIND_TAG: Record<ImgKind, string> = { inuse: "accent", unused: "", danglin
 function imageName(im: Image): string {
   const tag = im.RepoTags?.[0];
   return !tag || tag === "<none>:<none>" ? "<none>" : tag;
+}
+
+interface UsagePart {
+  key: string;
+  label: string;
+  size: number;
+}
+
+/** 長條最多幾段有自己的顏色（--series-1..5）；其餘併為「其他」。 */
+const USAGE_TOP = 5;
+
+/** 磁碟用量 stat card：前 5 大各一段、其餘併為「其他」；圖例列名稱、大小、占比。
+ *  前 5 大依名稱排序後依序取色槽，長條與圖例同一順序：大小些微變動不會換色，
+ *  相鄰兩段也一定是相鄰色槽（調色盤的 CVD 安全順序）。 */
+function usageCard(parts: UsagePart[]): HTMLElement | undefined {
+  const items = parts.filter((p) => p.size > 0).sort((a, b) => b.size - a.size || a.label.localeCompare(b.label));
+  const total = items.reduce((a, p) => a + p.size, 0);
+  if (!total) return undefined;
+  const top = items.slice(0, USAGE_TOP).sort((a, b) => a.label.localeCompare(b.label));
+  const rest = items.slice(USAGE_TOP);
+  const segs = top.map((p, i) => ({ ...p, cls: `s${i + 1}` }));
+  if (rest.length) {
+    segs.push({ key: "__other", label: fmt(t("gui.disk.other"), String(rest.length)), size: rest.reduce((a, p) => a + p.size, 0), cls: "other" });
+  }
+  const pct = (n: number) => {
+    const v = (n / total) * 100;
+    return v < 1 ? "<1%" : `${Math.round(v)}%`;
+  };
+  const bar = el("div", { class: "disk-bar", role: "img", "data-testid": "usage-bar" });
+  const legend = el("div", { class: "disk-legend" });
+  for (const p of segs) {
+    const seg = el("span", { class: `disk-seg ${p.cls}`, "data-key": p.key, title: `${p.label} · ${humanSize(p.size)} · ${pct(p.size)}` });
+    seg.style.width = `${(p.size / total) * 100}%`;
+    bar.append(seg);
+    legend.append(
+      el("span", { class: "disk-key", "data-testid": "usage-part", "data-key": p.key, "data-size": String(p.size) },
+        el("span", { class: `disk-swatch ${p.cls}`, "aria-hidden": "true" }),
+        el("span", { class: "disk-name", text: p.label, title: p.label }),
+        el("strong", { text: humanSize(p.size) }),
+        el("span", { class: "muted", text: pct(p.size) }),
+      ),
+    );
+  }
+  bar.setAttribute("aria-label", segs.map((p) => `${p.label} ${humanSize(p.size)}`).join(", "));
+  return el("section", { class: "disk-card", "data-testid": "usage-card", "aria-label": t("gui.disk.title") },
+    el("div", { class: "disk-head" },
+      el("strong", { text: t("gui.disk.title") }),
+      el("span", { class: "muted", "data-testid": "usage-total", "data-size": String(total), text: humanSize(total) }),
+    ),
+    bar,
+    legend,
+  );
 }
 
 /** 二進位單位（與 docker CLI 一致的 1024 進位），保留一位小數。 */
