@@ -31,7 +31,7 @@
 │ ▦ wsld v… │ ▣Containers ◈Images ⛁Volumes ⚇Networks │ ▭Machines ··· [● Ubuntu · Connected :2375] [⏻ Start engine*] │ [📁][>_] ⚙ │
 ├──────────────────────────────────────────────────────────────┬──────────────────────┤
 │ <頁標題> <摘要> ·························· 工具列（搜尋／篩選／prune／Add／Save） │ info drawer（右）    │
-│ （Containers／Images／Volumes／Machines：磁碟用量卡片獨佔一列）  │ 容器／compose／      │
+│ （標題旁：磁碟用量鈕，點開浮出明細）                             │ 容器／compose／      │
 │ main（滿寬，卡片底）                                            │ machine 詳情         │
 │  Containers：列表＋下方 Logs│Terminal 分頁                     │                      │
 │  Machines：卡片；Settings：分組卡片（含語言、GitHub）              │                      │
@@ -42,11 +42,11 @@
 外觀依設計稿（Fluent 語彙：圓角 6–8、Mica 底、單一藍色強調色）；色彩 tokens 在 `frontend/src/style.css` 的 `:root`／深色區塊，文字在其底色上 ≥ 4.5:1。狀態一律「形狀＋文字＋顏色」：實心點＝執行中、空心環＝停止、脈動＝處理中。
 
 - **Top bar（滿寬，0.8 起取代側欄）**：品牌標誌（全方格鯨魚，與 `gen_icon.go` 同一張 16 格主格線）＋版本；**視圖分頁** Containers／Images／Volumes／Networks｜Machines（目前分頁底部藍色指示條、`aria-current="page"`；視窗 < 1100px 時只剩圖示，名稱留在 `title`／文字內容）；右側**發行版晶片**（active distro、引擎狀態點與文字 `status-connection`、已連線時顯示 API 埠；點擊前往 Machines；切換中顯示 Loading）、**需要時才出現**的 Start engine、**有 border** 的 Open folder／Open terminal、Settings 齒輪。視圖存 localStorage；切換視圖關閉 Logs／Terminal／Info。**不顯示** API endpoint（tcp）。
-- **頁標題列**：內容區頂端，目前視圖標題＋摘要（Containers：執行中／已停止數＋可寫層總和；資源頁：項目數，映像／Volume 含總大小；Machines：項目數＋虛擬磁碟合計）與該頁工具列同一列（工具列靠右，窄時換行），省下獨立 header 的高度。
+- **頁標題列**：內容區頂端，目前視圖標題＋摘要（Containers：執行中／已停止數；其他頁：項目數）＋磁碟用量鈕，與該頁工具列同一列（工具列靠右，窄時換行），省下獨立 header 的高度。
 - **Containers**：工具列搜尋（名稱／映像／compose 服務）＋狀態分段篩選（全部／執行中／已停止，附數量）；名稱下方顯示 docker 狀態描述；開啟 Info 時該列標示選取。Logs／Terminal 面板頂部有分頁可切換同一容器（已停止容器不能開終端）。
-- **磁碟用量卡**（`usage-card`）：Containers／Images／Volumes／Machines 標題列下方的 stat card，標題右側為該頁總計（`usage-total`），下方分段長條＋圖例（`usage-part`：名稱、大小、占比）。每頁只列自己那一類的每一項：容器頁＝每個 compose 專案（整組加總）與每個未分組容器的可寫層；映像頁＝每個映像；Volume 頁＝每個 volume（未統計者不列）；Machines＝每台機器的 ext4.vhdx。最大的 5 項各一段，其餘併為「其他（N）」；5 項依名稱排序後依序取 `--series-1..5`（dataviz 參考調色盤前 5 槽，light／dark 各一組），長條與圖例同一順序，大小些微變動不換色。滑過分段有 title（名稱・大小・占比）。沒有大小可顯示（引擎未就緒、df 尚未回來）時不顯示。不做跨類別總覽。
+- **磁碟用量鈕**（`usage-btn`）：Containers／Images／Volumes／Machines 頁標題摘要旁一顆 28px 高的鈕：迷你分段長條（`usage-bar`）＋該頁總量（`usage-total`）＋下拉箭頭，固定一列、不隨項目數變高，不另佔列表上方的高度。點開（`aria-expanded`）浮出明細 `usage-pop`：每項一行（`usage-part`：色塊、名稱、大小、占比），名稱過長截斷並有 title；Esc 收起且焦點回到鈕上，點外面也收起；列表週期刷新與換頁時明細維持／收起。每頁只列自己那一類的每一項：容器頁＝每個 compose 專案（整組加總）與每個未分組容器的可寫層；映像頁＝每個映像；Volume 頁＝每個 volume（未統計者不列）；Machines＝每台機器的 ext4.vhdx。最大的 5 項各一段，其餘併為「其他（N）」；5 項依名稱排序後依序取 `--series-1..5`（dataviz 參考調色盤前 5 槽，light／dark 各一組），長條與明細同一順序，大小些微變動不換色。滑過長條分段有 title（名稱・大小・占比）。視窗 ≤ 1100px 時迷你長條縮為 56px、搜尋欄 220px，≤ 860px 只留總量，避免標題列換行。沒有大小可顯示（引擎未就緒、df 尚未回來）時不顯示。
 - **Images**：分段篩選（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋清除未使用。
-- **容器與 Volume 大小**：Containers 列表有 Size 欄（可寫層；title 顯示含映像的虛擬大小 `SizeRootFs`），compose 群組列顯示該組加總；Volumes 列表有 Size 欄（未統計顯示「–」）。頁標題列摘要也帶該頁總計。大小來自 `GET /api/disk`（Docker `/system/df`）；後端快取 15 秒（`/system/df` 會對 volume 跑 du），刪除／prune／啟停後失效；查詢失敗不影響列表。Networks、Settings 不佔磁碟，不顯示。
+- **容器與 Volume 大小**：Containers 列表有 Size 欄（可寫層；title 顯示含映像的虛擬大小 `SizeRootFs`），compose 群組列顯示該組加總；Volumes 列表有 Size 欄（未統計顯示「–」）。總量在頁標題旁的磁碟用量鈕。大小來自 `GET /api/disk`（Docker `/system/df`）；後端快取 15 秒（`/system/df` 會對 volume 跑 du），刪除／prune／啟停後失效；查詢失敗不影響列表。Networks、Settings 不佔磁碟，不顯示。
 - **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）、角色標籤、目前那台顯示 API 端點；設為主要、**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止主要發行版前會確認（Docker 與容器一併停止）。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
@@ -87,7 +87,7 @@
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
 | Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts` |
-| 磁碟用量 | 四頁的用量卡（每項大小與占比、前 5 大＋其他、總計）、容器／Volume Size 欄與副標總計、compose 群組加總、Machines 卡片磁碟與合計、Info 磁碟長條 | `disk.spec.ts` |
+| 磁碟用量 | 四頁的用量鈕（不加高度、點開／Esc／點外面、刷新時維持；明細每項大小與占比、前 5 大＋其他、總計）、容器／Volume Size 欄與副標總計、compose 群組加總、Machines 卡片磁碟與合計、Info 磁碟長條 | `disk.spec.ts` |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
 | Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、防火牆說明對話框（netsh／helper、稍後、等待 UAC、取消 UAC）、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（常駐；區網關閉時開 localhost、點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
 | i18n | Settings「外觀」語言下拉（立即生效） | `list.spec.ts` |
@@ -128,7 +128,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.15.1 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.15.2 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 

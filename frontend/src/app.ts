@@ -88,6 +88,8 @@ interface State {
   /** 區網存取已開啟（容器列顯示瀏覽器按鈕） */
   lanEnabled: boolean;
   imgFilter: ImgFilter;
+  /** 頁標題旁磁碟用量鈕的明細是否展開（換頁即收起） */
+  usageOpen: boolean;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
 }
@@ -356,6 +358,7 @@ export class App {
       ctFilter: "all",
       ctQuery: "",
       imgFilter: "all",
+      usageOpen: false,
       lanForwards: [],
       lanEnabled: false,
     };
@@ -363,6 +366,7 @@ export class App {
     this.build();
     this.applyTheme(this.st.meta.config.theme || "system");
     this.bindPause();
+    this.bindUsageDismiss();
     void this.refresh();
     this.schedule();
     // 測試掛鉤
@@ -473,6 +477,8 @@ export class App {
     this.closePanel();
     this.closeInfo();
     this.st.view = v;
+    this.st.usageOpen = false;
+    this.usageParts = [];
     if (v === "settings" && !this.st.lanApplying) this.st.lan = undefined; // 每次進設定頁重新查詢區網狀態
     saveJSON(LS_VIEW, v);
     this.renderNav();
@@ -791,51 +797,31 @@ export class App {
     head.replaceChildren(
       el("h1", { "data-testid": "page-title", text: t(view.label) }),
       el("span", { class: "page-sub", "data-testid": "page-sub", text: this.pageSubtitle() }),
+      el("span", { class: "usage-slot", "data-testid": "usage-slot" }),
     );
+    this.renderDiskSlot(this.usageParts);
   }
 
-  /** 頁首副標：容器頁顯示執行中／已停止數量；資源頁顯示項目數（映像含總大小）；未連線時留空。 */
+  /** 頁首副標：容器頁顯示執行中／已停止數量；資源頁顯示項目數；未連線時留空（大小在旁邊的磁碟用量鈕）。 */
   private pageSubtitle(): string {
     const ready = this.st.status?.ready === true;
     switch (this.st.view) {
       case "containers": {
         if (!ready) return "";
         const running = this.st.containers.filter((c) => c.State === "running").length;
-        const stopped = String(this.st.containers.length - running);
-        const size = this.containersSize();
-        return size === undefined
-          ? fmt(t("gui.ct.summary"), String(running), stopped)
-          : fmt(t("gui.ct.summary_size"), String(running), stopped, humanSize(size));
+        return fmt(t("gui.ct.summary"), String(running), String(this.st.containers.length - running));
       }
       case "images":
-        return ready ? fmt(t("gui.sub.items_size"), String(this.st.images.length), humanSize(this.st.images.reduce((a, im) => a + im.Size, 0))) : "";
-      case "volumes": {
-        if (!ready) return "";
-        const size = this.volumesSize();
-        return size === undefined
-          ? fmt(t("gui.sub.items"), String(this.st.volumes.length))
-          : fmt(t("gui.sub.items_size"), String(this.st.volumes.length), humanSize(size));
-      }
+        return ready ? fmt(t("gui.sub.items"), String(this.st.images.length)) : "";
+      case "volumes":
+        return ready ? fmt(t("gui.sub.items"), String(this.st.volumes.length)) : "";
       case "networks":
         return ready ? fmt(t("gui.sub.items"), String(this.st.networks.length)) : "";
-      case "machines": {
-        const m = this.st.machines;
-        if (!m?.available) return "";
-        const sized = m.machines.filter((d) => (d.disk_bytes ?? 0) > 0);
-        return sized.length
-          ? fmt(t("gui.sub.items_total"), String(m.machines.length), humanSize(sized.reduce((a, d) => a + (d.disk_bytes ?? 0), 0)))
-          : fmt(t("gui.sub.items"), String(m.machines.length));
-      }
+      case "machines":
+        return this.st.machines?.available ? fmt(t("gui.sub.items"), String(this.st.machines.machines.length)) : "";
       default:
         return "";
     }
-  }
-
-  /** 列表中容器的可寫層總和（尚未取得 df 時 undefined）。 */
-  private containersSize(): number | undefined {
-    const d = this.st.disk;
-    if (!d) return undefined;
-    return this.st.containers.reduce((a, c) => a + (d.containers[c.Id]?.size_rw ?? 0), 0);
   }
 
   /** 容器頁的佔用分項：compose 專案整組一項，未分組的容器各一項（尚未取得 df 時為空）。 */
@@ -852,19 +838,38 @@ export class App {
     return parts;
   }
 
-  /** 標題列下方的磁碟用量 stat card；沒有可顯示的大小時清空。 */
+  /** 最近一次的用量分項：點外面收起明細、重繪頁標題時不必重建列表。 */
+  private usageParts: UsagePart[] = [];
+
+  /** 頁標題旁的磁碟用量鈕（迷你長條＋總量），明細在點開的浮出清單；沒有大小可顯示時清空。
+   *  列表每次刷新都會重繪：焦點原本在鈕上就還給新的鈕，鍵盤操作不會斷。 */
   private renderDiskSlot(parts: UsagePart[]): void {
-    const slot = this.root.querySelector<HTMLElement>('[data-testid="disk-slot"]');
+    this.usageParts = parts;
+    const slot = this.root.querySelector<HTMLElement>('[data-testid="usage-slot"]');
     if (!slot) return;
-    const card = usageCard(parts);
-    slot.replaceChildren(...(card ? [card] : []));
+    const hadFocus = slot.contains(document.activeElement);
+    const meter = usageButton(parts, this.st.usageOpen, (open) => {
+      this.st.usageOpen = open;
+      this.renderDiskSlot(this.usageParts);
+    });
+    if (!meter) this.st.usageOpen = false;
+    slot.replaceChildren(...(meter ? [meter] : []));
+    if (hadFocus) slot.querySelector<HTMLElement>('[data-testid="usage-btn"]')?.focus();
   }
 
-  /** 列表中 volume 的大小總和（未統計者不計；尚未取得 df 時 undefined）。 */
-  private volumesSize(): number | undefined {
-    const d = this.st.disk;
-    if (!d) return undefined;
-    return this.st.volumes.reduce((a, v) => a + Math.max(0, d.volumes[v.Name]?.size ?? 0), 0);
+  /** 點用量鈕與明細以外的地方就收起明細。 */
+  private bindUsageDismiss(): void {
+    document.addEventListener(
+      "click",
+      (e) => {
+        if (!this.st.usageOpen) return;
+        const wrap = this.root.querySelector(".usage-wrap");
+        if (wrap && e.target instanceof Node && wrap.contains(e.target)) return;
+        this.st.usageOpen = false;
+        this.renderDiskSlot(this.usageParts);
+      },
+      true,
+    );
   }
 
   /** 分段篩選（SegmentedControl）：aria-pressed 標示目前選項。 */
@@ -1015,21 +1020,15 @@ export class App {
     if (this.st.view === "containers") {
       main.replaceChildren(
         pageBar(this.containerToolbar()),
-        el("div", { class: "disk-slot", "data-testid": "disk-slot" }),
         el("div", { class: "list", "data-testid": "container-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
     } else if (this.st.view === "machines") {
       main.replaceChildren(
         pageBar(toolbar()),
-        el("div", { class: "disk-slot", "data-testid": "disk-slot" }),
         el("div", { class: "list", "data-testid": "machines-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
-    } else if (this.st.view === "images") {
-      main.replaceChildren(pageBar(toolbar()), el("div", { class: "disk-slot", "data-testid": "disk-slot" }), el("div", { class: "list", "data-testid": "images-list" }));
-    } else if (this.st.view === "volumes") {
-      main.replaceChildren(pageBar(toolbar()), el("div", { class: "disk-slot", "data-testid": "disk-slot" }), el("div", { class: "list", "data-testid": "volumes-list" }));
     } else {
       main.replaceChildren(pageBar(toolbar()), el("div", { class: "list", "data-testid": `${this.st.view}-list` }));
     }
@@ -3000,10 +2999,11 @@ interface UsagePart {
 /** 長條最多幾段有自己的顏色（--series-1..5）；其餘併為「其他」。 */
 const USAGE_TOP = 5;
 
-/** 磁碟用量 stat card：前 5 大各一段、其餘併為「其他」；圖例列名稱、大小、占比。
- *  前 5 大依名稱排序後依序取色槽，長條與圖例同一順序：大小些微變動不會換色，
- *  相鄰兩段也一定是相鄰色槽（調色盤的 CVD 安全順序）。 */
-function usageCard(parts: UsagePart[]): HTMLElement | undefined {
+/** 頁標題旁的磁碟用量鈕：120px 迷你長條＋總量，固定一列高、不隨項目數變高；
+ *  點開浮出明細（每項一行：色塊、名稱、大小、占比），Esc／點外面收起。
+ *  前 5 大各一段（依名稱排序後依序取 --series-1..5，長條與明細同一順序：大小些微變動不會換色，
+ *  相鄰兩段也一定是相鄰色槽＝調色盤的 CVD 安全順序），其餘併為「其他」。滑過分段有 title。 */
+function usageButton(parts: UsagePart[], open: boolean, onToggle: (open: boolean) => void): HTMLElement | undefined {
   const items = parts.filter((p) => p.size > 0).sort((a, b) => b.size - a.size || a.label.localeCompare(b.label));
   const total = items.reduce((a, p) => a + p.size, 0);
   if (!total) return undefined;
@@ -3017,30 +3017,48 @@ function usageCard(parts: UsagePart[]): HTMLElement | undefined {
     const v = (n / total) * 100;
     return v < 1 ? "<1%" : `${Math.round(v)}%`;
   };
-  const bar = el("div", { class: "disk-bar", role: "img", "data-testid": "usage-bar" });
-  const legend = el("div", { class: "disk-legend" });
+  const bar = el("span", { class: "disk-bar", "data-testid": "usage-bar", "aria-hidden": "true" });
   for (const p of segs) {
     const seg = el("span", { class: `disk-seg ${p.cls}`, "data-key": p.key, title: `${p.label} · ${humanSize(p.size)} · ${pct(p.size)}` });
     seg.style.width = `${(p.size / total) * 100}%`;
     bar.append(seg);
-    legend.append(
-      el("span", { class: "disk-key", "data-testid": "usage-part", "data-key": p.key, "data-size": String(p.size) },
-        el("span", { class: `disk-swatch ${p.cls}`, "aria-hidden": "true" }),
-        el("span", { class: "disk-name", text: p.label, title: p.label }),
-        el("strong", { text: humanSize(p.size) }),
-        el("span", { class: "muted", text: pct(p.size) }),
+  }
+  const btn = el("button", {
+    type: "button",
+    class: "usage-btn",
+    "data-testid": "usage-btn",
+    "aria-expanded": String(open),
+    "aria-controls": "usage-pop",
+    "aria-label": fmt(t("gui.disk.show"), humanSize(total)),
+  }, bar, el("strong", { "data-testid": "usage-total", "data-size": String(total), text: humanSize(total) }), icon("chevron-down"));
+  btn.onclick = () => onToggle(!open);
+  const wrap = el("span", { class: "usage-wrap" }, btn);
+  wrap.onkeydown = (e) => {
+    if (e.key !== "Escape" || !open) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onToggle(false);
+  };
+  if (open) {
+    const list = el("div", { class: "usage-list" });
+    for (const p of segs) {
+      list.append(
+        el("span", { class: "usage-part", "data-testid": "usage-part", "data-key": p.key, "data-size": String(p.size) },
+          el("span", { class: `disk-swatch ${p.cls}`, "aria-hidden": "true" }),
+          el("span", { class: "usage-name", text: p.label, title: p.label }),
+          el("strong", { text: humanSize(p.size) }),
+          el("span", { class: "muted", text: pct(p.size) }),
+        ),
+      );
+    }
+    wrap.append(
+      el("div", { class: "usage-pop", id: "usage-pop", role: "group", "data-testid": "usage-pop", "aria-label": t("gui.disk.title") },
+        el("div", { class: "usage-pop-head" }, el("strong", { text: t("gui.disk.title") }), el("span", { class: "muted", text: humanSize(total) })),
+        list,
       ),
     );
   }
-  bar.setAttribute("aria-label", segs.map((p) => `${p.label} ${humanSize(p.size)}`).join(", "));
-  return el("section", { class: "disk-card", "data-testid": "usage-card", "aria-label": t("gui.disk.title") },
-    el("div", { class: "disk-head" },
-      el("strong", { text: t("gui.disk.title") }),
-      el("span", { class: "muted", "data-testid": "usage-total", "data-size": String(total), text: humanSize(total) }),
-    ),
-    bar,
-    legend,
-  );
+  return wrap;
 }
 
 /** 二進位單位（與 docker CLI 一致的 1024 進位），保留一位小數。 */

@@ -269,8 +269,6 @@ main.with-panel > .panel { flex: 0 0 40%; }
 .list:has(> .engine-down) { display: flex; justify-content: center; align-items: flex-start; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; flex: 0 1 auto; min-width: 0; }
 .toolbar:empty { display: none; }
-.disk-slot:empty { display: none; }
-.disk-slot { flex: none; }
 .toolbar .count { font-size: 13px; color: var(--muted); }
 .list {
   overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
@@ -564,23 +562,13 @@ a.button-link:hover { background: var(--hover); border-color: var(--border-stron
 .mono { font-family: var(--mono); font-size: 12.5px; }
 td.strong { font-weight: 600; }
 td.num { font-variant-numeric: tabular-nums; }
-.toolbar > .disk-card { flex: 1 1 100%; }
 
 /* 卡片型列表（機器、設定）：不套白底大卡，由內部卡片自己畫 */
 .list.cards { background: transparent; border: none; box-shadow: none; border-radius: 0; }
 
-/* ---- 磁碟用量 stat card -------------------------------------------------------- */
-.disk-card {
-  display: flex; flex-direction: column; gap: 10px; padding: 14px 18px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
-}
-.disk-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; }
-.disk-head strong { font-size: 14px; font-weight: 600; }
-.disk-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: var(--track); }
+/* ---- 磁碟用量鈕（頁標題旁）-------------------------------------------------------- */
+.disk-bar { display: flex; gap: 2px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--track); }
 .disk-seg { min-width: 3px; }
-.disk-legend { display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 13px; }
-.disk-key { display: inline-flex; align-items: center; gap: 8px; }
-.disk-key strong { font-variant-numeric: tabular-nums; font-weight: 600; }
 .disk-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .group-size { font-size: 12px; font-variant-numeric: tabular-nums; }
 /* 每項佔用：前 5 大各一色（依類別槽固定順序），其餘併為「其他」 */
@@ -590,7 +578,34 @@ td.num { font-variant-numeric: tabular-nums; }
 .disk-seg.s4, .disk-swatch.s4 { background: var(--series-4); }
 .disk-seg.s5, .disk-swatch.s5 { background: var(--series-5); }
 .disk-seg.other, .disk-swatch.other { background: var(--border-strong); }
-.disk-key .disk-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-slot { display: inline-flex; align-self: center; }
+.usage-slot:empty { display: none; }
+.usage-wrap { position: relative; display: inline-flex; }
+button.usage-btn { min-height: 28px; height: 28px; padding: 0 8px; gap: 8px; font-size: 12px; border-color: var(--border-strong); }
+button.usage-btn .disk-bar { width: 120px; }
+button.usage-btn strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+button.usage-btn .ico { width: 12px; height: 12px; color: var(--muted); }
+button.usage-btn[aria-expanded="true"] .ico { transform: rotate(180deg); }
+.usage-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: max-content; min-width: 280px; max-width: min(440px, calc(100vw - 48px)); box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; font-size: 13px; white-space: normal;
+  background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-lg);
+}
+.usage-pop-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.usage-pop-head strong { font-weight: 600; }
+.usage-list { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; column-gap: 8px; row-gap: 6px; align-items: center; }
+.usage-part { display: contents; }
+.usage-part strong { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.usage-part .muted { text-align: right; min-width: 32px; font-variant-numeric: tabular-nums; }
+.usage-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 窄視窗：用量鈕與搜尋縮短，標題列維持一列（換行會把高度加回來） */
+@media (max-width: 1100px) {
+  button.usage-btn .disk-bar { width: 56px; }
+  .tf.search { width: 220px; }
+}
+@media (max-width: 860px) {
+  button.usage-btn .disk-bar { display: none; }
+}
 
 /* ---- 機器卡片 -------------------------------------------------------------- */
 .machine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-content: start; }
