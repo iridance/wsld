@@ -350,7 +350,8 @@ test("Machines: Add machine disables Cancel while installing", async ({ page }) 
 
   const done = dlg.getByTestId("add-machine-install").click();
   await expect(dlg.getByTestId("add-machine-cancel")).toBeDisabled();
-  await expect(dlg.getByTestId("add-machine-install")).toBeDisabled();
+  // 安裝無法中止：開始後安裝按鈕直接隱藏
+  await expect(dlg.getByTestId("add-machine-install")).toBeHidden();
   await expect(dlg.getByTestId("add-machine-select")).toBeDisabled();
   release();
   await done;
@@ -358,6 +359,8 @@ test("Machines: Add machine disables Cancel while installing", async ({ page }) 
 });
 
 test("Machines: Add machine shows download progress while installing", async ({ page }) => {
+  // 約等於 1000×640 WebView 視窗扣掉標題列後的可視區
+  await page.setViewportSize({ width: 1000, height: 600 });
   await go(page, "machines");
   await expect(page.getByTestId("btn-add-machine")).toContainText(/Add machine|新增機器/);
   await page.getByTestId("btn-add-machine").click();
@@ -393,6 +396,11 @@ test("Machines: Add machine shows download progress while installing", async ({ 
   await expect(detail).toContainText("90.0 MB / 180.0 MB");
   await expect(detail).toContainText("240.0 KB/s");
   await expect(detail).toContainText("1:15");
+  // 進度區塊出現時對話框不應出現捲軸：按鈕列與密碼提示讓出高度，取消改為右上角圖示
+  await expect(dlg.getByTestId("add-machine-install")).toBeHidden();
+  await expect(dlg.getByTestId("add-machine-password-hint")).toBeHidden();
+  await expect(dlg.getByTestId("add-machine-cancel")).toBeDisabled();
+  expect(await dlg.evaluate((d) => d.scrollHeight <= d.clientHeight)).toBe(true);
 
   // 總大小未知：不定進度，仍顯示已下載量
   snap = { ...snap, total: 0 };

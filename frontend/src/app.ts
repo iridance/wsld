@@ -2089,7 +2089,10 @@ export class App {
     const err = el("div", { class: "field-error", "data-testid": "add-machine-error", hidden: "" });
     const progress = installProgressBlock();
     const install = btn({ class: "primary", type: "submit", "data-testid": "add-machine-install" }, "plus", t("gui.machines.install"));
-    const cancel = btn({ type: "button", "data-testid": "add-machine-cancel" }, "close", t("gui.cancel"));
+    // 取消放在標題列右上角；安裝開始後按鈕列整列隱藏（安裝無法中止），把高度讓給進度區塊
+    const cancel = iconBtn({ type: "button", "data-testid": "add-machine-cancel" }, "close", t("gui.cancel"));
+    const hint = el("div", { class: "field-hint", "data-testid": "add-machine-password-hint", text: t("gui.machines.password_hint") });
+    const actions = el("div", { class: "row" }, install);
     // 與後端 wsl.ValidLinuxUsername／ValidLinuxPassword 一致
     const userOk = () => /^[a-z_][a-z0-9_-]{0,31}$/.test(user.value.trim()) && user.value.trim() !== "root";
     const pwProblem = (): string => {
@@ -2139,10 +2142,10 @@ export class App {
         textField(pw2),
         pwErr,
       ),
-      el("div", { class: "field-hint", "data-testid": "add-machine-password-hint", text: t("gui.machines.password_hint") }),
+      hint,
       progress,
       err,
-      el("div", { class: "row" }, cancel, install),
+      actions,
     );
     form.noValidate = true;
     form.onsubmit = async (ev) => {
@@ -2156,7 +2159,8 @@ export class App {
       cancel.disabled = true;
       sel.setDisabled(true);
       for (const f of fields) f.disabled = true;
-      install.querySelector(".label")!.textContent = t("gui.machines.installing");
+      hint.hidden = true;
+      actions.hidden = true;
       err.hidden = true;
       this.st.busy.add("install");
       this.renderViewBody();
@@ -2197,12 +2201,13 @@ export class App {
         cancel.disabled = false;
         sel.setDisabled(false);
         for (const f of fields) f.disabled = false;
-        install.querySelector(".label")!.textContent = t("gui.machines.install");
+        hint.hidden = false;
+        actions.hidden = false;
         syncInstallEnabled();
         this.renderViewBody();
       }
     };
-    d.append(el("h2", { text: t("gui.machines.add") }), form);
+    d.append(el("div", { class: "dialog-head" }, el("h2", { text: t("gui.machines.add") }), cancel), form);
     return d;
   }
 

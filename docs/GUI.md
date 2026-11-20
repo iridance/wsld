@@ -128,7 +128,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.15.0 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.15.1 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -181,7 +181,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 - Theme：Light／Dark／System（`data-theme`／`prefers-color-scheme`）。
 - Images 的「使用中」欄依 Docker `/images/json` 的 `Containers`；舊版 daemon 可能回 -1，顯示為「–」。
 - Machines「新增機器」執行 `wsl --install --no-launch`，並依對話框的 Linux 帳號／密碼建立使用者（密碼經 stdin 交給 `chpasswd`，不保存；留空則不設密碼）、設為 `/etc/wsl.conf` 的預設使用者。安裝完直接「設為主要」納管，同一流程 init + start。「啟動引擎」／「設為主要」失敗原因留在 banner 直到引擎就緒。
-- 安裝中對話框輪詢 `GET /api/machines/install/progress`：觀察 `%TEMP%\<distribution>.wsl` 大小，總量取自官方 `DistributionInfo.json`＋HEAD；查不到總量時改為不定進度＋經過時間。同時只允許一個安裝（第二個回 409）。
+- 安裝中對話框輪詢 `GET /api/machines/install/progress`：觀察 `%TEMP%\<distribution>.wsl` 大小，總量取自官方 `DistributionInfo.json`＋HEAD；查不到總量時改為不定進度＋經過時間。同時只允許一個安裝（第二個回 409）。對話框的取消是標題列右上角的 ✕（安裝中停用）；按下安裝後隱藏安裝鈕與密碼提示，把高度讓給進度區塊，1000×640 視窗內不出現捲軸；失敗時兩者恢復可重試。
 - Networks：列表＋個別 Remove（內建 disabled）＋清除未使用；使用中回 409。
 - npiperelay／自動更新／arm64／**首次 Setup 一鍵**：Roadmap Extra（不綁 0.5）。
 
