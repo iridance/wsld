@@ -721,3 +721,28 @@ func TestOpenLocalOnlyPublishedPorts(t *testing.T) {
 		t.Fatalf("rejected ports must not open: %v", e.window)
 	}
 }
+
+func TestAutoStartBringsUpReadyActive(t *testing.T) {
+	e := newEnv(t, "")
+	e.engine.SetDown(true)
+	if err := e.s.AutoStart(); err != nil {
+		t.Fatal(err)
+	}
+	if e.life.Starts() != 1 {
+		t.Fatalf("auto start should start engine once, starts=%d", e.life.Starts())
+	}
+}
+
+func TestAutoStartSkipsUninitializedActive(t *testing.T) {
+	e := newEnv(t, "")
+	c := config.Default() // 沒有 active machine：全新安裝不自動初始化
+	if err := config.Save(e.cfgP, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.AutoStart(); err != nil {
+		t.Fatal(err)
+	}
+	if e.life.Starts() != 0 {
+		t.Fatalf("auto start must not start an uninitialized machine, starts=%d", e.life.Starts())
+	}
+}

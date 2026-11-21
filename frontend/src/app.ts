@@ -87,6 +87,10 @@ interface State {
   /** 通知不自動消失（長時間作業的結果，使用者可能已切走）；需按 ✕ 關閉 */
   noticeSticky?: boolean;
   starting: boolean;
+  /** 已完成首次載入的頁面；未載入前顯示對齊資料版面的 loading 佔位，載入後才切成實際內容／空狀態 */
+  loaded: Set<View>;
+  /** 後端自行帶起引擎（程式啟動自動連線）中：畫面同樣顯示 Starting… */
+  autoStarting?: boolean;
   /** 正在切換的 target distro 名稱；有值時 header 顯示 Loading／Switching */
   switching?: string;
   paused: boolean;
@@ -393,6 +397,7 @@ export class App {
       volumes: [],
       networks: [],
       starting: false,
+      loaded: new Set<View>(),
       paused: false,
       refreshCount: 0,
       pending: {},
@@ -466,6 +471,14 @@ export class App {
       if (signal.aborted || gen !== this.refreshGen) return;
       this.st.status = status;
       if (status.ready) this.st.bringUpError = undefined;
+      if (status.starting && !this.st.starting) {
+        this.st.starting = this.st.autoStarting = true;
+        this.renderHeader();
+      } else if (!status.starting && this.st.autoStarting) {
+        this.st.starting = this.st.autoStarting = false;
+        this.st.meta = await api.meta();
+        if (signal.aborted || gen !== this.refreshGen) return;
+      }
       if (this.st.view === "machines" || this.st.view === "settings" || this.st.view === "kubernetes") {
         // WSL 清單／設定／k3s 不依賴 Docker 引擎
         if (this.st.view === "machines") this.st.machines = await api.machines(signal);
@@ -492,6 +505,7 @@ export class App {
       if (this.st.status) this.st.status = { ...this.st.status, ready: false, APIReachable: false };
     }
     if (signal.aborted || gen !== this.refreshGen) return;
+    this.st.loaded.add(this.st.view);
     this.st.refreshCount++;
     this.renderAll(true);
   }
@@ -557,6 +571,7 @@ export class App {
       this.st.meta = await api.meta();
       setMessages(this.st.meta.messages);
       await this.loadView();
+      this.st.loaded.add(this.st.view);
     } catch (e) {
       this.st.lastError = this.st.bringUpError = e instanceof ApiError ? e.message : String(e);
     } finally {
@@ -965,6 +980,46 @@ export class App {
       seg.append(b);
     }
     return seg;
+  }
+
+  // ---- Loading 佔位（首次載入前，版面對齊實際資料）------------------------------
+
+  /** 表格 loading 佔位：同樣的欄寬與表頭，列內放灰色條；末欄（動作）留白。 */
+  private skeletonTable(view: View, cols: Col[], rows = 5): HTMLElement {
+    const { table, tbody } = this.table(view, cols);
+    const widths = [62, 78, 48, 70, 56];
+    for (let i = 0; i < rows; i++) {
+      const tr = el("tr", { "data-testid": "skeleton-row" });
+      cols.forEach((c, j) => {
+        tr.append(el("td", {}, c.key === "actions" ? "" : el("span", { class: "skel", style: `width:${widths[(i + j) % widths.length]}%` })));
+      });
+      tbody.append(tr);
+    }
+    table.setAttribute("aria-busy", "true");
+    table.dataset.testid = "skeleton";
+    return table;
+  }
+
+  /** Machines loading 佔位：與 machine-card 同格線的卡片。 */
+  private skeletonCards(n: number): HTMLElement {
+    const grid = el("div", { class: "machine-grid", "data-testid": "skeleton", "aria-busy": "true" });
+    for (let i = 0; i < n; i++) {
+      grid.append(
+        el("div", { class: "machine-card" },
+          el("div", { class: "machine-head" }, el("span", { class: "skel skel-icon" }), el("div", { class: "skel-stack" }, el("span", { class: "skel", style: "width:55%" }), el("span", { class: "skel", style: "width:35%" }))),
+          el("span", { class: "skel", style: "width:80%" }),
+          el("span", { class: "skel", style: "width:65%" }),
+        ),
+      );
+    }
+    return grid;
+  }
+
+  /** Kubernetes 叢集資訊卡 loading 佔位。 */
+  private skeletonK8sCard(): HTMLElement {
+    const grid = el("dl", { class: "k8s-fields" });
+    for (let i = 0; i < 4; i++) grid.append(el("div", { class: "k8s-f" }, el("span", { class: "skel", style: "width:50px" }), el("span", { class: "skel", style: "width:120px" })));
+    return el("section", { class: "k8s-card", "data-testid": "skeleton", "aria-busy": "true" }, el("div", { class: "k8s-head" }, el("span", { class: "skel", style: "width:90px" })), grid);
   }
 
   /** 引擎未就緒時取代空列表：說明＋啟動引擎＋由 status 推得的檢查清單。 */
@@ -1390,6 +1445,10 @@ export class App {
     if (!list) return;
     this.syncFilterButtons();
     this.renderDiskSlot(this.containerUsageParts());
+    if (!this.st.loaded.has("containers")) {
+      list.replaceChildren(this.skeletonTable("containers", COLS));
+      return;
+    }
     if (this.st.containers.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty")));
       return;
@@ -1787,6 +1846,10 @@ export class App {
     // 磁碟用量在標題列下方獨佔一列
     this.renderDiskSlot(ready ? this.st.images.map((im) => ({ key: im.Id, label: imageName(im) === "<none>" ? shortID(im.Id) : imageName(im), size: im.Size })) : []);
 
+    if (!this.st.loaded.has("images")) {
+      list.replaceChildren(this.skeletonTable("images", IMAGE_COLS));
+      return;
+    }
     if (!ready || this.st.images.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty.images")));
       return;
@@ -1848,6 +1911,10 @@ export class App {
     const vd = this.st.disk?.volumes;
     this.renderDiskSlot(ready && vd ? this.st.volumes.map((v) => ({ key: v.Name, label: v.Name, size: vd[v.Name]?.size ?? 0 })) : []);
 
+    if (!this.st.loaded.has("volumes")) {
+      list.replaceChildren(this.skeletonTable("volumes", VOLUME_COLS));
+      return;
+    }
     if (!ready || this.st.volumes.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty.volumes")));
       return;
@@ -1899,6 +1966,10 @@ export class App {
       });
     bar.replaceChildren(el("span", { class: "spacer" }), prune);
 
+    if (!this.st.loaded.has("networks")) {
+      list.replaceChildren(this.skeletonTable("networks", NETWORK_COLS));
+      return;
+    }
     if (!ready || this.st.networks.length === 0) {
       list.replaceChildren(this.emptyState(t("gui.empty.networks")));
       return;
@@ -1946,11 +2017,15 @@ export class App {
     bar.replaceChildren(el("span", { class: "spacer" }), add);
     this.renderDiskSlot((m?.available ? m.machines : []).map((d) => ({ key: d.name, label: d.name, size: d.disk_bytes ?? 0 })));
 
-    if (m && !m.available) {
+    if (!m) {
+      list.replaceChildren(this.skeletonCards(3));
+      return;
+    }
+    if (!m.available) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.machines.unavailable") }));
       return;
     }
-    if (!m || m.machines.length === 0) {
+    if (m.machines.length === 0) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.machines") }));
       return;
     }
@@ -2890,9 +2965,9 @@ export class App {
     bar.replaceChildren(el("span", { class: "spacer" }), kube, reset, toggle);
 
     if (!k) {
-      top.replaceChildren();
-      list.style.display = "";
-      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.loading") }));
+      top.replaceChildren(this.skeletonK8sCard());
+      list.style.display = "none";
+      list.replaceChildren();
       this.renderK8sSide();
       return;
     }

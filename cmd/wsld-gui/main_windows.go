@@ -148,6 +148,12 @@ func main() {
 	lanCtx, stopLAN := context.WithCancel(context.Background())
 	defer stopLAN()
 	go srv.RunLAN(lanCtx, 3*time.Second)
+	// 啟動即自動連線：帶起 active machine 的 docker 與（設定為 k8s 的）k3s，等同按 Start engine
+	go func() {
+		if err := srv.AutoStart(); err != nil {
+			log.Printf("auto start: %v", err)
+		}
+	}()
 	app.srv, app.base, app.token, app.engine = srv, base, srv.Token, engine
 
 	configJS := fmt.Sprintf(`window.__WSLD__={base:%q,token:%q};`, base, srv.Token)

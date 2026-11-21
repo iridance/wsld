@@ -861,3 +861,10 @@ button.arch-node:hover:not(:disabled) { border-color: var(--accent); }
 .ns-chip { font-size: 12px; padding: 4px 10px; border-radius: 8px; background: var(--hover); }
 .k8s-ns-hint { display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 14px 16px; border: 1px dashed var(--border, currentColor); border-radius: 12px; color: var(--muted); font-size: 13px; }
 .k8s-ns-hint strong { color: inherit; font-weight: 600; font-size: 14px; }
+
+/* Loading 佔位：灰色條帶微光，版面與實際資料對齊 */
+.skel { display: block; height: 12px; border-radius: 6px; background: var(--hover); animation: pulse 1.2s ease-in-out infinite; }
+.skel-icon { width: 44px; height: 44px; flex: none; border-radius: 8px; }
+.skel-stack { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; padding-top: 6px; }
+.machine-card > .skel { margin-top: 2px; }
+table[data-testid="skeleton"] tbody td { height: 44px; }

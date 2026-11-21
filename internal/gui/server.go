@@ -428,11 +428,24 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
+	st, err, busy := s.engineStart()
+	if busy {
+		writeJSON(w, http.StatusAccepted, map[string]any{"starting": true})
+		return
+	}
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready()})
+}
+
+// engineStart：啟動 active machine 的引擎，成功後背景恢復 k3s。已有啟動進行中回 busy。
+func (s *Server) engineStart() (st lifecycle.Status, err error, busy bool) {
 	s.startMu.Lock()
 	if s.starting {
 		s.startMu.Unlock()
-		writeJSON(w, http.StatusAccepted, map[string]any{"starting": true})
-		return
+		return st, nil, true
 	}
 	s.starting = true
 	s.startMu.Unlock()
@@ -443,13 +456,25 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	st, err := s.bringUpActive(ctx)
+	st, err = s.bringUpActive(ctx)
 	if err != nil {
-		writeEngineErr(w, err)
-		return
+		return st, err, false
 	}
 	s.resumeK8s()
-	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready()})
+	return st, nil, false
+}
+
+// AutoStart：程式啟動（開機自啟 --tray 或手動開啟）時自動帶起 active machine，
+// 等同使用者按 Start engine（含恢復設定為 k8s 的 k3s）。
+// 只在 active machine 已初始化過（有 user／endpoint）時執行：全新安裝不替使用者擅自初始化。
+// 同步執行直到完成；失敗只記錄，畫面上使用者仍可手動按 Start engine 看到錯誤。
+func (s *Server) AutoStart() error {
+	am, ok := s.cfg().ActiveMachine()
+	if !ok || !am.Ready() {
+		return nil
+	}
+	_, err, _ := s.engineStart()
+	return err
 }
 
 // bringUpActive：必要時 Init／補齊 profile，再 Start 引擎並寫回設定。

@@ -342,3 +342,20 @@ test("container panel has Logs / Terminal tabs for the same container", async ({
   await page.getByTestId("btn-logs-db").click();
   await expect(page.getByTestId("panel-tab-term")).toBeDisabled();
 });
+
+test("first load shows aligned loading placeholders, then switches to real rows", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  await page.route("**/api/containers**", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await open(page);
+  await expect(page.getByTestId("skeleton")).toBeVisible();
+  await expect(page.getByTestId("skeleton-row").first()).toBeVisible();
+  await expect(page.getByTestId("empty")).toHaveCount(0);
+  await expect(page.getByTestId("engine-down")).toHaveCount(0);
+  release();
+  await expect(page.getByTestId("skeleton")).toHaveCount(0);
+  await expect(page.getByTestId("container-row").first()).toBeVisible();
+});
