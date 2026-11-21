@@ -65,11 +65,12 @@ export function row(page: Page, name: string) {
 }
 
 /** k8s 假叢集：delay＝每個動作延遲 ms、fail＝啟動失敗、installed＝預先標記該 distro 已安裝 k3s。 */
-export async function k8sScenario(request: APIRequestContext, opts: { delay?: number; fail?: boolean; installed?: string } = {}): Promise<void> {
+export async function k8sScenario(request: APIRequestContext, opts: { delay?: number; fail?: boolean; installed?: string; shop?: boolean } = {}): Promise<void> {
   const q = new URLSearchParams();
   if (opts.delay) q.set("delay", String(opts.delay));
   if (opts.fail) q.set("fail", "1");
   if (opts.installed) q.set("installed", opts.installed);
+  if (opts.shop) q.set("shop", "1");
   expect((await request.post(`/__test/k8s?${q.toString()}`)).ok()).toBeTruthy();
 }
 

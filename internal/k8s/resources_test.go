@@ -215,3 +215,114 @@ func TestLogsAndExecCommands(t *testing.T) {
 		t.Fatal("invalid names must yield nil")
 	}
 }
+
+func TestParseCarriesLabelsAndSelectorsForTheArchitectureView(t *testing.T) {
+	ps, err := ParsePods(`{"items":[{"metadata":{"name":"web-1","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z","labels":{"app":"web","tier":"fe"}},"spec":{},"status":{"phase":"Running"}}]}`)
+	if err != nil || len(ps) != 1 || ps[0].Labels["app"] != "web" || ps[0].Labels["tier"] != "fe" {
+		t.Fatalf("pod labels = %+v err=%v", ps, err)
+	}
+	ds, err := ParseDeployments(`{"items":[{"metadata":{"name":"web","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},
+	 "spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[{"image":"shop/web:1.8.2"},{"image":"sidecar:1"}]}}},"status":{}}]}`)
+	if err != nil || len(ds) != 1 || ds[0].Selector["app"] != "web" || ds[0].Image != "shop/web:1.8.2" {
+		t.Fatalf("deployment = %+v err=%v", ds, err)
+	}
+	ss, err := ParseServices(`{"items":[{"metadata":{"name":"web-svc","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},"spec":{"type":"ClusterIP","clusterIP":"10.43.0.2","selector":{"app":"web"},"ports":[]}}]}`)
+	if err != nil || len(ss) != 1 || ss[0].Selector["app"] != "web" {
+		t.Fatalf("service selector = %+v err=%v", ss, err)
+	}
+}
+
+func TestParsePodsCollectsConfigMapAndPVCReferences(t *testing.T) {
+	ps, err := ParsePods(`{"items":[{"metadata":{"name":"api-1","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},
+	 "spec":{"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"data"}},{"name":"c","configMap":{"name":"api-env"}},{"name":"x","emptyDir":{}}],
+	  "containers":[{"envFrom":[{"configMapRef":{"name":"api-env"}},{"secretRef":{"name":"s"}}],"env":[{"name":"A","valueFrom":{"configMapKeyRef":{"name":"other","key":"k"}}}]}]},
+	 "status":{"phase":"Running"}}]}`)
+	if err != nil || len(ps) != 1 {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ps[0].ConfigMaps, ","); got != "api-env,other" {
+		t.Fatalf("configmaps = %q", got)
+	}
+	if got := strings.Join(ps[0].PVCs, ","); got != "data" {
+		t.Fatalf("pvcs = %q", got)
+	}
+}
+
+func TestParseDeploymentStrategy(t *testing.T) {
+	ds, err := ParseDeployments(`{"items":[{"metadata":{"name":"w","namespace":"n","creationTimestamp":"2026-11-21T06:00:00Z"},
+	 "spec":{"replicas":1,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":"25%","maxUnavailable":1}}},"status":{}}]}`)
+	if err != nil || ds[0].Strategy != "RollingUpdate" || ds[0].MaxSurge != "25%" || ds[0].MaxUnavailable != "1" {
+		t.Fatalf("%+v %v", ds, err)
+	}
+}
+
+const extrasJSON = `{"items":[
+ {"kind":"StatefulSet","metadata":{"name":"pg","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},
+  "spec":{"replicas":2,"selector":{"matchLabels":{"app":"pg"}},"template":{"spec":{"containers":[{"image":"postgres:16"}]}}},"status":{"readyReplicas":1}},
+ {"kind":"Ingress","metadata":{"name":"shop","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},
+  "spec":{"rules":[{"host":"shop.local","http":{"paths":[{"path":"/","backend":{"service":{"name":"web-svc","port":{"number":80}}}},{"path":"/api","backend":{"service":{"name":"api-svc","port":{"name":"http"}}}}]}}]}},
+ {"kind":"ConfigMap","metadata":{"name":"api-env","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},"data":{"A":"1","B":"2"},"binaryData":{"C":"x"}},
+ {"kind":"ConfigMap","metadata":{"name":"kube-root-ca.crt","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},"data":{"ca.crt":"x"}},
+ {"kind":"PersistentVolumeClaim","metadata":{"name":"data","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},
+  "spec":{"storageClassName":"local-path"},"status":{"phase":"Bound","capacity":{"storage":"20Gi"}}}
+]}`
+
+func TestParseExtras(t *testing.T) {
+	x, err := ParseExtras(extrasJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(x.StatefulSets) != 1 || x.StatefulSets[0].Ready != "1/2" || x.StatefulSets[0].Image != "postgres:16" || x.StatefulSets[0].Selector["app"] != "pg" {
+		t.Fatalf("sts = %+v", x.StatefulSets)
+	}
+	if len(x.Ingresses) != 1 || len(x.Ingresses[0].Rules) != 2 {
+		t.Fatalf("ingress = %+v", x.Ingresses)
+	}
+	if r := x.Ingresses[0].Rules[1]; r.Host != "shop.local" || r.Path != "/api" || r.Service != "api-svc" || r.Port != "http" {
+		t.Fatalf("rule = %+v", r)
+	}
+	if r := x.Ingresses[0].Rules[0]; r.Port != "80" {
+		t.Fatalf("rule0 = %+v", r)
+	}
+	if len(x.ConfigMaps) != 1 || x.ConfigMaps[0].Name != "api-env" || x.ConfigMaps[0].Keys != 3 {
+		t.Fatalf("configmaps (kube-root-ca.crt is hidden) = %+v", x.ConfigMaps)
+	}
+	if len(x.PVCs) != 1 || x.PVCs[0].Status != "Bound" || x.PVCs[0].Size != "20Gi" || x.PVCs[0].StorageClass != "local-path" {
+		t.Fatalf("pvcs = %+v", x.PVCs)
+	}
+}
+
+func TestListExtrasAndDeploymentDetail(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get statefulsets,ingresses,configmaps,persistentvolumeclaims -n shop -o json", resp{out: extrasJSON})
+	x, err := newMgr(f).ListExtras(context.Background(), "shop")
+	if err != nil || len(x.PVCs) != 1 {
+		t.Fatalf("%+v %v", x, err)
+	}
+	if _, err := newMgr(f).ListExtras(context.Background(), "-A"); err == nil {
+		t.Fatal("invalid namespace must be rejected")
+	}
+
+	rs := `{"items":[
+	 {"metadata":{"name":"api-1","namespace":"shop","creationTimestamp":"2026-11-10T06:00:00Z","annotations":{"deployment.kubernetes.io/revision":"1"},"ownerReferences":[{"kind":"Deployment","name":"api"}]},"spec":{"replicas":0,"template":{"spec":{"containers":[{"image":"shop/api:2.3"}]}}}},
+	 {"metadata":{"name":"api-2","namespace":"shop","creationTimestamp":"2026-11-20T06:00:00Z","annotations":{"deployment.kubernetes.io/revision":"2"},"ownerReferences":[{"kind":"Deployment","name":"api"}]},"spec":{"replicas":3,"template":{"spec":{"containers":[{"image":"shop/api:2.4"}]}}}},
+	 {"metadata":{"name":"web-1","namespace":"shop","creationTimestamp":"2026-11-20T06:00:00Z","annotations":{"deployment.kubernetes.io/revision":"9"},"ownerReferences":[{"kind":"Deployment","name":"web"}]},"spec":{"replicas":1,"template":{"spec":{"containers":[{"image":"w"}]}}}}]}`
+	ev := `{"items":[
+	 {"type":"Normal","reason":"Old","message":"old","count":1,"lastTimestamp":"2026-11-20T06:00:00Z","metadata":{}},
+	 {"type":"Normal","reason":"ScalingReplicaSet","message":"Scaled up replica set api-2 to 3","count":2,"lastTimestamp":"2026-11-21T06:00:00Z","metadata":{}}]}`
+	f.on(d+" k3s kubectl get replicasets -n shop -o json", resp{out: rs})
+	f.on(d+" k3s kubectl get events -n shop --field-selector involvedObject.kind=Deployment,involvedObject.name=api -o json", resp{out: ev})
+	det, err := newMgr(f).DeploymentDetail(context.Background(), "shop", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(det.Revisions) != 2 || det.Revisions[0].Revision != 2 || !det.Revisions[0].Current || det.Revisions[0].Image != "shop/api:2.4" || det.Revisions[1].Revision != 1 || det.Revisions[1].Current {
+		t.Fatalf("revisions (newest first, only this deployment) = %+v", det.Revisions)
+	}
+	if len(det.Events) != 2 || det.Events[0].Reason != "ScalingReplicaSet" || det.Events[0].Count != 2 {
+		t.Fatalf("events newest first = %+v", det.Events)
+	}
+	if _, err := newMgr(f).DeploymentDetail(context.Background(), "shop", "--x"); err == nil {
+		t.Fatal("invalid name must be rejected")
+	}
+}

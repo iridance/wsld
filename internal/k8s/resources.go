@@ -12,25 +12,37 @@ import (
 
 // Pod 是 GUI 列表用的精簡 Pod。
 type Pod struct {
-	Name      string    `json:"name"`
-	Namespace string    `json:"namespace"`
-	Status    string    `json:"status"`
-	Ready     string    `json:"ready"`
-	Restarts  int       `json:"restarts"`
-	Node      string    `json:"node,omitempty"`
-	IP        string    `json:"ip,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Status    string `json:"status"`
+	Ready     string `json:"ready"`
+	Restarts  int    `json:"restarts"`
+	Node      string `json:"node,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	// Labels 供架構圖以 selector 把 Pod 歸到 Service／Deployment。
+	Labels map[string]string `json:"labels,omitempty"`
+	// ConfigMaps／PVCs：此 Pod 掛載或引用的 ConfigMap、PersistentVolumeClaim 名稱（架構圖的掛載連線）。
+	ConfigMaps []string  `json:"config_maps,omitempty"`
+	PVCs       []string  `json:"pvcs,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Deployment 是 GUI 列表用的精簡 Deployment。
 type Deployment struct {
-	Name      string    `json:"name"`
-	Namespace string    `json:"namespace"`
-	Ready     string    `json:"ready"`
-	Replicas  int       `json:"replicas"`
-	UpToDate  int       `json:"up_to_date"`
-	Available int       `json:"available"`
-	CreatedAt time.Time `json:"created_at"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Ready     string `json:"ready"`
+	Replicas  int    `json:"replicas"`
+	UpToDate  int    `json:"up_to_date"`
+	Available int    `json:"available"`
+	// Selector 是 spec.selector.matchLabels；Image 是第一個容器的映像。
+	Selector map[string]string `json:"selector,omitempty"`
+	Image    string            `json:"image,omitempty"`
+	// Strategy／MaxSurge／MaxUnavailable：更新策略（RollingUpdate 才有後兩者）。
+	Strategy       string    `json:"strategy,omitempty"`
+	MaxSurge       string    `json:"max_surge,omitempty"`
+	MaxUnavailable string    `json:"max_unavailable,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // ServicePort 是 Service 的單一埠。
@@ -48,14 +60,83 @@ type Service struct {
 	Type      string        `json:"type"`
 	ClusterIP string        `json:"cluster_ip"`
 	Ports     []ServicePort `json:"ports"`
-	CreatedAt time.Time     `json:"created_at"`
+	// Selector 是 spec.selector（無 selector 的 Service 為空）。
+	Selector  map[string]string `json:"selector,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 type objMeta struct {
-	Name              string     `json:"name"`
-	Namespace         string     `json:"namespace"`
-	CreationTimestamp time.Time  `json:"creationTimestamp"`
-	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	CreationTimestamp time.Time         `json:"creationTimestamp"`
+	DeletionTimestamp *time.Time        `json:"deletionTimestamp"`
+	Labels            map[string]string `json:"labels"`
+}
+
+// intOrString 是 k8s 的 IntOrString（maxSurge 可為 1 或 "25%"）。
+type intOrString string
+
+func (v *intOrString) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	if s == "null" {
+		return nil
+	}
+	if len(s) > 1 && s[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return err
+		}
+		*v = intOrString(str)
+		return nil
+	}
+	*v = intOrString(s)
+	return nil
+}
+
+// podRefs 收集 Pod 引用的 ConfigMap 與 PVC 名稱（去重、保持出現順序）。
+func podRefs(volumes []struct {
+	ConfigMap *struct{ Name string } `json:"configMap"`
+	PVC       *struct {
+		ClaimName string `json:"claimName"`
+	} `json:"persistentVolumeClaim"`
+}, containers []struct {
+	EnvFrom []struct {
+		ConfigMapRef *struct{ Name string } `json:"configMapRef"`
+	} `json:"envFrom"`
+	Env []struct {
+		ValueFrom *struct {
+			ConfigMapKeyRef *struct{ Name string } `json:"configMapKeyRef"`
+		} `json:"valueFrom"`
+	} `json:"env"`
+}) (cms, pvcs []string) {
+	seen := map[string]bool{}
+	add := func(dst *[]string, kind, n string) {
+		if n != "" && !seen[kind+n] {
+			seen[kind+n] = true
+			*dst = append(*dst, n)
+		}
+	}
+	for _, v := range volumes {
+		if v.ConfigMap != nil {
+			add(&cms, "cm", v.ConfigMap.Name)
+		}
+		if v.PVC != nil {
+			add(&pvcs, "pvc", v.PVC.ClaimName)
+		}
+	}
+	for _, c := range containers {
+		for _, e := range c.EnvFrom {
+			if e.ConfigMapRef != nil {
+				add(&cms, "cm", e.ConfigMapRef.Name)
+			}
+		}
+		for _, e := range c.Env {
+			if e.ValueFrom != nil && e.ValueFrom.ConfigMapKeyRef != nil {
+				add(&cms, "cm", e.ValueFrom.ConfigMapKeyRef.Name)
+			}
+		}
+	}
+	return cms, pvcs
 }
 
 // ParsePods 解析 `kubectl get pods -o json`。
@@ -65,6 +146,22 @@ func ParsePods(js string) ([]Pod, error) {
 			Metadata objMeta `json:"metadata"`
 			Spec     struct {
 				NodeName string `json:"nodeName"`
+				Volumes  []struct {
+					ConfigMap *struct{ Name string } `json:"configMap"`
+					PVC       *struct {
+						ClaimName string `json:"claimName"`
+					} `json:"persistentVolumeClaim"`
+				} `json:"volumes"`
+				Containers []struct {
+					EnvFrom []struct {
+						ConfigMapRef *struct{ Name string } `json:"configMapRef"`
+					} `json:"envFrom"`
+					Env []struct {
+						ValueFrom *struct {
+							ConfigMapKeyRef *struct{ Name string } `json:"configMapKeyRef"`
+						} `json:"valueFrom"`
+					} `json:"env"`
+				} `json:"containers"`
 			} `json:"spec"`
 			Status struct {
 				Phase             string `json:"phase"`
@@ -105,15 +202,19 @@ func ParsePods(js string) ([]Pod, error) {
 		} else if status == "" && it.Status.Reason != "" {
 			status = it.Status.Reason
 		}
+		cms, pvcs := podRefs(it.Spec.Volumes, it.Spec.Containers)
 		out = append(out, Pod{
-			Name:      it.Metadata.Name,
-			Namespace: it.Metadata.Namespace,
-			Status:    status,
-			Ready:     fmt.Sprintf("%d/%d", ready, len(it.Status.ContainerStatuses)),
-			Restarts:  restarts,
-			Node:      it.Spec.NodeName,
-			IP:        it.Status.PodIP,
-			CreatedAt: it.Metadata.CreationTimestamp,
+			ConfigMaps: cms,
+			PVCs:       pvcs,
+			Name:       it.Metadata.Name,
+			Namespace:  it.Metadata.Namespace,
+			Status:     status,
+			Ready:      fmt.Sprintf("%d/%d", ready, len(it.Status.ContainerStatuses)),
+			Restarts:   restarts,
+			Node:       it.Spec.NodeName,
+			IP:         it.Status.PodIP,
+			Labels:     it.Metadata.Labels,
+			CreatedAt:  it.Metadata.CreationTimestamp,
 		})
 	}
 	return out, nil
@@ -126,6 +227,23 @@ func ParseDeployments(js string) ([]Deployment, error) {
 			Metadata objMeta `json:"metadata"`
 			Spec     struct {
 				Replicas int `json:"replicas"`
+				Selector struct {
+					MatchLabels map[string]string `json:"matchLabels"`
+				} `json:"selector"`
+				Strategy struct {
+					Type          string `json:"type"`
+					RollingUpdate struct {
+						MaxSurge       intOrString `json:"maxSurge"`
+						MaxUnavailable intOrString `json:"maxUnavailable"`
+					} `json:"rollingUpdate"`
+				} `json:"strategy"`
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Image string `json:"image"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
 			} `json:"spec"`
 			Status struct {
 				ReadyReplicas     int `json:"readyReplicas"`
@@ -139,14 +257,23 @@ func ParseDeployments(js string) ([]Deployment, error) {
 	}
 	out := make([]Deployment, 0, len(v.Items))
 	for _, it := range v.Items {
+		image := ""
+		if cs := it.Spec.Template.Spec.Containers; len(cs) > 0 {
+			image = cs[0].Image
+		}
 		out = append(out, Deployment{
-			Name:      it.Metadata.Name,
-			Namespace: it.Metadata.Namespace,
-			Ready:     fmt.Sprintf("%d/%d", it.Status.ReadyReplicas, it.Spec.Replicas),
-			Replicas:  it.Spec.Replicas,
-			UpToDate:  it.Status.UpdatedReplicas,
-			Available: it.Status.AvailableReplicas,
-			CreatedAt: it.Metadata.CreationTimestamp,
+			Name:           it.Metadata.Name,
+			Namespace:      it.Metadata.Namespace,
+			Ready:          fmt.Sprintf("%d/%d", it.Status.ReadyReplicas, it.Spec.Replicas),
+			Replicas:       it.Spec.Replicas,
+			UpToDate:       it.Status.UpdatedReplicas,
+			Available:      it.Status.AvailableReplicas,
+			Selector:       it.Spec.Selector.MatchLabels,
+			Image:          image,
+			Strategy:       it.Spec.Strategy.Type,
+			MaxSurge:       string(it.Spec.Strategy.RollingUpdate.MaxSurge),
+			MaxUnavailable: string(it.Spec.Strategy.RollingUpdate.MaxUnavailable),
+			CreatedAt:      it.Metadata.CreationTimestamp,
 		})
 	}
 	return out, nil
@@ -158,8 +285,9 @@ func ParseServices(js string) ([]Service, error) {
 		Items []struct {
 			Metadata objMeta `json:"metadata"`
 			Spec     struct {
-				Type      string `json:"type"`
-				ClusterIP string `json:"clusterIP"`
+				Type      string            `json:"type"`
+				ClusterIP string            `json:"clusterIP"`
+				Selector  map[string]string `json:"selector"`
 				Ports     []struct {
 					Name     string `json:"name"`
 					Port     int    `json:"port"`
@@ -179,6 +307,7 @@ func ParseServices(js string) ([]Service, error) {
 			Namespace: it.Metadata.Namespace,
 			Type:      it.Spec.Type,
 			ClusterIP: it.Spec.ClusterIP,
+			Selector:  it.Spec.Selector,
 			CreatedAt: it.Metadata.CreationTimestamp,
 			Ports:     []ServicePort{},
 		}

@@ -333,6 +333,9 @@ func main() {
 		q := r.URL.Query()
 		ms, _ := strconv.Atoi(q.Get("delay"))
 		k8sCluster.Configure(time.Duration(ms)*time.Millisecond, q.Get("fail") == "1")
+		if q.Get("shop") == "1" {
+			k8sCluster.SeedShop()
+		}
 		if d := q.Get("installed"); d != "" {
 			k8sCluster.SetInstalled(d)
 		}

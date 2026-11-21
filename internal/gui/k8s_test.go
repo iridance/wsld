@@ -313,7 +313,7 @@ func TestK8sKubeconfigEndpoint(t *testing.T) {
 
 func TestK8sResourceListsRequireEnabled(t *testing.T) {
 	k := newK8sEnv(t)
-	for _, p := range []string{"namespaces", "pods", "deployments", "services"} {
+	for _, p := range []string{"namespaces", "pods", "deployments", "services", "extras", "deployments/default/poc-web/detail"} {
 		if resp, _ := k.req(t, "GET", "/api/k8s/"+p, ""); resp.StatusCode != http.StatusConflict {
 			t.Errorf("%s when off = %d, want 409", p, resp.StatusCode)
 		}
@@ -562,5 +562,35 @@ func TestK8sUnknownStatusWithoutHistoryStaysUnknown(t *testing.T) {
 	k.s.K8sFor = func(string) K8s { return sc }
 	if got := k.get(t).Status.State; got != k8s.StateUnknown {
 		t.Fatalf("state = %q", got)
+	}
+}
+
+func TestK8sExtrasAndDeploymentDetail(t *testing.T) {
+	k := newK8sEnv(t)
+	k.enable(t)
+	k.cluster.SeedShop()
+	var x k8s.Extras
+	_, b := k.req(t, "GET", "/api/k8s/extras?ns=shop", "")
+	if err := json.Unmarshal(b, &x); err != nil || len(x.StatefulSets) != 1 || len(x.Ingresses) != 1 || len(x.Ingresses[0].Rules) != 2 || len(x.ConfigMaps) != 1 || len(x.PVCs) != 1 {
+		t.Fatalf("shop extras = %s (%v)", b, err)
+	}
+	_, b = k.req(t, "GET", "/api/k8s/extras", "")
+	_ = json.Unmarshal(b, &x)
+	if len(x.Ingresses) != 2 { // default 的 poc-web + shop
+		t.Fatalf("all-namespace extras = %s", b)
+	}
+	if resp, _ := k.req(t, "GET", "/api/k8s/extras?ns=--all-namespaces", ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad ns = %d", resp.StatusCode)
+	}
+	var d k8s.DeploymentDetail
+	_, b = k.req(t, "GET", "/api/k8s/deployments/shop/api/detail", "")
+	if err := json.Unmarshal(b, &d); err != nil || len(d.Revisions) != 2 || !d.Revisions[0].Current || len(d.Events) != 1 {
+		t.Fatalf("detail = %s (%v)", b, err)
+	}
+	if resp, _ := k.req(t, "GET", "/api/k8s/deployments/shop/--x/detail", ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad name = %d", resp.StatusCode)
+	}
+	if resp, _ := k.req(t, "GET", "/api/k8s/deployments/shop/nope/detail", ""); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("missing deployment = %d", resp.StatusCode)
 	}
 }

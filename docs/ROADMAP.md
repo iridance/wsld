@@ -228,11 +228,11 @@ Extra ≠ 0.5／v2.0 完成條件
 
 - **Bootstrap**：`scripts/03-k3s.sh install|uninstall`（內嵌為 `scripts.K3sBundle()`）；以 `--docker --disable traefik --write-kubeconfig-mode 644` 安裝，k3s.service 加 drop-in `After=docker.service`＋`Requires=docker.service`（PoC 發現），unit 預設 **disable**（不隨開機啟動）；`uninstall` 呼叫 `k3s-uninstall.sh`
 - **Config**：每 machine `k8s = true`（預設關）；**同一時間僅允許一台**（所有 WSL2 distro 共用網路命名空間：6443、flannel CIDR、kube-proxy 規則全 VM 共用）。`Config.SetK8s` 拒絕第二台並指出目前開啟者；`Validate` 擋下手改出兩台
-- **核心**：`internal/k8s`——安裝／啟動（先確認 dockerd）／停止（`k3s-killall.sh`，`--docker` 時 pod 容器不會隨 service 停）／重置（清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 後重啟）／狀態（`/readyz`、node、版本、記憶體、node IP 與 eth0 比對）／資源列表（pods／deployments／services／namespaces，`kubectl get -o json` 解析）／刪除／rollout restart／scale。使用者輸入進 kubectl 前一律 `ValidName`。**不引入 client-go**
+- **核心**：`internal/k8s`——安裝／啟動（先確認 dockerd）／停止（`k3s-killall.sh`，`--docker` 時 pod 容器不會隨 service 停）／重置（清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 後重啟）／狀態（`/readyz`、node、版本、記憶體、node IP 與 eth0 比對）／資源列表（pods／deployments／services／namespaces，另有 statefulsets／ingresses／configmaps／pvc 一次 `kubectl get` 取得，`-o json` 解析；Deployment 詳情取 ReplicaSet 歷史與事件）／刪除／rollout restart／scale。使用者輸入進 kubectl 前一律 `ValidName`。**不引入 client-go**
 - **Kubeconfig**：讀 `/etc/rancher/k3s/k3s.yaml`，以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；同名取代；server 固定 `127.0.0.1:6443`）；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔
 - **CLI**：`wsld k8s on|off|status|reset|kubeconfig|uninstall`（`--machine`、`--json`、`--yes`）；`wsld start` 在 active machine 為 k8s 時一併啟動 k3s
 - **doctor**：k3s 就緒／未就緒／失敗、node IP 漂移、記憶體、6443 被占用（k3s 未就緒時）、80／443 提示；皆只警告，不影響退出碼
-- **GUI**：新增頂部導覽 **Kubernetes** 頁：一鍵啟動／停止（背景作業＋輪詢）、重置（確認）、匯出 kubeconfig、叢集資訊卡（狀態徽章、版本、node、API、context、記憶體、kubeconfig 路徑）、另一台持有時的一鍵移動；namespace 下拉＋分頁 **Pods**（logs 串流、exec 終端、刪除）／**Deployments**（scale、rollout restart、刪除）／**Services**（NodePort 開瀏覽器、刪除）；Containers 頁把 `k8s_*` 容器摺成預設收合的「Kubernetes (k3s)」群組。引擎啟動時若 primary 為 k8s 也會背景啟動 k3s
+- **GUI**：新增頂部導覽 **Kubernetes** 頁：一鍵啟動／停止（背景作業＋輪詢）、重置（確認）、匯出 kubeconfig、叢集資訊卡（狀態徽章、版本、node、API、context、記憶體、kubeconfig 路徑）、另一台持有時的一鍵移動；namespace flow card（Ingress → Service → Workloads → Pods）＋右側 50% 側欄：**Architecture** 架構圖／**Pods**（logs 串流、exec 終端、刪除）／**Workloads**（Deployment scale、rollout restart、刪除）／**Services**（NodePort 開瀏覽器、Ingress routes、刪除）／**Config**／**Storage**，點 Deployment 進詳情（rollout 歷史、事件）；Containers 頁把 `k8s_*` 容器摺成預設收合的「Kubernetes (k3s)」群組。引擎啟動時若 primary 為 k8s 也會背景啟動 k3s
 - **文件**：SPEC §4.6／§5、OPERATIONS、GUI、README、TESTING
 - **實機發現（2026-11-21，拋棄式 distro、隔離 config 與 `%USERPROFILE%`）**——單元測試以 fake 看不到、已修並加回歸測試：
   - `curl … | sh - </dev/null`：`</dev/null` 蓋掉管線，sh 讀到空腳本、curl 以 23 結束（首次安裝失敗）→ 改為先下載再執行

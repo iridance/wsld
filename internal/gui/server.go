@@ -211,6 +211,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("GET /api/k8s/deployments", s.handleK8sDeployments)
 	mux.HandleFunc("GET /api/k8s/services", s.handleK8sServices)
+	mux.HandleFunc("GET /api/k8s/extras", s.handleK8sExtras)
+	mux.HandleFunc("GET /api/k8s/deployments/{ns}/{name}/detail", s.handleK8sDeploymentDetail)
 	mux.HandleFunc("GET /api/k8s/pods/{ns}/{name}/logs/stream", s.handleK8sLogsStream)
 	mux.HandleFunc("GET /api/k8s/pods/{ns}/{name}/exec", s.handleK8sExec)
 	mux.HandleFunc("POST /api/k8s/deployments/{ns}/{name}/restart", s.handleK8sRestart)

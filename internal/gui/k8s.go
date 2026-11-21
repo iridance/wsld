@@ -30,6 +30,8 @@ type K8s interface {
 	ListPods(ctx context.Context, ns string) ([]k8s.Pod, error)
 	ListDeployments(ctx context.Context, ns string) ([]k8s.Deployment, error)
 	ListServices(ctx context.Context, ns string) ([]k8s.Service, error)
+	ListExtras(ctx context.Context, ns string) (k8s.Extras, error)
+	DeploymentDetail(ctx context.Context, ns, name string) (k8s.DeploymentDetail, error)
 	Delete(ctx context.Context, kind, ns, name string) error
 	RestartDeployment(ctx context.Context, ns, name string) error
 	ScaleDeployment(ctx context.Context, ns, name string, replicas int) error
@@ -404,6 +406,41 @@ func (s *Server) handleK8sServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := mgr.ListServices(r.Context(), ns)
+	if err != nil {
+		k8sErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleK8sExtras(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	ns, ok := nsQuery(w, r)
+	if !ok {
+		return
+	}
+	v, err := mgr.ListExtras(r.Context(), ns)
+	if err != nil {
+		k8sErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleK8sDeploymentDetail(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	ns, name := r.PathValue("ns"), r.PathValue("name")
+	if !k8s.ValidName(ns) || !k8s.ValidName(name) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid namespace or name"))
+		return
+	}
+	v, err := mgr.DeploymentDetail(r.Context(), ns, name)
 	if err != nil {
 		k8sErr(w, err)
 		return

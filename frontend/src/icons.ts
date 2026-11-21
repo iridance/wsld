@@ -1,6 +1,6 @@
 /** 內嵌 SVG 圖示（16px、stroke 樣式），供按鈕前綴使用；純裝飾，aria-hidden。 */
 export type IconName =
-  | "power" | "refresh" | "settings" | "play" | "stop" | "logs" | "terminal" | "save" | "close" | "chevron-down" | "chevron-right"
+  | "power" | "refresh" | "settings" | "play" | "stop" | "logs" | "terminal" | "save" | "close" | "chevron-down" | "chevron-right" | "chevron-left"
   | "containers" | "images" | "volumes" | "networks" | "machines" | "trash" | "broom" | "plus" | "info" | "folder" | "github"
   | "search" | "minus" | "check" | "globe" | "shield" | "kubernetes" | "edit" | "shrink" | "download" | "reset";
 
@@ -16,6 +16,7 @@ const PATHS: Record<IconName, string> = {
   close: '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>',
   "chevron-down": '<path d="M6 9l6 6 6-6"/>',
   "chevron-right": '<path d="M9 6l6 6-6 6"/>',
+  "chevron-left": '<path d="M15 6l-6 6 6 6"/>',
   containers: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
   images: '<path d="M12 2l10 5-10 5L2 7z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/>',
   volumes: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',

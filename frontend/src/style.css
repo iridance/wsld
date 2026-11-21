@@ -715,3 +715,135 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 td.actions.scale { white-space: nowrap; }
 td.actions .tf.replicas { display: inline-flex; width: 84px; min-width: 0; margin-right: 4px; vertical-align: middle; }
 td.actions .tf.replicas input { width: 100%; text-align: right; }
+
+/* ---- Kubernetes：namespace flow card、右側面板、架構圖 ---- */
+.k8s-body { flex: 1 1 0; min-height: 0; display: flex; gap: 14px; }
+.k8s-body > .list { flex: 1 1 0; min-width: 0; }
+.k8s-side {
+  flex: 0 0 50%; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
+}
+.k8s-side[hidden] { display: none; }
+.k8s-body.with-side > .list { flex: 1 1 0; }
+.k8s-side-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px 8px 4px 16px; }
+.k8s-side-titles { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.k8s-side-titles strong { font-size: 16px; }
+.k8s-side-tabs { padding: 8px 16px; }
+.k8s-side-body { flex: 1 1 0; min-height: 0; overflow: auto; }
+.k8s-side-body .k8s-resources { overflow: auto; }
+.k8s-ns-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; padding: 14px; }
+.k8s-ns-card {
+  display: flex; flex-direction: column; align-items: stretch; gap: 14px; text-align: left; height: auto;
+  padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--fg);
+}
+.k8s-ns-card:hover:not(:disabled) { border-color: var(--accent); }
+.k8s-ns-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ns-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.ns-name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ns-health { flex: none; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--ok-soft); color: var(--ok); }
+.ns-health.warn { background: var(--warn-soft); color: var(--warn); }
+.ns-health.error { background: var(--bad-soft); color: var(--bad); }
+.ns-health.empty { background: var(--hover); color: var(--muted); }
+.ns-flow { display: flex; align-items: center; gap: 3px; }
+.ns-node { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 8px 6px; border-radius: 8px; background: var(--hover); }
+.ns-node[data-kind="services"] { background: var(--accent-soft); }
+.ns-node.zero { opacity: 0.55; }
+.ns-node-label { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ns-node-value { font-size: 17px; font-weight: 700; }
+.ns-arrow { color: var(--muted); flex: none; }
+.k8s-ns-card[data-health="error"] .ns-node[data-kind="pods"] { background: var(--bad-soft); }
+.k8s-ns-card[data-health="warn"] .ns-node[data-kind="pods"] { background: var(--warn-soft); }
+
+.arch { position: relative; display: flex; flex-direction: column; gap: 56px; padding: 20px 16px 24px; min-width: min-content; }
+.arch-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.arch-edge { stroke: var(--muted); stroke-width: 1.5; opacity: 0.7; }
+.arch-row { display: flex; flex-wrap: wrap; gap: 14px; }
+.arch-cols { display: flex; flex-wrap: wrap; gap: 32px 20px; align-items: flex-start; }
+.arch-col { display: flex; flex-direction: column; gap: 40px; min-width: 190px; }
+.arch-node {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border-strong, var(--border)); min-width: 160px; max-width: 280px; position: relative;
+}
+.arch-node strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch-node .muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch-kind { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }
+.arch-node.svc { background: var(--accent-soft); }
+.arch-node.dep { background: var(--ok-soft); }
+.arch-node.pods { gap: 6px; }
+.arch-pod {
+  display: flex; align-items: center; gap: 8px; height: auto; min-height: 28px; padding: 2px 6px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg); text-align: left; font-size: 12px;
+}
+.arch-pod:hover:not(:disabled) { background: var(--hover); }
+.arch-pod .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Deployments 分頁：每個 Deployment 一張卡片 */
+.deploy-cards { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 16px; }
+.deploy-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.deploy-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.deploy-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kind-chip { flex: none; padding: 1px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--ok-soft); color: var(--ok); }
+.deploy-image { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deploy-ready-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.deploy-ready { font-weight: 600; }
+.deploy-bar { display: inline-block; width: 96px; height: 6px; border-radius: 3px; background: var(--ok-soft); overflow: hidden; }
+.deploy-bar > span { display: block; height: 100%; background: var(--ok); }
+.deploy-bar.warn { background: var(--warn-soft); }
+.deploy-bar.warn > span { background: var(--warn); }
+.deploy-actions { flex: none; display: flex; align-items: center; gap: 4px; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong, var(--border)); border-radius: 8px; overflow: hidden; margin-right: 4px; }
+.stepper .tf.replicas { border: 0; margin: 0; width: 56px; }
+.stepper-btn { width: 34px; min-height: 34px; border: 0; border-radius: 0; background: transparent; font-size: 16px; padding: 0; }
+
+/* Pods／Services／Config／Storage 分頁與 Deployment 詳情 */
+.k8s-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 10px; }
+.k8s-search { flex: 1 1 160px; min-width: 0; height: 36px; padding: 0 12px; border: 1px solid var(--border-strong, var(--border)); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; }
+.k8s-table-host { overflow: auto; }
+td.name-cell.two-line { display: table-cell; }
+td.name-cell.two-line .ct-name, td.name-cell.two-line .sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.name-cell .sub { font-size: 12px; }
+.warn-text { color: var(--warn); }
+.kind-chip.svc { background: var(--accent-soft); color: var(--accent); }
+.kind-chip.ing { background: #efeafd; color: #3d2a8a; }
+.kind-chip.cm { background: var(--warn-soft); color: var(--warn); }
+.kind-chip.muted-chip { background: var(--hover); color: var(--muted); }
+button.ct-name.link { border: 0; background: transparent; padding: 0; min-height: 0; height: auto; font: inherit; font-weight: 600; color: var(--fg); cursor: pointer; text-align: left; }
+button.ct-name.link:hover:not(:disabled) { background: transparent; color: var(--accent); text-decoration: underline; }
+.k8s-section { margin: 16px 16px 8px; font-size: 14px; font-weight: 600; }
+.route-list { display: flex; flex-direction: column; margin: 0 16px 16px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.route { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; min-height: 44px; box-sizing: border-box; }
+.route + .route { border-top: 1px solid var(--border); }
+.route-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.route-target { color: var(--accent); font-weight: 600; }
+.ns-foot { font-size: 12px; }
+.k8s-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.k8s-detail { display: flex; flex-direction: column; gap: 14px; padding: 4px 16px 20px; }
+.detail-title { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.detail-name { font-size: 20px; }
+.detail-actions { flex-wrap: wrap; }
+.detail-cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.detail-card { flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
+.detail-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-big { font-size: 20px; }
+.detail-section .k8s-section { margin: 0 0 8px; }
+.detail-rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.detail-row { display: flex; align-items: center; gap: 12px; padding: 6px 14px; min-height: 44px; box-sizing: border-box; font-size: 13px; }
+.detail-row + .detail-row { border-top: 1px solid var(--border); }
+.detail-empty { padding: 12px 14px; }
+.rev-image, .event-msg { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-reason { flex: none; width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 架構圖：新增節點與掛載連線 */
+.arch-node.ing { background: #efeafd; }
+.arch-node.sts { background: var(--ok-soft); }
+.arch-node.cm { background: var(--warn-soft); }
+.arch-node.pvc { background: var(--hover); }
+button.arch-node { height: auto; text-align: left; align-items: flex-start; cursor: pointer; color: var(--fg); }
+button.arch-node:hover:not(:disabled) { border-color: var(--accent); }
+.arch-row { display: flex; flex-wrap: wrap; gap: 14px; }
+.arch-edge.mount { stroke-dasharray: 6 5; }
+
+/* 對外入口（NodePort） */
+.ns-exposed { align-self: flex-start; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+.arch-node.exposed { border-color: var(--accent); }
+.arch-exposed { align-self: flex-start; margin-top: 2px; padding: 1px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }

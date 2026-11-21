@@ -25,6 +25,10 @@ type FakeK8sCluster struct {
 	pods       []k8s.Pod
 	deploys    []k8s.Deployment
 	services   []k8s.Service
+	sts        []k8s.StatefulSet
+	ingresses  []k8s.Ingress
+	configmaps []k8s.ConfigMap
+	pvcs       []k8s.PVC
 	namespaces []string
 	Calls      []string // 動作紀錄：start:<d> stop:<d> reset:<d> delete:pod/ns/name …
 }
@@ -40,20 +44,53 @@ func (c *FakeK8sCluster) seed() {
 	t0 := time.Now().Add(-2 * time.Hour)
 	c.namespaces = []string{"default", "kube-system"}
 	c.pods = []k8s.Pod{
-		{Name: "coredns-577d995dff-74qgr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.10", CreatedAt: t0},
+		{Name: "coredns-577d995dff-74qgr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.10", Labels: map[string]string{"k8s-app": "kube-dns"}, CreatedAt: t0},
 		{Name: "local-path-provisioner-56c6584955-w6bbr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.11", CreatedAt: t0},
 		{Name: "metrics-server-778c4649b4-q6x2b", Namespace: "kube-system", Status: "Running", Ready: "1/1", Restarts: 1, Node: "framework", IP: "10.42.0.12", CreatedAt: t0},
-		{Name: "poc-web-56bcf8dcb9-dp6m9", Namespace: "default", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.13", CreatedAt: t0},
+		{Name: "poc-web-56bcf8dcb9-dp6m9", Namespace: "default", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.13", Labels: map[string]string{"app": "poc-web"}, ConfigMaps: []string{"poc-web-env"}, PVCs: []string{"poc-data"}, CreatedAt: t0},
 	}
 	c.deploys = []k8s.Deployment{
-		{Name: "poc-web", Namespace: "default", Ready: "1/1", Replicas: 1, UpToDate: 1, Available: 1, CreatedAt: t0},
-		{Name: "coredns", Namespace: "kube-system", Ready: "1/1", Replicas: 1, UpToDate: 1, Available: 1, CreatedAt: t0},
+		{Name: "poc-web", Namespace: "default", Ready: "1/1", Replicas: 1, UpToDate: 1, Available: 1, Selector: map[string]string{"app": "poc-web"}, Image: "poc/web:1.0", Strategy: "RollingUpdate", MaxSurge: "25%", MaxUnavailable: "25%", CreatedAt: t0},
+		{Name: "coredns", Namespace: "kube-system", Ready: "1/1", Replicas: 1, UpToDate: 1, Available: 1, Selector: map[string]string{"k8s-app": "kube-dns"}, Image: "rancher/coredns:1.12", Strategy: "RollingUpdate", MaxSurge: "25%", MaxUnavailable: "25%", CreatedAt: t0},
 	}
+	c.sts, c.ingresses = nil, []k8s.Ingress{{Name: "poc-web", Namespace: "default", Rules: []k8s.IngressRule{{Host: "poc.local", Path: "/", Service: "poc-web", Port: "8080"}}, CreatedAt: t0}}
+	c.configmaps = []k8s.ConfigMap{{Name: "poc-web-env", Namespace: "default", Keys: 2, CreatedAt: t0}}
+	c.pvcs = []k8s.PVC{{Name: "poc-data", Namespace: "default", Status: "Bound", Size: "1Gi", StorageClass: "local-path", CreatedAt: t0}}
 	c.services = []k8s.Service{
 		{Name: "kubernetes", Namespace: "default", Type: "ClusterIP", ClusterIP: "10.43.0.1", Ports: []k8s.ServicePort{{Name: "https", Port: 443, Protocol: "TCP"}}, CreatedAt: t0},
-		{Name: "poc-web", Namespace: "default", Type: "NodePort", ClusterIP: "10.43.221.80", Ports: []k8s.ServicePort{{Port: 8080, NodePort: 30080, Protocol: "TCP"}}, CreatedAt: t0},
-		{Name: "kube-dns", Namespace: "kube-system", Type: "ClusterIP", ClusterIP: "10.43.0.10", Ports: []k8s.ServicePort{{Name: "dns", Port: 53, Protocol: "UDP"}}, CreatedAt: t0},
+		{Name: "poc-web", Namespace: "default", Type: "NodePort", ClusterIP: "10.43.221.80", Ports: []k8s.ServicePort{{Port: 8080, NodePort: 30080, Protocol: "TCP"}}, Selector: map[string]string{"app": "poc-web"}, CreatedAt: t0},
+		{Name: "kube-dns", Namespace: "kube-system", Type: "ClusterIP", ClusterIP: "10.43.0.10", Ports: []k8s.ServicePort{{Name: "dns", Port: 53, Protocol: "UDP"}}, Selector: map[string]string{"k8s-app": "kube-dns"}, CreatedAt: t0},
 	}
+}
+
+// SeedShop 加入較完整的 "shop" namespace：Ingress → web／api Service → Deployment → Pods，
+// 加上 postgres StatefulSet、ConfigMap 與 PVC（測試主機 /__test/k8s?shop=1，Go 測試直接呼叫）。
+func (c *FakeK8sCluster) SeedShop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t0 := time.Now().Add(-5 * time.Hour)
+	c.namespaces = append(c.namespaces, "shop")
+	pod := func(name string, labels map[string]string, cms, pvcs []string) k8s.Pod {
+		return k8s.Pod{Name: name, Namespace: "shop", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.1.5", Labels: labels, ConfigMaps: cms, PVCs: pvcs, CreatedAt: t0}
+	}
+	web, api, pg := map[string]string{"app": "web"}, map[string]string{"app": "api"}, map[string]string{"app": "postgres"}
+	c.pods = append(c.pods,
+		pod("web-6d9f7c-x2k4", web, nil, nil), pod("web-6d9f7c-p8m1", web, nil, nil),
+		pod("api-5c4b8d-j7qz", api, []string{"api-env"}, nil), pod("api-5c4b8d-m2vd", api, []string{"api-env"}, nil), pod("api-5c4b8d-t9ln", api, []string{"api-env"}, nil),
+		pod("postgres-0", pg, nil, []string{"postgres-data"}),
+	)
+	roll := func(name, image string, n int, sel map[string]string) k8s.Deployment {
+		return k8s.Deployment{Name: name, Namespace: "shop", Ready: fmt.Sprintf("%d/%d", n, n), Replicas: n, UpToDate: n, Available: n, Selector: sel, Image: image, Strategy: "RollingUpdate", MaxSurge: "25%", MaxUnavailable: "25%", CreatedAt: t0}
+	}
+	c.deploys = append(c.deploys, roll("web", "shop/web:1.8.2", 2, web), roll("api", "shop/api:2.4.0", 3, api))
+	c.services = append(c.services,
+		k8s.Service{Name: "web-svc", Namespace: "shop", Type: "ClusterIP", ClusterIP: "10.43.12.8", Ports: []k8s.ServicePort{{Port: 80, Protocol: "TCP"}}, Selector: web, CreatedAt: t0},
+		k8s.Service{Name: "api-svc", Namespace: "shop", Type: "ClusterIP", ClusterIP: "10.43.77.21", Ports: []k8s.ServicePort{{Port: 8080, Protocol: "TCP"}}, Selector: api, CreatedAt: t0},
+	)
+	c.sts = append(c.sts, k8s.StatefulSet{Name: "postgres", Namespace: "shop", Ready: "1/1", Replicas: 1, Selector: pg, Image: "postgres:16.4", CreatedAt: t0})
+	c.ingresses = append(c.ingresses, k8s.Ingress{Name: "shop", Namespace: "shop", Rules: []k8s.IngressRule{{Host: "shop.local", Path: "/", Service: "web-svc", Port: "80"}, {Host: "shop.local", Path: "/api", Service: "api-svc", Port: "8080"}}, CreatedAt: t0})
+	c.configmaps = append(c.configmaps, k8s.ConfigMap{Name: "api-env", Namespace: "shop", Keys: 6, CreatedAt: t0})
+	c.pvcs = append(c.pvcs, k8s.PVC{Name: "postgres-data", Namespace: "shop", Status: "Bound", Size: "20Gi", StorageClass: "local-path", CreatedAt: t0})
 }
 
 // Reset 回到初始狀態（測試主機 /__test/reset）。
@@ -172,6 +209,8 @@ func (f *FakeK8s) Reset(ctx context.Context) error {
 		}
 	}
 	f.c.pods = keep
+	f.c.ingresses, f.c.configmaps, f.c.pvcs, f.c.sts = nil, nil, nil, nil
+	f.c.namespaces = []string{"default", "kube-system"}
 	f.c.running = f.distro
 	f.c.mu.Unlock()
 	return nil
@@ -270,6 +309,58 @@ func (f *FakeK8s) ListServices(_ context.Context, ns string) ([]k8s.Service, err
 	return out, nil
 }
 
+// ListExtras 實作 K8s。
+func (f *FakeK8s) ListExtras(_ context.Context, ns string) (k8s.Extras, error) {
+	f.c.mu.Lock()
+	defer f.c.mu.Unlock()
+	if err := f.requireRunning(); err != nil {
+		return k8s.Extras{}, err
+	}
+	x := k8s.Extras{StatefulSets: []k8s.StatefulSet{}, Ingresses: []k8s.Ingress{}, ConfigMaps: []k8s.ConfigMap{}, PVCs: []k8s.PVC{}}
+	for _, v := range f.c.sts {
+		if ns == "" || v.Namespace == ns {
+			x.StatefulSets = append(x.StatefulSets, v)
+		}
+	}
+	for _, v := range f.c.ingresses {
+		if ns == "" || v.Namespace == ns {
+			x.Ingresses = append(x.Ingresses, v)
+		}
+	}
+	for _, v := range f.c.configmaps {
+		if ns == "" || v.Namespace == ns {
+			x.ConfigMaps = append(x.ConfigMaps, v)
+		}
+	}
+	for _, v := range f.c.pvcs {
+		if ns == "" || v.Namespace == ns {
+			x.PVCs = append(x.PVCs, v)
+		}
+	}
+	return x, nil
+}
+
+// DeploymentDetail 實作 K8s：兩個 rollout 版本（目前＋前一版）與一筆擴縮事件。
+func (f *FakeK8s) DeploymentDetail(_ context.Context, ns, name string) (k8s.DeploymentDetail, error) {
+	f.c.mu.Lock()
+	defer f.c.mu.Unlock()
+	if err := f.requireRunning(); err != nil {
+		return k8s.DeploymentDetail{}, err
+	}
+	for _, d := range f.c.deploys {
+		if d.Namespace == ns && d.Name == name {
+			return k8s.DeploymentDetail{
+				Revisions: []k8s.Revision{
+					{Revision: 2, Image: d.Image, CreatedAt: d.CreatedAt, Current: true},
+					{Revision: 1, Image: d.Image + "-prev", CreatedAt: d.CreatedAt.Add(-24 * time.Hour)},
+				},
+				Events: []k8s.Event{{Type: "Normal", Reason: "ScalingReplicaSet", Message: fmt.Sprintf("Scaled up replica set %s-5c4b8d to %d", name, d.Replicas), Count: 1, LastSeen: d.CreatedAt}},
+			}, nil
+		}
+	}
+	return k8s.DeploymentDetail{}, fmt.Errorf("deployments %q not found", name)
+}
+
 // Delete 實作 K8s。刪除 pod 後由所屬 Deployment 自動補一個新的（模擬 ReplicaSet）。
 func (f *FakeK8s) Delete(_ context.Context, kind, ns, name string) error {
 	f.c.mu.Lock()
@@ -284,7 +375,7 @@ func (f *FakeK8s) Delete(_ context.Context, kind, ns, name string) error {
 			if p.Namespace == ns && p.Name == name {
 				f.c.pods = append(f.c.pods[:i], f.c.pods[i+1:]...)
 				if dep := ownerDeployment(name); dep != "" {
-					f.c.pods = append(f.c.pods, k8s.Pod{Name: dep + "-" + randSuffix(len(f.c.pods)), Namespace: ns, Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.99", CreatedAt: time.Now()})
+					f.c.pods = append(f.c.pods, k8s.Pod{Name: dep + "-" + randSuffix(len(f.c.pods)), Namespace: ns, Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.99", Labels: map[string]string{"app": dep}, CreatedAt: time.Now()})
 				}
 				return nil
 			}
@@ -367,7 +458,7 @@ func (f *FakeK8s) ScaleDeployment(_ context.Context, ns, name string, replicas i
 			}
 		}
 		for len(mine) < replicas {
-			mine = append(mine, k8s.Pod{Name: name + "-" + randSuffix(len(mine)+10), Namespace: ns, Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.50", CreatedAt: time.Now()})
+			mine = append(mine, k8s.Pod{Name: name + "-" + randSuffix(len(mine)+10), Namespace: ns, Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.50", Labels: map[string]string{"app": name}, CreatedAt: time.Now()})
 		}
 		if len(mine) > replicas {
 			mine = mine[:replicas]

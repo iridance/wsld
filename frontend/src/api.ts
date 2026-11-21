@@ -253,6 +253,10 @@ export interface K8sPod {
   restarts: number;
   node?: string;
   ip?: string;
+  labels?: Record<string, string>;
+  /** 此 Pod 掛載或引用的 ConfigMap／PVC 名稱 */
+  config_maps?: string[];
+  pvcs?: string[];
   created_at: string;
 }
 
@@ -263,7 +267,79 @@ export interface K8sDeployment {
   replicas: number;
   up_to_date: number;
   available: number;
+  selector?: Record<string, string>;
+  image?: string;
+  strategy?: string;
+  max_surge?: string;
+  max_unavailable?: string;
   created_at: string;
+}
+
+export interface K8sStatefulSet {
+  name: string;
+  namespace: string;
+  ready: string;
+  replicas: number;
+  selector?: Record<string, string>;
+  image?: string;
+  created_at: string;
+}
+
+export interface K8sIngressRule {
+  host?: string;
+  path: string;
+  service: string;
+  port: string;
+}
+
+export interface K8sIngress {
+  name: string;
+  namespace: string;
+  rules: K8sIngressRule[];
+  created_at: string;
+}
+
+export interface K8sConfigMap {
+  name: string;
+  namespace: string;
+  keys: number;
+  created_at: string;
+}
+
+export interface K8sPVC {
+  name: string;
+  namespace: string;
+  status: string;
+  size?: string;
+  storage_class?: string;
+  created_at: string;
+}
+
+export interface K8sExtras {
+  statefulsets: K8sStatefulSet[];
+  ingresses: K8sIngress[];
+  configmaps: K8sConfigMap[];
+  pvcs: K8sPVC[];
+}
+
+export interface K8sRevision {
+  revision: number;
+  image: string;
+  created_at: string;
+  current: boolean;
+}
+
+export interface K8sEvent {
+  type: string;
+  reason: string;
+  message: string;
+  count: number;
+  last_seen: string;
+}
+
+export interface K8sDeploymentDetail {
+  revisions: K8sRevision[];
+  events: K8sEvent[];
 }
 
 export interface K8sServicePort {
@@ -279,6 +355,7 @@ export interface K8sService {
   type: string;
   cluster_ip: string;
   ports: K8sServicePort[];
+  selector?: Record<string, string>;
   created_at: string;
 }
 
@@ -439,6 +516,9 @@ export const api = {
   k8sPods: (ns: string, signal?: AbortSignal) => call<K8sPod[]>("GET", `/api/k8s/pods${nsQuery(ns)}`, undefined, false, signal),
   k8sDeployments: (ns: string, signal?: AbortSignal) => call<K8sDeployment[]>("GET", `/api/k8s/deployments${nsQuery(ns)}`, undefined, false, signal),
   k8sServices: (ns: string, signal?: AbortSignal) => call<K8sService[]>("GET", `/api/k8s/services${nsQuery(ns)}`, undefined, false, signal),
+  k8sExtras: (ns: string, signal?: AbortSignal) => call<K8sExtras>("GET", `/api/k8s/extras${nsQuery(ns)}`, undefined, false, signal),
+  k8sDeploymentDetail: (ns: string, name: string, signal?: AbortSignal) =>
+    call<K8sDeploymentDetail>("GET", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/detail`, undefined, false, signal),
   k8sDelete: (kind: K8sKind, ns: string, name: string) =>
     call<void>("DELETE", `/api/k8s/${kind}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
   k8sRestart: (ns: string, name: string) =>
