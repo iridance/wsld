@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.18.0**（tag `v0.18.0`）已交付（Kubernetes 頁重做：namespace flow card＋右側 50% 側欄，分頁 Architecture 架構圖／Pods／Workloads／Services／Config／Storage，點 Deployment 看詳情；0.17.2 機器卡片圖示改為各 distro 的 logo；修正：主要機器不再於閒置約 20 秒後被 WSL 自動停止；0.17.1 開啟已停止機器的 Info 不再把它啟動；0.17.0 機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.18.0**（tag `v0.18.0`）已交付（Kubernetes 頁重做：namespace flow card＋右側 50% 側欄，分頁 Architecture 架構圖／Pods／Workloads／Services／Config／Storage，點 Deployment 看詳情；啟動後狀態轉換修正（node 尚未 Ready 時持續輪詢，不再卡在「啟動中」）、載入並行化、沒有資源的 namespace 預設收起（可展開）、k3s node 改以 machine 名稱命名（新安裝；既有叢集 Reset 後套用）；0.17.2 機器卡片圖示改為各 distro 的 logo；修正：主要機器不再於閒置約 20 秒後被 WSL 自動停止；0.17.1 開啟已停止機器的 Info 不再把它啟動；0.17.0 機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
