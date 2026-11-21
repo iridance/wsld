@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.17.1**（tag `v0.17.1`）已交付（修正：開啟已停止機器的 Info 不再把它啟動；0.17.0 機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.17.2**（tag `v0.17.2`）已交付（修正：主要機器不再於閒置約 20 秒後被 WSL 自動停止；0.17.1 開啟已停止機器的 Info 不再把它啟動；0.17.0 機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2

@@ -1,11 +1,13 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/dockerapi"
@@ -906,4 +908,63 @@ func TestMachineConfigDoesNotWakeStoppedDistro(t *testing.T) {
 	if !cfg.Running || cfg.WSLConfUnavailable || !strings.Contains(cfg.WSLConf, "[boot]") {
 		t.Fatalf("running config = %+v", cfg)
 	}
+}
+
+func TestPrimaryKeepAlive(t *testing.T) {
+	e := newEnv(t, "")
+	fw := NewFakeWSL()
+	e.s.WSL = fw
+	e.s.KeepAlive = &wsl.KeepAlive{Spawner: fw}
+	held := func() []string {
+		t.Helper()
+		return e.s.KeepAlive.Held()
+	}
+	waitHeld := func(want ...string) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			got := held()
+			if strings.Join(got, ",") == strings.Join(want, ",") {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("held = %v, want %v", got, want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	list := func() { e.req(t, http.MethodGet, "/api/machines", "") }
+
+	// 主要機器已在執行：狀態輪詢補掛保活
+	list()
+	waitHeld("Ubuntu-26.04")
+
+	// 非主要機器啟動：不保活
+	e.req(t, http.MethodPost, "/api/machines/docker-desktop/start", "")
+	waitHeld("Ubuntu-26.04")
+
+	// 使用者停止主要機器：放掉保活，輪詢也不會把它重掛（否則會把剛停掉的機器叫醒）
+	e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/stop", "")
+	waitHeld()
+	list()
+	list()
+	if len(held()) != 0 {
+		t.Fatalf("poll must not re-hold a user-stopped primary: %v", held())
+	}
+	for _, s := range fw.Spawns() {
+		if strings.Contains(s, "docker-desktop") {
+			t.Fatalf("non-primary must never be kept alive: %v", fw.Spawns())
+		}
+	}
+
+	// 再按啟動：回到保活
+	e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/start", "")
+	waitHeld("Ubuntu-26.04")
+
+	// wsl --shutdown 會結束 session；之後使用者開了終端（機器回到 Running）→ 輪詢補掛
+	_ = wsl.Shutdown(context.Background(), fw)
+	waitHeld()
+	_ = wsl.Wake(context.Background(), fw, "Ubuntu-26.04")
+	list()
+	waitHeld("Ubuntu-26.04")
 }

@@ -95,6 +95,8 @@ type Server struct {
 	DistroDisk func(name string) (int64, error)
 	// DistroDiskLimit 回傳 distro 虛擬磁碟的容量上限（Windows：wsl.VHDXLimit；nil＝不顯示）。
 	DistroDiskLimit func(name string) (int64, error)
+	// KeepAlive 替主要機器掛著常駐 wsl session，避免 WSL 在閒置約 20 秒後回收它（nil＝不保活）。
+	KeepAlive *wsl.KeepAlive
 	// SelfInWSL：wsld-gui 的執行檔位於 WSL 檔案系統（\\wsl.localhost\…）；此時拒絕 wsl --shutdown。
 	SelfInWSL bool
 	// K8sFor 取得指定 distro 的 k3s 管理器（nil → /api/k8s 回 501）。
@@ -455,6 +457,7 @@ func (s *Server) bringUpActive(ctx context.Context) (lifecycle.Status, error) {
 	if err != nil {
 		return st, err
 	}
+	s.holdPrimary()
 	if mgr, ok := s.life().(*lifecycle.Manager); ok {
 		if s.SaveConfig != nil {
 			if err := s.SaveConfig(mgr.Cfg); err != nil {
@@ -1037,3 +1040,28 @@ func (s *Server) ListenLoopback() (string, func(), error) {
 		_ = srv.Shutdown(ctx)
 	}, nil
 }
+
+// holdPrimary 讓主要機器保持執行：換手（放掉其他機器）並掛上保活 session。best-effort。
+func (s *Server) holdPrimary() {
+	if s.KeepAlive == nil {
+		return
+	}
+	if name := s.cfg().Active; name != "" {
+		_ = s.KeepAlive.HoldOnly(name)
+	}
+}
+
+// ensurePrimaryHeld 在主要機器已執行但沒被保活時補掛（GUI 啟動、WSL 重啟後使用者開了終端等）。
+// 使用者明確停止過的機器不會自動重掛。
+func (s *Server) ensurePrimaryHeld(list []wsl.Distro) {
+	if s.KeepAlive == nil {
+		return
+	}
+	active := s.cfg().Active
+	if d, ok := wsl.FindDistro(list, active); ok && strings.EqualFold(d.State, "Running") {
+		_ = s.KeepAlive.Ensure(d.Name)
+	}
+}
+
+// ReleaseKeepAlive 放掉全部保活 session（wsld-gui 結束時呼叫）。
+func (s *Server) ReleaseKeepAlive() { s.KeepAlive.ReleaseAll() }

@@ -42,6 +42,56 @@ type FakeWSL struct {
 	// WakeExempt 非 nil 且回傳 true 時，該次 -d 命令不把 distro 開起來（測試明確豁免用）。
 	// 預設（nil）與實機相同：任何 wsl -d <name> 命令都會喚醒 distro。
 	WakeExempt func(args []string) bool
+	spawns     []string               // Start 啟動過的命令（測試用）
+	procs      map[string][]*fakeProc // distro（小寫）→ 存活中的常駐子程序
+}
+
+// fakeProc 模擬長駐的 wsl.exe：Kill 或 distro 被停止時結束。
+type fakeProc struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func (p *fakeProc) Kill() error { p.once.Do(func() { close(p.done) }); return nil }
+func (p *fakeProc) Wait() error { <-p.done; return nil }
+
+// Start 實作 wsl.Spawner：像實機一樣，wsl -d <name> -- … 會把 distro 開起來並保持執行。
+func (f *FakeWSL) Start(args ...string) (wsl.Proc, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.spawns = append(f.spawns, strings.Join(args, " "))
+	if len(args) >= 2 && args[0] == "-d" {
+		for i := range f.distros {
+			if strings.EqualFold(f.distros[i].Name, args[1]) {
+				f.distros[i].State = "Running"
+				f.attached[f.distros[i].Name] = true
+				p := &fakeProc{done: make(chan struct{})}
+				if f.procs == nil {
+					f.procs = map[string][]*fakeProc{}
+				}
+				k := strings.ToLower(f.distros[i].Name)
+				f.procs[k] = append(f.procs[k], p)
+				return p, nil
+			}
+		}
+	}
+	return nil, &wsl.ExitError{Code: 1, Stderr: "There is no distribution with the supplied name."}
+}
+
+// Spawns 回傳 Start 啟動過的命令（測試用）。
+func (f *FakeWSL) Spawns() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.spawns...)
+}
+
+// endProcs 結束 distro 的常駐子程序（停止／關機時；呼叫端持有 f.mu）。
+func (f *FakeWSL) endProcs(name string) {
+	k := strings.ToLower(name)
+	for _, p := range f.procs[k] {
+		_ = p.Kill()
+	}
+	delete(f.procs, k)
 }
 
 // Attached 回傳 distro 的 VHD 是否掛在 WSL VM 上（測試用）。
@@ -242,6 +292,7 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 		f.mu.Lock()
 		for i := range f.distros {
 			f.distros[i].State = "Stopped"
+			f.endProcs(f.distros[i].Name)
 		}
 		f.attached = map[string]bool{}
 		f.shutdowns++
@@ -395,6 +446,7 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 		for i := range f.distros {
 			if strings.EqualFold(f.distros[i].Name, args[1]) {
 				f.distros[i].State = "Stopped"
+				f.endProcs(f.distros[i].Name)
 			}
 		}
 		return nil, nil, nil

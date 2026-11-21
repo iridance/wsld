@@ -16,6 +16,8 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 `loginctl enable-linger` 已由 bootstrap 開啟，避免最後一個 WSL 終端關閉時 systemd user session 被回收；但 **WSL VM 本身**閒置關機不在此控制範圍，這是 WSL 的行為。
 
+**主要機器不會被閒置回收（0.17.2）**：WSL 在最後一個 `wsl.exe` session 結束後約 20 秒就回收 distro（systemd 服務、dockerd 都不算 session）。wsld-gui（含縮到系統匣）替**主要機器**掛一個常駐的 `wsl -d <distro> -- sleep infinity` session，所以主要機器會一直執行；非主要機器不保活，閒置後仍會被回收。限制：保活 session 屬於 wsld-gui 程序，Tray「結束」、程序被結束或 Windows 重開機後就沒有了（`wsld start` 是一次性命令，也無法保活）；使用者在 Machines 明確停止主要機器後，不會被自動重新喚醒，要再按「啟動」。
+
 ## 與 Docker Desktop 並存
 
 可以同時安裝，但**不建議同時運行兩個引擎**：

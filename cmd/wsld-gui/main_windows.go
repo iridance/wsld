@@ -119,6 +119,7 @@ func main() {
 		LoadConfig:      func() (config.Config, error) { return config.Load(cfgPath) },
 		SaveConfig:      func(c config.Config) error { return config.Save(cfgPath, c) },
 		WSL:             wsl.ExecRunner{},
+		KeepAlive:       &wsl.KeepAlive{Spawner: wsl.ExecRunner{}},
 		DistroDisk:      wsl.VHDXSize,
 		DistroDiskLimit: wsl.VHDXLimit,
 		SelfInWSL:       wsl.RunningFromWSL(exe),
@@ -211,6 +212,7 @@ func (a *guiApp) startup(ctx context.Context) {
 }
 
 func (a *guiApp) shutdown(context.Context) {
+	a.srv.ReleaseKeepAlive()
 	if a.quitting.CompareAndSwap(false, true) {
 		systray.Quit()
 	}
@@ -254,6 +256,7 @@ func (a *guiApp) onOpenURL(url string) error {
 }
 
 func (a *guiApp) quit() {
+	a.srv.ReleaseKeepAlive()
 	if a.quitting.CompareAndSwap(false, true) {
 		systray.Quit()
 		if a.ctx != nil {

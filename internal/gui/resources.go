@@ -288,6 +288,7 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
+	s.ensurePrimaryHeld(list)
 	cfg := s.cfg()
 	out := make([]Machine, 0, len(list))
 	for _, d := range list {
@@ -496,6 +497,7 @@ func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.BindActive(cfg)
+	s.holdPrimary() // 設為主要：主要機器不該被 WSL 閒置回收；原主要機器放掉
 
 	m, _ := cfg.ActiveMachine()
 	needBringUp := !m.Ready()
@@ -569,6 +571,9 @@ func (s *Server) handleMachineStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
+	if strings.EqualFold(d.Name, s.cfg().Active) {
+		_ = s.KeepAlive.Hold(d.Name) // 主要機器：保持執行
+	}
 	if fl, ok := s.life().(*FakeLifecycle); ok && fl.Engine != nil && strings.EqualFold(d.Name, s.cfg().Active) {
 		fl.Engine.SetDown(false) // testhost：主要 distro 開機 → 引擎跟著起來
 	}
@@ -585,6 +590,7 @@ func (s *Server) handleMachineStop(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.KeepAlive.Release(d.Name, true) // 使用者明確停止：放掉保活，輪詢也不再自動重掛
 	if _, managed := s.cfg().FindMachine(d.Name); managed {
 		_ = wsl.StopDocker(r.Context(), s.WSL, d.Name)
 	}
@@ -684,6 +690,7 @@ func (s *Server) runDiskOp(ctx context.Context, consent bool, name string, op fu
 	return wsl.WithFreeVHD(ctx, s.WSL, name, wsl.FreeVHDOptions{
 		Consent: consent, SelfInWSL: s.SelfInWSL, Primary: cfg.Active,
 		BeforeShutdown: func(running []string) {
+			s.KeepAlive.ReleaseAll()
 			for _, n := range running {
 				if _, managed := cfg.FindMachine(n); managed {
 					_ = wsl.StopDocker(ctx, s.WSL, n)
@@ -694,6 +701,9 @@ func (s *Server) runDiskOp(ctx context.Context, consent bool, name string, op fu
 			}
 		},
 		AfterWake: func(n string) {
+			if strings.EqualFold(n, cfg.Active) {
+				_ = s.KeepAlive.Hold(n)
+			}
 			if fl != nil && fl.Engine != nil && strings.EqualFold(n, cfg.Active) {
 				fl.Engine.SetDown(false)
 			}
@@ -755,6 +765,7 @@ func (s *Server) handleMachineUnmanage(w http.ResponseWriter, r *http.Request) {
 	if s.WSL != nil {
 		_ = wsl.StopDocker(r.Context(), s.WSL, name)
 	}
+	s.KeepAlive.Release(name, false)
 	cfg.RemoveMachine(name)
 	if s.SaveConfig == nil {
 		writeErr(w, http.StatusInternalServerError, "error", errors.New("config not writable"))
@@ -783,6 +794,7 @@ func (s *Server) handleMachineUnregister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	cfg := s.cfg()
+	s.KeepAlive.Release(name, false)
 	_ = wsl.StopDocker(r.Context(), s.WSL, name)
 	if err := wsl.Unregister(r.Context(), s.WSL, name); err != nil {
 		writeErr(w, http.StatusBadGateway, "error", err)
