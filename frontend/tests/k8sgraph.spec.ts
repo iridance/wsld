@@ -38,6 +38,11 @@ test("health: failing pod → error, all ready → ok, nothing → empty", () =>
   expect(summarizeNamespace("n", res({})).health).toBe("empty");
 });
 
+test("completed Job pods (0/1, Completed) count as healthy", () => {
+  const s = summarizeNamespace("n", res({ pods: [pod("helm-install", "n", {}, "Completed", "0/1"), pod("a", "n", {})] }));
+  expect(s).toMatchObject({ podsReady: 2, health: "ok" });
+});
+
 test("graph links services → deployments by selector and deployments → pods by labels", () => {
   const g = buildNamespaceGraph(
     "shop",

@@ -36,8 +36,10 @@ export interface NsSummary {
 
 /** Pod 是否算「就緒」：Running／Completed 且所有容器 ready。 */
 function podReady(p: K8sPod): boolean {
+  // 已跑完的 Job Pod 容器都已結束，ready 為 0/N，仍算正常
+  if (p.status === "Succeeded" || p.status === "Completed") return true;
   const [r, n] = p.ready.split("/").map(Number);
-  return (p.status === "Running" || p.status === "Succeeded" || p.status === "Completed") && r === n;
+  return p.status === "Running" && r === n;
 }
 
 function podFailing(p: K8sPod): boolean {
