@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -53,8 +54,44 @@ type ExecRunner struct {
 	Path string // 預設 "wsl.exe"
 }
 
-// Run 實作 Runner。
+// transientExit 是 wsl.exe 自己失敗（例如 UtilAcceptVsock accept4 逾時、WSAETIMEDOUT）時的結束碼 0xFFFFFFFF。
+// 一般命令的結束碼最多 255，所以這個值代表命令根本沒有執行，重試是安全的。
+const transientExit = 0xFFFFFFFF
+
+// IsTransient 回報 err 是否為 wsl.exe 啟動 session 失敗（命令未執行）。
+func IsTransient(err error) bool {
+	var e *ExitError
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.Code == transientExit || e.Code == -1
+}
+
+// 偶發的 wsl.exe 啟動失敗最多重試的次數與間隔。
+const (
+	transientRetries = 2
+	transientDelay   = time.Second
+)
+
+// retryTransient 呼叫 attempt；遇到 IsTransient 錯誤且 canRetry 時重試。
+// 不可重試的情況（stdin 已被消耗）直接回傳第一次的結果。
+func retryTransient(ctx context.Context, canRetry bool, sleep func(time.Duration), attempt func() ([]byte, []byte, error)) ([]byte, []byte, error) {
+	out, errb, err := attempt()
+	for i := 0; canRetry && i < transientRetries && IsTransient(err) && ctx.Err() == nil; i++ {
+		sleep(transientDelay)
+		out, errb, err = attempt()
+	}
+	return out, errb, err
+}
+
+// Run 實作 Runner。沒有 stdin 的呼叫遇到 wsl.exe 啟動失敗（0xFFFFFFFF）會自動重試。
 func (r ExecRunner) Run(ctx context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
+	return retryTransient(ctx, stdin == nil, time.Sleep, func() ([]byte, []byte, error) {
+		return r.runOnce(ctx, stdin, args...)
+	})
+}
+
+func (r ExecRunner) runOnce(ctx context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
 	path := r.Path
 	if path == "" {
 		path = "wsl.exe"
