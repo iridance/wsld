@@ -58,6 +58,10 @@ type App struct {
 	Lang    i18n.Lang // 空則沿用目前設定
 	// LAN 管理區網存取（wsld lan）；nil 表示不支援。
 	LAN *lan.Manager
+	// K3sBundle：wsld k8s 安裝／移除 k3s 用的內嵌腳本（scripts.K3sBundle()）。
+	K3sBundle []byte
+	// KubeconfigPath：匯出 kubeconfig 的目標（空 = %USERPROFILE%\.kube\config；測試用）。
+	KubeconfigPath string
 	// PingInterval 覆寫 lifecycle 重試間隔（測試用；0 = 預設）。
 	PingInterval time.Duration
 }
@@ -114,6 +118,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdUnregister(ctx, rest)
 	case "lan":
 		err = a.cmdLan(ctx, rest)
+	case "k8s":
+		err = a.cmdK8s(ctx, rest)
 	default:
 		err = fail(ExitUsage, errors.New(i18n.T("cli.unknown_command", cmd)))
 	}
@@ -260,6 +266,7 @@ func (a *App) cmdStart(ctx context.Context, args []string) error {
 	}
 	a.printStatus(st)
 	fmt.Fprintln(a.Stdout, i18n.T("cli.start_done", cfg.APIEndpoint))
+	a.resumeK8s(ctx, cfg)
 	return nil
 }
 

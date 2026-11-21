@@ -203,6 +203,75 @@ export interface LANStatus {
   firewall_pending?: boolean;
 }
 
+export type K8sState = "stopped" | "not-installed" | "off" | "starting" | "ready" | "error";
+
+export interface K8sStatus {
+  distro: string;
+  state: K8sState;
+  installed: boolean;
+  active: boolean;
+  ready: boolean;
+  version?: string;
+  node_name?: string;
+  node_ready: boolean;
+  node_ip?: string;
+  ip_mismatch?: boolean;
+  memory_bytes?: number;
+  endpoint: string;
+  context: string;
+}
+
+export interface K8sInfo {
+  /** 目前開啟 k8s 的 machine；沒有人開啟時為按啟動會使用的 primary machine */
+  machine: string;
+  enabled: boolean;
+  /** 背景作業進行中：starting | stopping | resetting；空 = 閒置 */
+  op?: "starting" | "stopping" | "resetting";
+  error?: string;
+  warning?: string;
+  status: K8sStatus;
+  kubeconfig_path: string;
+}
+
+export interface K8sPod {
+  name: string;
+  namespace: string;
+  status: string;
+  ready: string;
+  restarts: number;
+  node?: string;
+  ip?: string;
+  created_at: string;
+}
+
+export interface K8sDeployment {
+  name: string;
+  namespace: string;
+  ready: string;
+  replicas: number;
+  up_to_date: number;
+  available: number;
+  created_at: string;
+}
+
+export interface K8sServicePort {
+  name?: string;
+  port: number;
+  node_port?: number;
+  protocol: string;
+}
+
+export interface K8sService {
+  name: string;
+  namespace: string;
+  type: string;
+  cluster_ip: string;
+  ports: K8sServicePort[];
+  created_at: string;
+}
+
+export type K8sKind = "pods" | "deployments" | "services";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -266,6 +335,10 @@ export function wsUrl(path: string, params: Record<string, string | number> = {}
   return u.toString();
 }
 
+function nsQuery(ns: string): string {
+  return ns ? `?ns=${encodeURIComponent(ns)}` : "";
+}
+
 export const api = {
   meta: () => call<Meta>("GET", "/api/meta"),
   status: (signal?: AbortSignal) => call<Status>("GET", "/api/status", undefined, false, signal),
@@ -317,6 +390,32 @@ export const api = {
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),
+  k8s: (signal?: AbortSignal) => call<K8sInfo>("GET", "/api/k8s", undefined, false, signal),
+  k8sOn: (opts: { machine?: string; switch?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.machine) q.set("machine", opts.machine);
+    if (opts.switch) q.set("switch", "1");
+    const qs = q.toString();
+    return call<K8sInfo>("POST", `/api/k8s/on${qs ? `?${qs}` : ""}`);
+  },
+  k8sOff: () => call<K8sInfo>("POST", "/api/k8s/off"),
+  k8sReset: () => call<K8sInfo>("POST", "/api/k8s/reset"),
+  k8sKubeconfig: () => call<{ path: string; context: string }>("POST", "/api/k8s/kubeconfig"),
+  k8sNamespaces: (signal?: AbortSignal) => call<string[]>("GET", "/api/k8s/namespaces", undefined, false, signal),
+  k8sPods: (ns: string, signal?: AbortSignal) => call<K8sPod[]>("GET", `/api/k8s/pods${nsQuery(ns)}`, undefined, false, signal),
+  k8sDeployments: (ns: string, signal?: AbortSignal) => call<K8sDeployment[]>("GET", `/api/k8s/deployments${nsQuery(ns)}`, undefined, false, signal),
+  k8sServices: (ns: string, signal?: AbortSignal) => call<K8sService[]>("GET", `/api/k8s/services${nsQuery(ns)}`, undefined, false, signal),
+  k8sDelete: (kind: K8sKind, ns: string, name: string) =>
+    call<void>("DELETE", `/api/k8s/${kind}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
+  k8sRestart: (ns: string, name: string) =>
+    call<void>("POST", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/restart`),
+  k8sScale: (ns: string, name: string, replicas: number) =>
+    call<void>("POST", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/scale`, { replicas }),
+  k8sOpen: (port: number) => call<{ url: string }>("POST", "/api/k8s/open", { port }),
+  k8sLogsUrl: (ns: string, pod: string, tail = 100) =>
+    wsUrl(`/api/k8s/pods/${encodeURIComponent(ns)}/${encodeURIComponent(pod)}/logs/stream`, { tail }),
+  k8sExecUrl: (ns: string, pod: string, cols: number, rows: number) =>
+    wsUrl(`/api/k8s/pods/${encodeURIComponent(ns)}/${encodeURIComponent(pod)}/exec`, { cols, rows }),
   logsStreamUrl: (id: string, tail = 100) =>
     wsUrl(`/api/containers/${encodeURIComponent(id)}/logs/stream`, { tail }),
   execUrl: (id: string, cols: number, rows: number) =>

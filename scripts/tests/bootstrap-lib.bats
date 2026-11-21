@@ -403,3 +403,29 @@ SCRIPT
   run wsld_docker_engine_installed
   [ "$status" -ne 0 ]
 }
+
+# ---------- k3s ----------
+
+@test "k3s_install_exec uses docker runtime, no traefik, readable kubeconfig" {
+  run wsld_k3s_install_exec
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--docker"* ]]
+  [[ "$output" == *"--disable traefik"* ]]
+  [[ "$output" == *"--write-kubeconfig-mode 644"* ]]
+}
+
+@test "render_k3s_dropin orders k3s after docker.service" {
+  run wsld_render_k3s_dropin
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[Unit]"* ]]
+  [[ "$output" == *"After=docker.service"* ]]
+  [[ "$output" == *"Requires=docker.service"* ]]
+}
+
+@test "k3s_installed checks the binary path" {
+  run wsld_k3s_installed "$TMPD/none"
+  [ "$status" -ne 0 ]
+  printf '#!/bin/sh\n' > "$TMPD/k3s"; chmod +x "$TMPD/k3s"
+  run wsld_k3s_installed "$TMPD/k3s"
+  [ "$status" -eq 0 ]
+}

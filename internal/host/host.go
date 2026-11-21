@@ -37,3 +37,15 @@ func StartShell(distro, user string, cols, rows int) (net.Conn, error) {
 	}
 	return startShell(distro, user, cols, rows)
 }
+
+// StartCommand 在 distro 內執行單一指令並回傳雙向連線（GUI 的 kubectl logs／exec 串流）。
+// tty=true 時以 script(1) 配 PTY；連線關閉即終止程序。
+func StartCommand(distro, user string, argv []string, tty bool, cols, rows int) (net.Conn, error) {
+	if distro == "" {
+		return nil, fmt.Errorf("distro is empty")
+	}
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("command is empty")
+	}
+	return startProc(WSLCommandArgs(distro, user, argv, tty, cols, rows))
+}

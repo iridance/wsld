@@ -342,3 +342,25 @@ wsld_ensure_wsl_conf_systemd() {
     printf '%s[boot]\nsystemd=true\n' "$prefix" >> "$f"
   fi
 }
+
+# --- k3s -----------------------------------------------------------------
+
+# k3s 安裝參數（PoC 定案）：與 dockerd 共用映像檔（--docker）、不啟用 traefik（避免搶 80/443）、
+# kubeconfig 對一般使用者可讀（WSL 內免 sudo 即可 kubectl）。
+wsld_k3s_install_exec() {
+  printf '%s\n' '--docker --disable traefik --write-kubeconfig-mode 644'
+}
+
+# k3s.service drop-in：必須排在 docker.service 之後。
+# PoC 發現：開機時 k3s 早於 dockerd 啟動，agent 不會啟動 kubelet／cri-dockerd（node NotReady）。
+wsld_render_k3s_dropin() {
+  printf '%s\n' \
+    '[Unit]' \
+    'After=docker.service' \
+    'Requires=docker.service'
+}
+
+# 已安裝 k3s？（$1 可覆寫二進位路徑，測試用）
+wsld_k3s_installed() {
+  [ -x "${1:-/usr/local/bin/k3s}" ]
+}

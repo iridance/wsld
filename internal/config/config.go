@@ -32,6 +32,8 @@ type Machine struct {
 	Distro      string `toml:"distro"`
 	User        string `toml:"user"`
 	APIEndpoint string `toml:"api_endpoint"`
+	// K8s：此 machine 開啟單節點 k3s（預設關；全部 machine 同時最多一台，見 Config.SetK8s）。
+	K8s bool `toml:"k8s,omitempty"`
 }
 
 // Ready 表示已 init（有 user 與合法 endpoint）。
@@ -204,10 +206,44 @@ func Save(path string, c Config) error {
 	return os.Rename(tmp, path)
 }
 
+// K8sMachine 回傳目前開啟 k3s 的 machine（所有 WSL2 distro 共用網路命名空間，最多一台）。
+func (c Config) K8sMachine() (Machine, bool) {
+	for _, m := range c.Machines {
+		if m.K8s {
+			return m, true
+		}
+	}
+	return Machine{}, false
+}
+
+// SetK8s 開／關指定 machine 的 k3s。開啟時若另一台已開則拒絕（錯誤訊息指出目前開啟者）。
+func (c *Config) SetK8s(distro string, on bool) error {
+	idx := -1
+	for i := range c.Machines {
+		if strings.EqualFold(c.Machines[i].Distro, distro) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("machine %q not found", distro)
+	}
+	if on {
+		if cur, ok := c.K8sMachine(); ok && !strings.EqualFold(cur.Distro, c.Machines[idx].Distro) {
+			return fmt.Errorf("k8s is already enabled on %q (disable it first; all WSL2 distros share one network namespace)", cur.Distro)
+		}
+	}
+	c.Machines[idx].K8s = on
+	c.syncDerived()
+	return nil
+}
+
 // UpsertMachine 新增或覆寫同名 distro profile。
 func (c *Config) UpsertMachine(m Machine) {
 	for i := range c.Machines {
 		if strings.EqualFold(c.Machines[i].Distro, m.Distro) {
+			// k8s 旗標只能經 SetK8s 改變：Init 等流程會以新建的 Machine 覆寫 profile，不可因此清掉它
+			m.K8s = c.Machines[i].K8s
 			c.Machines[i] = m
 			c.syncDerived()
 			return
@@ -331,6 +367,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("active %q not in machines", c.Active)
 	}
 	seen := map[string]bool{}
+	k8sOn := ""
 	for _, m := range c.Machines {
 		if m.Distro == "" {
 			return errors.New("machine distro is required")
@@ -340,6 +377,12 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate machine %q", m.Distro)
 		}
 		seen[key] = true
+		if m.K8s {
+			if k8sOn != "" {
+				return fmt.Errorf("k8s enabled on both %q and %q (only one machine may run k3s)", k8sOn, m.Distro)
+			}
+			k8sOn = m.Distro
+		}
 		if m.APIEndpoint != "" {
 			host, _, err := splitEndpoint(m.APIEndpoint)
 			if err != nil {

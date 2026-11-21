@@ -53,3 +53,40 @@ func TestOpenRejectsEmptyDistro(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestWSLCommandArgsPlainPipe(t *testing.T) {
+	args := WSLCommandArgs("Ubuntu-26.04", "root", []string{"k3s", "kubectl", "logs", "web-1", "-n", "default", "-f"}, false, 0, 0)
+	want := []string{"-d", "Ubuntu-26.04", "-u", "root", "--cd", "~", "--", "k3s", "kubectl", "logs", "web-1", "-n", "default", "-f"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %v", args)
+	}
+}
+
+func TestWSLCommandArgsTTYWrapsInScriptWithQuoting(t *testing.T) {
+	args := WSLCommandArgs("Ubuntu-26.04", "", []string{"k3s", "kubectl", "exec", "-it", "web-1", "--", "sh", "-c", "command -v bash && exec bash || exec sh"}, true, 120, 40)
+	if slices.Contains(args, "-u") {
+		t.Fatalf("empty user should omit -u: %v", args)
+	}
+	i := slices.Index(args, "script")
+	if i < 0 || args[i+1] != "-qefc" {
+		t.Fatalf("expected script -qefc: %v", args)
+	}
+	inner := args[i+2]
+	for _, want := range []string{"COLUMNS=120", "LINES=40", "stty cols 120 rows 40", "'command -v bash && exec bash || exec sh'", "exec k3s kubectl exec -it web-1 -- sh -c"} {
+		if !strings.Contains(inner, want) {
+			t.Fatalf("inner command missing %q:\n%s", want, inner)
+		}
+	}
+	if args[len(args)-1] != "/dev/null" {
+		t.Fatalf("script must log to /dev/null: %v", args)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	cases := map[string]string{"plain": "plain", "a b": "'a b'", "it's": `'it'\''s'`, "": "''", "x;y": "'x;y'"}
+	for in, want := range cases {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

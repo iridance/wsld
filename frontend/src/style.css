@@ -672,3 +672,23 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 .set-control .tf.select { width: 200px; }
 .set-row > .brand-mark { width: 34px; height: 20px; }
 .set-control .radio-group { flex-direction: row; flex-wrap: wrap; gap: 4px 20px; }
+
+/* ---- Kubernetes 頁 ---- */
+.state.failed { color: var(--bad); }
+.state.failed::before { background: currentColor; }
+.k8s-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px 20px; box-shadow: var(--shadow); margin-bottom: 16px;
+}
+.k8s-head { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 15px; }
+.k8s-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 20px; margin: 0; width: 100%; font-size: 13px; }
+.k8s-fields dt { color: var(--muted); }
+.k8s-fields dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k8s-hint { margin: 0; color: var(--muted); font-size: 13px; max-width: 72ch; }
+.k8s-hint.bad { color: var(--bad); }
+.k8s-hint.warn { color: var(--warn); }
+.k8s-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+td.actions.scale { white-space: nowrap; }
+td.actions .tf.replicas { width: 84px; min-width: 0; margin-right: 4px; vertical-align: middle; }
+td.actions .tf.replicas input { width: 100%; text-align: right; }

@@ -93,6 +93,12 @@ type Server struct {
 	Forwarder *lan.Forwarder
 	// DistroDisk 回傳 distro 虛擬磁碟（ext4.vhdx）大小（Windows：wsl.VHDXSize；nil＝不顯示）。
 	DistroDisk func(name string) (int64, error)
+	// K8sFor 取得指定 distro 的 k3s 管理器（nil → /api/k8s 回 501）。
+	K8sFor func(distro string) K8s
+	// K8sStream 開啟 kubectl logs／exec 串流（nil → 501）。
+	K8sStream CommandStream
+	// KubeconfigPath 是匯出 kubeconfig 的目標（空 = %USERPROFILE%\.kube\config；測試用）。
+	KubeconfigPath string
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
 
@@ -102,6 +108,11 @@ type Server struct {
 	engineMu  sync.RWMutex
 
 	lanMu sync.Mutex // 序列化區網轉發同步（背景迴圈與 API 共用）
+
+	k8sMu   sync.Mutex // 保護下列背景作業狀態（同一時間只跑一個 k3s 作業）
+	k8sOp   string
+	k8sErr  string
+	k8sWarn string
 
 	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC
 	fwPending atomic.Bool
@@ -177,6 +188,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
 	mux.HandleFunc("POST /api/open-repo", s.handleOpenRepo)
 	mux.HandleFunc("POST /api/open-local", s.handleOpenLocal)
+	mux.HandleFunc("GET /api/k8s", s.handleK8sGet)
+	mux.HandleFunc("POST /api/k8s/on", s.handleK8sOn)
+	mux.HandleFunc("POST /api/k8s/off", s.handleK8sOff)
+	mux.HandleFunc("POST /api/k8s/reset", s.handleK8sReset)
+	mux.HandleFunc("POST /api/k8s/kubeconfig", s.handleK8sKubeconfig)
+	mux.HandleFunc("POST /api/k8s/open", s.handleK8sOpen)
+	mux.HandleFunc("GET /api/k8s/namespaces", s.handleK8sNamespaces)
+	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
+	mux.HandleFunc("GET /api/k8s/deployments", s.handleK8sDeployments)
+	mux.HandleFunc("GET /api/k8s/services", s.handleK8sServices)
+	mux.HandleFunc("GET /api/k8s/pods/{ns}/{name}/logs/stream", s.handleK8sLogsStream)
+	mux.HandleFunc("GET /api/k8s/pods/{ns}/{name}/exec", s.handleK8sExec)
+	mux.HandleFunc("POST /api/k8s/deployments/{ns}/{name}/restart", s.handleK8sRestart)
+	mux.HandleFunc("POST /api/k8s/deployments/{ns}/{name}/scale", s.handleK8sScale)
+	mux.HandleFunc("DELETE /api/k8s/{kind}/{ns}/{name}", s.handleK8sDelete)
 	if s.Assets != nil {
 		mux.Handle("/", s.Assets)
 	}
@@ -407,6 +433,7 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 		writeEngineErr(w, err)
 		return
 	}
+	s.resumeK8s()
 	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready()})
 }
 

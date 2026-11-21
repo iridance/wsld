@@ -31,6 +31,7 @@ import (
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/host"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
@@ -126,8 +127,12 @@ func main() {
 		NewEngine:      func(c config.Config) gui.Engine { return dockerClient(c) },
 		NewLifecycle:   func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:   gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
-		LAN:            &lan.Manager{Host: lan.NewHost(), Exe: exe},
-		Forwarder:      &lan.Forwarder{},
+		K8sFor: func(distro string) gui.K8s {
+			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle()}
+		},
+		K8sStream: gui.HostCommandStream{},
+		LAN:       &lan.Manager{Host: lan.NewHost(), Exe: exe},
+		Forwarder: &lan.Forwarder{},
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {

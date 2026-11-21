@@ -75,7 +75,7 @@
 | 區塊 | 行為 | Playwright 覆蓋 |
 |---|---|---|
 | Tray | 狀態列、啟動引擎、開啟主視窗、結束；按 X 縮 Tray | 實機手測 |
-| Top bar | 品牌＋版本、五個視圖分頁（窄時只剩圖示）、發行版晶片（引擎狀態，點擊到 Machines）、需要時才出現的 Start engine、有 border 的 folder／terminal、Settings 齒輪；無 tcp | `shell.spec.ts`／`list` |
+| Top bar | 品牌＋版本、六個視圖分頁（窄時只剩圖示）、發行版晶片（引擎狀態，點擊到 Machines）、需要時才出現的 Start engine、有 border 的 folder／terminal、Settings 齒輪；無 tcp | `shell.spec.ts`／`list` |
 | 頁標題列 | 頁標題＋摘要與工具列同一列 | `shell`／`list` |
 | 輸入元件 | 自繪 checkbox／radio／select／dropdown 清單（滑鼠＋鍵盤）／number（−／＋）／搜尋清除／開關狀態文字／確認勾 | `inputs.spec.ts` |
 | 按鈕圖示 | 列／compose：無邊框純圖示；**header icon：有 border** | `list`／`groups`／`info` |
@@ -85,6 +85,8 @@
 | Start／Stop／Remove | pending 回饋；Remove 可含 running（確認會停） | `list`（Remove 隨 0.5） |
 | Logs／Exec | tail 100；Live；xterm exec | `panels.spec.ts` |
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
+| Kubernetes | 頂部導覽（Machines 旁）：一鍵啟動／停止（背景作業，狀態徽章 Starting…／Ready／Off…，首次含安裝）、重置（確認）、匯出 kubeconfig；叢集資訊卡（版本、node、API、context、記憶體）；另一台持有 k3s 時顯示說明與「移到 …」；namespace 下拉＋分頁 Pods（logs 串流／exec 終端 在底部 panel、刪除）／Deployments（副本數＋套用、rollout restart、刪除）／Services（NodePort 開瀏覽器、刪除；內建 kubernetes 服務不可刪）；分頁選擇記住 | `k8s.spec.ts` |
+| Containers › k3s 群組 | `k8s_*`（含 `io.kubernetes.pod.name` 標籤）的容器摺成預設收合的「Kubernetes (k3s)」群組（無整組 Start／Stop；展開／收合記住） | `k8s.spec.ts` |
 | Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts` |
 | 磁碟用量 | 四頁的用量鈕（不加高度、點開／Esc／點外面、刷新時維持；明細每項大小與占比、前 5 大＋其他、總計）、容器／Volume Size 欄與副標總計、compose 群組加總、Machines 卡片磁碟與合計、Info 磁碟長條 | `disk.spec.ts` |
@@ -112,6 +114,8 @@
 | `GET /api/networks`、`DELETE /api/networks/{id}`、`POST /api/networks/prune` | 網路（內建 bridge／host／none 不可刪） |
 | `GET /api/disk` | Docker 磁碟用量：`summary`（四類 count／size／reclaimable、total、reclaimable）＋逐容器 `size_rw`／`size_root_fs`、逐 volume `size`／`ref_count`；快取 15 秒 |
 | `GET /api/machines`（含 `disk_bytes`）、…／config（含 `disk_bytes`、執行中 `disk_used_bytes`／`disk_total_bytes`）、…／online、install、**use／start／stop／unmanage／unregister**、用量摘要（0.5） | WSL 發行版與多 distro |
+| `GET /api/k8s`、`POST /api/k8s/on[?machine=&switch=1]`／`off`／`reset`（背景作業，202＋目前狀態；輪詢 `GET /api/k8s` 的 `op`／`error`／`warning`）、`POST /api/k8s/kubeconfig`、`POST /api/k8s/open {"port"}`（只接受叢集 Service 實際宣告的 NodePort） | k3s 狀態與操作（未開啟 k8s 時資源類端點回 409；未接後端回 501） |
+| `GET /api/k8s/{namespaces\|pods\|deployments\|services}[?ns=]`、`DELETE /api/k8s/{pods\|deployments\|services}/{ns}/{name}`、`POST /api/k8s/deployments/{ns}/{name}/{restart\|scale}`、`GET /api/k8s/pods/{ns}/{name}/{logs/stream\|exec}`（WebSocket） | k3s 資源；名稱／namespace 驗證為 DNS 標籤，scale 0–100 |
 | `GET|PUT /api/settings`（含 theme）、`GET /api/doctor`、`POST /api/window/{hide|show|quit}` | 設定、診斷、視窗 |
 
 錯誤格式 `{"error","code"}`，`code` ∈ `not_ready`(503)／`api`(502)／`not_found`(404)／`conflict`(409)／`usage`(400)／`error`。
@@ -128,7 +132,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.15.2 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.16.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -158,6 +162,7 @@ Playwright 在 WSL 需要 Chromium 相依套件；`make test-ui` 會透過 `scri
 | `POST /__test/image?tag=&size=&containers=` | 新增映像（`containers>0` 視為使用中） |
 | `POST /__test/volume?name=&in_use=1` | 新增 volume |
 | `POST /__test/network?name=&driver=` | 新增網路 |
+| `POST /__test/k8s?delay=<ms>&fail=1&installed=<distro>`、`GET /__test/k8s` | 假 k3s 叢集：動作延遲、啟動失敗、預先標記已安裝；回傳目前執行的 distro 與動作紀錄 |
 | `POST /__test/wsl/fail-install[?on=0]`、`GET /__test/wsl/installed` | 讓 FakeWSL 的 `--install` 失敗；查詢已安裝清單 |
 
 FakeEngine 預設資料：容器 web（running）／db（exited）；映像 nginx:1.27（使用中）／redis:7／一個 dangling；volume pgdata（使用中）／orphan；網路 bridge／host／none／shop_default。FakeWSL 預設：Ubuntu-26.04（Running、預設、systemd）與 docker-desktop（Stopped）。

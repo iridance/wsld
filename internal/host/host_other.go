@@ -18,3 +18,7 @@ func openTerminal(string, string) error {
 func startShell(string, string, int, int) (net.Conn, error) {
 	return nil, fmt.Errorf("start shell is only supported on Windows")
 }
+
+func startProc([]string) (net.Conn, error) {
+	return nil, fmt.Errorf("start command is only supported on Windows")
+}

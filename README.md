@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.15.2**（tag `v0.15.2`）已交付（磁碟用量改為頁標題旁的小鈕：迷你長條＋總量，點開看每項佔用，不再佔列表上方的高度；容器與 Volume 列表有大小欄）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.16.0**（tag `v0.16.0`）已交付（本機 Kubernetes：每台 machine 可選開啟單節點 k3s，與 dockerd 共用映像檔；`wsld k8s` 與 GUI 新增的 Kubernetes 頁——一鍵啟停、Pods／Deployments／Services 管理、kubeconfig 合併）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -61,6 +61,7 @@ wsld stop-ct <ct> / wsld start-ct <ct>
 wsld exec <ct> [cmd…]
 wsld doctor                # 健康檢查 + 建議
 wsld lan on|off|status     # 區網存取（wsld-gui 在內網 IP 轉發容器埠）
+wsld k8s on|off|status     # 選用的單節點 k3s（與 docker 共用映像檔；reset／kubeconfig／uninstall 見 OPERATIONS）
 ```
 
 也可以直接用一般 `docker`：
@@ -81,7 +82,7 @@ wsld-gui.exe           # 開主視窗；按 X 縮到系統匣
 wsld-gui.exe --tray    # 只留系統匣
 ```
 
-側欄切 Containers／Images／Volumes／Networks／Machines／Settings；標題列可開資料夾、終端、啟動引擎。細節：[GUI](docs/GUI.md)。
+側欄切 Containers／Images／Volumes／Networks／Machines／Kubernetes／Settings；標題列可開資料夾、終端、啟動引擎。細節：[GUI](docs/GUI.md)。
 
 ### 重開機之後
 
@@ -99,7 +100,7 @@ wsld-gui.exe --tray    # 只留系統匣
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.15.2；GUI 頂部列 v0.15.2）
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.16.0；GUI 頂部列 v0.16.0）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -108,7 +109,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（**0.15.2** 已交付） |
+| [SPEC](docs/SPEC.md) | 規格（**0.16.0** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |

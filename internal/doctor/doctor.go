@@ -15,6 +15,7 @@ import (
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 )
@@ -233,6 +234,8 @@ func (c *checker) run(ctx context.Context) {
 	c.checkDesktop(ctx, list)
 	// 10. 區網存取（僅已啟用時）
 	c.checkLAN(ctx)
+	// 11. k3s（僅有 machine 開啟 k8s 時）
+	c.checkK8s(ctx)
 	c.infoChecks()
 }
 
@@ -265,17 +268,7 @@ func (c *checker) checkAPI(ctx context.Context) {
 	}
 	// 分辨：埠沒人聽 vs 有人聽但不是 Docker
 	addr := strings.TrimPrefix(cfg.HTTPBaseURL(), "http://")
-	dial := c.d.Dial
-	if dial == nil {
-		dial = func(ctx context.Context, addr string) error {
-			conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", addr)
-			if err == nil {
-				conn.Close()
-			}
-			return err
-		}
-	}
-	if dial(ctx, addr) == nil {
+	if c.dial()(ctx, addr) == nil {
 		c.add(Result{ID: "api_ping", Title: i18n.T("doctor.api.title"), Level: Fail, Category: "api",
 			Detail: i18n.T("doctor.api.not_docker", cfg.APIEndpoint, err),
 			Hint:   i18n.T("doctor.api.not_docker_hint")})
@@ -284,6 +277,20 @@ func (c *checker) checkAPI(ctx context.Context) {
 	c.add(Result{ID: "api_ping", Title: i18n.T("doctor.api.title"), Level: Fail, Category: "api",
 		Detail: i18n.T("doctor.api.unreachable", cfg.APIEndpoint, err),
 		Hint:   i18n.T("doctor.api.unreachable_hint")})
+}
+
+// dial 回傳 TCP 連線探測（Deps.Dial，未注入則用 net.Dialer）。
+func (c *checker) dial() func(ctx context.Context, addr string) error {
+	if c.d.Dial != nil {
+		return c.d.Dial
+	}
+	return func(ctx context.Context, addr string) error {
+		conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", addr)
+		if err == nil {
+			conn.Close()
+		}
+		return err
+	}
 }
 
 var hostRe = regexp.MustCompile(`tcp://([^"'\s]+)`)
@@ -415,4 +422,85 @@ func parseTasklistCSV(s string) []string {
 		names = append(names, line[1:1+end])
 	}
 	return names
+}
+
+// k3s 記憶體門檻（PoC：單節點待機約 0.6 GB）。
+const (
+	k8sMemNeeded   = int64(1536) << 20 // 尚未執行時，可用記憶體低於此值提示可能不夠
+	k8sMemPressure = int64(512) << 20  // 已執行時，可用記憶體低於此值提示壓力
+)
+
+// checkK8s：k3s 是選用功能，這裡的問題一律只警告（不影響退出碼）。
+func (c *checker) checkK8s(ctx context.Context) {
+	m, ok := c.d.Cfg.K8sMachine()
+	if !ok {
+		return
+	}
+	mgr := &k8s.Manager{WSL: c.d.WSL, Distro: m.Distro}
+	st := mgr.Status(ctx)
+	title := i18n.T("doctor.k8s.title")
+	switch st.State {
+	case k8s.StateReady:
+		c.add(Result{ID: "k8s", Title: title, Level: OK, Detail: i18n.T("doctor.k8s.ready", m.Distro, st.Version, st.NodeName)})
+	case k8s.StateStarting:
+		c.add(Result{ID: "k8s", Title: title, Level: Warn, Detail: i18n.T("doctor.k8s.starting", m.Distro),
+			Hint: i18n.T("doctor.k8s.starting_hint", m.Distro)})
+	case k8s.StateError:
+		c.add(Result{ID: "k8s", Title: title, Level: Warn, Detail: i18n.T("doctor.k8s.failed", m.Distro),
+			Hint: "wsl -d " + m.Distro + " -u root -- journalctl -u k3s -n 50"})
+	case k8s.StateNotInstalled:
+		c.add(Result{ID: "k8s", Title: title, Level: Warn, Detail: i18n.T("doctor.k8s.not_installed", m.Distro),
+			Hint: "wsld k8s on"})
+	case k8s.StateStopped:
+		c.add(Result{ID: "k8s", Title: title, Level: Warn, Detail: i18n.T("doctor.k8s.distro_stopped", m.Distro),
+			Hint: "wsld start"})
+	default:
+		c.add(Result{ID: "k8s", Title: title, Level: Warn, Detail: i18n.T("doctor.k8s.off_but_enabled", m.Distro),
+			Hint: "wsld k8s on"})
+	}
+
+	// node IP 與目前 eth0 不一致＝WSL 重啟後 IP 漂移
+	if st.Ready {
+		if st.IPMismatch {
+			c.add(Result{ID: "k8s_ip", Title: i18n.T("doctor.k8s_ip.title"), Level: Warn,
+				Detail: i18n.T("doctor.k8s_ip.mismatch", st.NodeIP), Hint: "wsld k8s off && wsld k8s on"})
+		} else {
+			c.add(Result{ID: "k8s_ip", Title: i18n.T("doctor.k8s_ip.title"), Level: OK, Detail: st.NodeIP})
+		}
+	}
+
+	// 記憶體：所有 distro 共用同一個 WSL VM
+	if st.State != k8s.StateStopped {
+		if total, avail, err := mgr.Memory(ctx); err == nil {
+			need, label := k8sMemNeeded, "doctor.k8s_memory.low_start"
+			if st.Ready {
+				need, label = k8sMemPressure, "doctor.k8s_memory.low_running"
+			}
+			if avail < need {
+				c.add(Result{ID: "k8s_memory", Title: i18n.T("doctor.k8s_memory.title"), Level: Warn,
+					Detail: i18n.T(label, avail>>20, total>>20), Hint: i18n.T("doctor.k8s_memory.hint")})
+			} else {
+				c.add(Result{ID: "k8s_memory", Title: i18n.T("doctor.k8s_memory.title"), Level: OK,
+					Detail: i18n.T("doctor.k8s_memory.ok", avail>>20, total>>20)})
+			}
+		}
+	}
+
+	// 埠：6443 被別人佔用（k3s 未就緒時）會讓 k3s 起不來；80／443 會與 LoadBalancer Service 衝突
+	dial := c.dial()
+	var busy []string
+	if !st.Ready && dial(ctx, "127.0.0.1:6443") == nil {
+		c.add(Result{ID: "k8s_ports", Title: i18n.T("doctor.k8s_ports.title"), Level: Warn,
+			Detail: i18n.T("doctor.k8s_ports.api_busy"), Hint: i18n.T("doctor.k8s_ports.api_busy_hint")})
+		return
+	}
+	for _, p := range []string{"80", "443"} {
+		if dial(ctx, "127.0.0.1:"+p) == nil {
+			busy = append(busy, p)
+		}
+	}
+	if len(busy) > 0 {
+		c.add(Result{ID: "k8s_ports", Title: i18n.T("doctor.k8s_ports.title"), Level: Info,
+			Detail: i18n.T("doctor.k8s_ports.web_busy", strings.Join(busy, ", "))})
+	}
 }

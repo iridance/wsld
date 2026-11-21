@@ -46,7 +46,12 @@ func openTerminal(distro, user string) error {
 }
 
 func startShell(distro, user string, cols, rows int) (net.Conn, error) {
-	cmd := exec.Command("wsl.exe", WSLShellArgs(distro, user, cols, rows)...)
+	return startProc(WSLShellArgs(distro, user, cols, rows))
+}
+
+// startProc 以 wsl.exe 啟動並把 stdin／stdout／stderr 接成單一連線；連線關閉即終止程序。
+func startProc(args []string) (net.Conn, error) {
+	cmd := exec.Command("wsl.exe", args...)
 	// 即使有 --cd ~，也避免 GUI 進程的 Windows CWD 被拿去翻譯
 	cmd.Dir = os.TempDir()
 	procutil.HideConsole(cmd)
@@ -63,7 +68,7 @@ func startShell(distro, user string, cols, rows int) (net.Conn, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start shell: %w", err)
+		return nil, fmt.Errorf("start wsl: %w", err)
 	}
 	client, server := net.Pipe()
 	go func() {

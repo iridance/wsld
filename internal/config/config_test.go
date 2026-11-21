@@ -449,3 +449,98 @@ func TestLANAccessRoundTrip(t *testing.T) {
 		t.Fatalf("false must be omitted:\n%s", b)
 	}
 }
+
+func TestK8sRoundTripAndOmitWhenOff(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", K8s: true})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	c.EnsureActive(c.Machines[0])
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if strings.Count(string(raw), "k8s = true") != 1 {
+		t.Fatalf("expected exactly one k8s = true:\n%s", raw)
+	}
+	if strings.Contains(string(raw), "k8s = false") {
+		t.Fatalf("k8s=false must be omitted:\n%s", raw)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := got.K8sMachine()
+	if !ok || m.Distro != "A" {
+		t.Fatalf("K8sMachine = %+v, %v", m, ok)
+	}
+}
+
+func TestValidateRejectsTwoK8sMachines(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", K8s: true})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751", K8s: true})
+	c.EnsureActive(c.Machines[0])
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "k8s") {
+		t.Fatalf("want k8s conflict error, got %v", err)
+	}
+}
+
+func TestK8sMachineNoneEnabled(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	if _, ok := c.K8sMachine(); ok {
+		t.Fatal("no machine has k8s enabled")
+	}
+}
+
+func TestSetK8sMovesNothingAndRejectsSecond(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", K8s: true})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	c.EnsureActive(c.Machines[0])
+	if err := c.SetK8s("B", true); err == nil || !strings.Contains(err.Error(), "A") {
+		t.Fatalf("expected conflict naming A, got %v", err)
+	}
+	if err := c.SetK8s("A", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetK8s("b", true); err != nil {
+		t.Fatalf("case-insensitive enable after A off: %v", err)
+	}
+	if m, _ := c.K8sMachine(); m.Distro != "B" {
+		t.Fatalf("K8sMachine = %+v", m)
+	}
+	if err := c.SetK8s("nope", true); err == nil {
+		t.Fatal("unknown machine must error")
+	}
+}
+
+// 實機：wsld start → Init 以「新的」Machine（K8s=false）呼叫 UpsertMachine，覆寫掉既有 profile，
+// 使 k8s = true 被悄悄清掉、k3s 不再恢復。K8s 旗標只能經 SetK8s 改變。
+func TestUpsertMachinePreservesK8sFlag(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	if err := c.SetK8s("A", true); err != nil {
+		t.Fatal(err)
+	}
+	c.UpsertMachine(Machine{Distro: "a", User: "u2", APIEndpoint: "tcp://127.0.0.1:23760"}) // Init 重寫 profile
+	m, ok := c.FindMachine("A")
+	if !ok || !m.K8s || m.User != "u2" || m.APIEndpoint != "tcp://127.0.0.1:23760" {
+		t.Fatalf("profile fields must update but k8s must survive: %+v", m)
+	}
+	if got, ok := c.K8sMachine(); !ok || !strings.EqualFold(got.Distro, "A") {
+		t.Fatalf("K8sMachine = %+v %v", got, ok)
+	}
+}
+
+func TestEnsureActivePreservesK8sFlag(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	_ = c.SetK8s("A", true)
+	c.EnsureActive(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	if m, _ := c.FindMachine("A"); !m.K8s {
+		t.Fatal("EnsureActive (used by Init) dropped the k8s flag")
+	}
+}

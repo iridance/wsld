@@ -77,6 +77,30 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
     4. 等 Windows 釋放 API 埠（最多約 2 分鐘），再啟動引擎。
   - 手動回復：以系統管理員執行 `Remove-NetFirewallHyperVRule -Name wsld-lan-tcp,wsld-lan-udp`，刪掉 `.wslconfig` 的 `networkingMode` 行，再 `wsl --shutdown`。
 
+## 本機 Kubernetes（k3s）
+
+單節點 k3s 與該 distro 的 dockerd 共用映像檔：`docker build -t app:dev .` 之後，Deployment 以 `imagePullPolicy: Never`（或 `IfNotPresent` 且不用 `:latest`）直接使用，不必推到 registry。
+
+**啟用**（預設關；需要約 0.6 GB 以上記憶體，WSL 只有 3 GB 時請先調高 `%UserProfile%\.wslconfig` 的 `memory=`）：
+
+```powershell
+wsld k8s on          # 首次會下載並安裝 k3s（約 70 MB），啟動並把 kubeconfig 合併進 ~\.kube\config
+kubectl --context wsld-Ubuntu-26.04 get nodes
+wsld k8s status      # 或 wsld k8s status --json
+```
+
+GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看叢集資訊、Pods／Deployments／Services，並對 Pod 看 logs／開終端／刪除，對 Deployment 調整副本數或 rollout restart。
+
+- **只有一台 machine 能開**：所有 WSL2 distro 共用同一個網路（6443、pod／service 網段、node 名稱＝Windows 主機名）。第二台 `wsld k8s on` 會被拒絕並指出目前開啟者；GUI 的「移到 …」會先停掉原本那台再啟動新的（兩邊是各自獨立的叢集，工作負載不會搬移）。
+- **kubeconfig 不會覆蓋你的設定**：以 context `wsld-<distro>` 合併進現有檔案，保留其他 context、註解與 current-context（原本沒有 current-context 才採用 wsld 的）。第一次修改前會備份為 `~\.kube\config.wsld-bak`；現有檔案無法解析時一律不動。
+- **重開機／`wsl --shutdown` 之後**：`wsld start`（或 GUI 啟動引擎）會一併啟動 k3s。k3s 必須在 docker 之後啟動（wsld 已在 `k3s.service` 加 drop-in）；若手動改過 unit，開機後 node 一直 NotReady 通常就是這個原因，`systemctl restart k3s` 可恢復。
+- **node IP**：實測 WSL 重啟後 eth0 位址未變；若日後變了，`wsld doctor` 與 `wsld k8s status` 會警告，執行 `wsld k8s off && wsld k8s on` 即可。Windows 側一律連 `127.0.0.1:6443`，不受影響。
+- **停止**：`wsld k8s off` 會跑 `k3s-killall.sh`，連同 pod 容器一起停掉並釋放記憶體與 6443（`--docker` 時 pod 是 dockerd 的容器，單停 service 不會停它們）。Containers 頁把這些 `k8s_*` 容器摺成一個預設收合的群組；請交給 k3s 管理，不要手動刪。
+- **重置**：`wsld k8s reset`（需確認或 `--yes`）清除所有 pod／volume／secret，回到乾淨叢集並重新匯出 kubeconfig（憑證已更新）。**移除**：`wsld k8s uninstall`（執行 `k3s-uninstall.sh`）。
+- **與 Docker Desktop 的 Kubernetes 並存**：Docker Desktop 的 k8s 同樣使用 6443；兩者不要同時開（`wsld doctor` 會提示 6443 被占用）。
+- **埠**：Traefik 已停用，不會搶 80／443。NodePort 服務可在 Windows 以 `http://localhost:<nodePort>` 開啟（Services 分頁的地球鈕）；不轉發到區網。
+- 疑難：`wsl -d <distro> -u root -- journalctl -u k3s -n 50`；`wsld doctor` 會檢查 k3s 就緒、記憶體、node IP 與埠。
+
 ## 容器「停止」要等 10 秒？
 
 `docker stop` 先送 SIGTERM，等 **10 秒寬限期**（`t`）沒退出才 SIGKILL。容器內 PID 1 若不處理 SIGTERM（典型：`sh -c 'while true; do …; done'`、某些沒用 `exec` 啟動主程式的 entrypoint），就會撐滿 10 秒。nginx／redis／postgres 等正常處理訊號的映像約 0.1–0.5 秒。
@@ -130,4 +154,5 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 - **GUI**：Theme（radio：Light／Dark／System）；Settings 在側欄；header 無 tcp 路徑。「開機自啟動」只起 Tray，不自動啟動引擎。
 - **自動更新（Extra）**：無；以發布頁下載新版覆蓋。
 - **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。要讓內網連到**容器**，請開啟區網存取（wsld-gui 轉發），不要對外開放 API。
+- **Kubernetes（k3s）**：單節點、同一時間一台 machine、不做 Ingress／NodePort 區網轉發／多叢集；Windows 端需自行安裝 `kubectl`（wsld 只合併 kubeconfig）。
 - **區網存取只在 wsld-gui 執行時有效**，且只轉發 TCP；容器看到的來源 IP 是本機。

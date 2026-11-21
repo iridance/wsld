@@ -14,3 +14,4 @@ active = "Ubuntu-26.04"
 distro = "Ubuntu-26.04"
 user = "irice"
 api_endpoint = "tcp://127.0.0.1:23750"
+# k8s = true             # 此 machine 開啟單節點 k3s（預設關；全部 machine 最多一台；wsld k8s on 會幫你寫）

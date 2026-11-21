@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.15.2（git tag `v0.15.2`）  
-狀態：**0.15.2 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.16.0（git tag `v0.16.0`）  
+狀態：**0.16.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-20
 
 ## 1. 問題與目標
@@ -45,7 +45,7 @@
 ### 1.5 非目標（0.5）
 
 - WinUI（Phase 6）；Setup 一鍵、arm64／npiperelay／自動更新／專用隔離 distro 旗標（Roadmap Extra）
-- Kubernetes、Compose 視覺 IDE
+- 完整 Kubernetes 發行版（kubeadm／minikube／kind）、多節點／多叢集、YAML 編輯器；Compose 視覺 IDE（單節點 k3s 自 0.16.0 起支援，見 §4.6）
 - 以 `C:\` 為一等公民專案路徑
 - SSH／暴露 `0.0.0.0` 上的 Docker API
 - 依賴 Docker Desktop
@@ -165,6 +165,19 @@ wsld/
   frontend/               # Wails UI（若適用）
 ```
 
+### 4.6 本機 Kubernetes（k3s）
+
+- 目標：每台 machine 可**選擇開啟**單節點 k3s（預設關），與該 distro 的 dockerd 共用映像檔——`docker build` 完 `imagePullPolicy: Never` 即可部署，不必架 registry；Windows 側 `kubectl` 經 `127.0.0.1:6443` 連線。
+- 做法：
+  - 安裝：`03-k3s.sh install`（內嵌 `scripts.K3sBundle()`）以 `--docker --disable traefik --write-kubeconfig-mode 644` 裝 k3s（k3s 內建 cri-dockerd，node 的 runtime 為 `docker://…`）。k3s.service 加 drop-in `After=docker.service`／`Requires=docker.service`：開機時 k3s 若早於 dockerd，agent 不會啟動 kubelet（node 永遠 NotReady）。unit 預設 disable，啟停由 wsld 管（`systemctl start k3s`）。
+  - 單一叢集：所有 WSL2 distro 共用同一個 VM 網路命名空間（6443、flannel CIDR、kube-proxy 規則、node 名稱＝Windows 主機名），所以 config 中**同一時間只能有一台 machine `k8s = true`**；第二台被拒絕並指出目前開啟者（GUI 可一鍵移動）。
+  - 停止：`k3s-killall.sh`（`--docker` 時 pod 容器不會隨 service 停止）。重置：停止後清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 再啟動。移除：`k3s-uninstall.sh`。
+  - kubeconfig：把 k3s.yaml 以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔）；server 固定 `https://127.0.0.1:6443`（憑證 SAN 含 127.0.0.1）。
+  - 資源管理經 `wsl.exe … k3s kubectl …`（root）；不引入 client-go。使用者輸入進引數前驗證為 DNS 標籤，避免被當成旗標。
+  - 重開機：`wsld start`／GUI 啟動引擎時，若 primary 為 `k8s = true` 則一併啟動 k3s。實測 `wsl --shutdown` 後 node IP 未變、k3s 自動恢復；k3s 每次啟動重新偵測 node IP，Windows 側一律走 127.0.0.1，故不預先綁固定位址，改由 doctor 偵測 node IP 與目前 eth0 不一致。
+- 資源：單節點待機約 0.6 GB（k3s）＋dockerd；doctor 於可用記憶體不足時警告。
+- 不做：Ingress（Traefik 停用）、NodePort／LoadBalancer 的區網轉發、多節點。
+
 ### 5.2 Config（`%APPDATA%\wsld\config.toml`）
 
 基底（扁平，仍可讀；0.5 載入時自動遷移）：
@@ -180,7 +193,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 # lang = "en"
 ```
 
-0.5 形狀：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 `[[machines]]`（各含 `distro`／`user`／`api_endpoint`）。舊扁平格式載入時自動遷移。範例見 `config.example.toml`。
+0.5 形狀：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 `[[machines]]`（各含 `distro`／`user`／`api_endpoint`，以及選填 `k8s = true`＝該 machine 開啟 k3s，全部 machine 最多一台，見 §4.6）。舊扁平格式載入時自動遷移。範例見 `config.example.toml`。
 
 ### 5.3 Bootstrap
 
@@ -192,6 +205,8 @@ api_endpoint = "tcp://127.0.0.1:23750"
 4. `systemctl enable --now docker`
 5. enable linger
 6. `docker info` 成功
+
+`03-k3s.sh install|uninstall`（選用，§4.6）：安裝／移除單節點 k3s，由 `wsld k8s` 觸發，不在 `init` 預設執行。
 
 `01-enable-wsl.ps1`（Admin）：啟用 WSL2 功能、update、必要時裝 Ubuntu、重開機提示。
 
@@ -210,6 +225,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | `start-ct`／`stop-ct` | 啟停容器 |
 | `doctor` | 見 §5.6 |
 | `exec`（可選對齊 GUI） | 進入容器 shell（策略同 GUI） |
+| `k8s on\|off\|status\|reset\|kubeconfig\|uninstall` | 單節點 k3s（§4.6）：`on` 未安裝則先安裝、啟動、合併 kubeconfig，成功後才寫 `k8s = true`；`off` 停止（`k3s-killall.sh`）並清旗標；`status [--json]`；`reset`／`uninstall` 需 `--yes` 或互動確認；`--machine` 指定 machine |
 | `lan on\|off\|status\|restore-nat` | 區網存取（§4.5）：on／off 寫入 `lan_access`（由 wsld-gui 轉發）；`status --json`；`restore-nat [--yes]` 還原 0.9.0 的 mirrored 設定並重啟 WSL |
 
 **退出碼**：
@@ -234,6 +250,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
 | Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
 | Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；未授權防火牆時先顯示說明對話框；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列常駐地球按鈕，以系統瀏覽器開啟區網位址（區網存取關閉或無轉發時開 `http://localhost:<埠>`；多埠跳選單），Info 以文字列出 |
+| Kubernetes | 頂部導覽（Machines 旁）：一鍵啟動／停止（背景作業＋輪詢，首次含安裝）、重置、匯出 kubeconfig、叢集資訊卡（狀態、版本、node、API、context、記憶體）、另一台持有時一鍵移動；namespace 下拉＋ Pods（logs 串流、exec 終端、刪除）／Deployments（scale、rollout restart、刪除）／Services（NodePort 開瀏覽器、刪除）；Containers 頁把 `k8s_*` 容器摺成預設收合的群組（§4.6） |
 | Logs | 預設 100 行；Live 預設關 |
 | Terminal | 容器 Exec；Machines 亦可開 distro shell（底部 panel） |
 | 破壞性操作 | 一律確認；unregister 需輸入名稱；Remove 容器可含 running（會停止） |
@@ -253,6 +270,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 - Docker Desktop 是否在跑（建議勿雙引擎混用）
 - API 埠占用／config 中的 endpoint 說明
 - 提醒：repo 應放在 WSL `$HOME`，非 `C:\`
+- k3s（僅有 machine `k8s = true` 時）：就緒／未就緒／失敗、node IP 漂移、記憶體、6443 被占用、80／443 提示；一律只警告，不影響退出碼
 - 區網存取：開啟時列出（Info）；偵測到 0.9.0 遺留的 mirrored 模式時 Warn（提示 `wsld lan restore-nat`）；不影響退出碼
 
 ### 5.7 測試

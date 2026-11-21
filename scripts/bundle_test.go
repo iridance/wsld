@@ -130,3 +130,52 @@ func TestBootstrapBundleHelpRunsWithoutLib(t *testing.T) {
 		t.Fatalf("--help: %v\n%s", err, out)
 	}
 }
+
+func TestK3sBundleIsSelfContainedAndParses(t *testing.T) {
+	b := K3sBundle()
+	s := string(b)
+	if strings.Count(s, "#!/usr/bin/env bash") != 1 || !strings.HasPrefix(s, "#!/usr/bin/env bash\n") {
+		t.Fatal("bundle must have exactly one leading shebang")
+	}
+	if strings.Contains(s, "SCRIPT_DIR") || strings.Contains(s, "\n. \"$") {
+		t.Fatal("bundle must not source external lib")
+	}
+	for _, want := range []string{"wsld_k3s_install_exec()", "wsld_render_k3s_dropin()", "install_k3s()", "uninstall_k3s()"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("bundle missing %s", want)
+		}
+	}
+	if strings.Index(s, "wsld_k3s_install_exec()") > strings.Index(s, `case "${1:-}" in`) {
+		t.Fatal("lib must precede main script")
+	}
+	cmd := exec.Command("bash", "-n")
+	cmd.Stdin = bytes.NewReader(b)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n: %v\n%s", err, out)
+	}
+}
+
+func TestK3sBundleUsageErrorWithoutArgs(t *testing.T) {
+	cmd := exec.Command("bash", "-s", "--")
+	cmd.Stdin = bytes.NewReader(K3sBundle())
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit without args:\n%s", out)
+	}
+}
+
+// 回歸：`curl … | sh - </dev/null` 會讓 sh 的 stdin 被 /dev/null 取代（管線被蓋掉），
+// 安裝腳本讀到空內容、curl 以 23 結束——實機 wsld k8s on 首次安裝曾因此失敗。
+func TestK3sInstallDoesNotRedirectStdinOfPipedInstaller(t *testing.T) {
+	for _, line := range strings.Split(string(K3sBundle()), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue // 註解會引用這個反例
+		}
+		if strings.Contains(line, "|") && strings.Contains(line, "sh -") && strings.Contains(line, "</dev/null") {
+			t.Fatalf("installer pipe must not redirect sh stdin: %q", line)
+		}
+	}
+	if !strings.Contains(string(K3sBundle()), "curl -sfL -o") {
+		t.Fatal("installer should be downloaded to a file before running")
+	}
+}
