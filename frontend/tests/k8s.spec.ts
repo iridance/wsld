@@ -246,3 +246,27 @@ test("Containers: no k3s containers means no k3s group", async ({ page, request 
   await open(page);
   await expect(group(page, "k8s:k3s")).toHaveCount(0);
 });
+
+test("the cluster card is a standalone card above the list panel; no empty panel when there is nothing to list", async ({ page }) => {
+  await goK8s(page);
+  const card = page.getByTestId("k8s-card");
+  await expect(card).toBeVisible();
+  expect(await card.evaluate((e) => !!e.closest('[data-testid="kubernetes-list"]'))).toBe(false);
+  await expect(page.getByTestId("kubernetes-list")).toBeHidden(); // 未安裝：沒有資源可列
+  await startCluster(page);
+  await expect(page.getByTestId("kubernetes-list")).toBeVisible();
+  const c = (await card.boundingBox())!;
+  const l = (await page.getByTestId("kubernetes-list").boundingBox())!;
+  expect(c.y + c.height).toBeLessThanOrEqual(l.y); // 卡片在列表面板之上、不重疊
+});
+
+test("top nav never scrolls: all seven tabs stay reachable at common window widths", async ({ page }) => {
+  for (const w of [1000, 1280, 1366, 1440, 1920]) {
+    await page.setViewportSize({ width: w, height: 800 });
+    await goK8s(page);
+    const m = await page.getByTestId("top-nav").evaluate((n) => ({ client: n.clientWidth, scroll: n.scrollWidth, left: n.scrollLeft }));
+    expect(m.scroll, `nav overflows at ${w}px`).toBeLessThanOrEqual(m.client);
+    expect(m.left).toBe(0);
+    await expect(page.getByTestId("nav-containers")).toBeInViewport();
+  }
+});

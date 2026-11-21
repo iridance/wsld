@@ -170,9 +170,13 @@ nav.tabs button.nav[aria-current="page"]::after {
   content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--accent);
 }
 nav.tabs button.nav { flex: none; }
-@media (max-width: 1100px) {
+/* 七個分頁加標籤約需 1400px（品牌＋發行版晶片＋右側按鈕）；再窄就只剩圖示，避免導覽橫向捲動把前面的分頁捲出畫面 */
+@media (max-width: 1400px) {
   nav.tabs button.nav { padding: 0 12px; }
-  nav.tabs button.nav .label, .brand-ver { display: none; }
+  nav.tabs button.nav .label { display: none; }
+}
+@media (max-width: 1100px) {
+  .brand-ver { display: none; }
 }
 
 /* 右側：發行版晶片、Start engine、資料夾／終端、Settings 齒輪 */
@@ -689,19 +693,23 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 /* ---- Kubernetes 頁 ---- */
 .state.failed { color: var(--bad); }
 .state.failed::before { background: currentColor; }
+.k8s-top { flex: none; }
+.k8s-top:empty { display: none; }
 .k8s-card {
   display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 16px 20px; box-shadow: var(--shadow); margin-bottom: 16px;
+  padding: 16px 20px; box-shadow: var(--shadow);
 }
 .k8s-head { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 15px; }
-.k8s-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 20px; margin: 0; width: 100%; font-size: 13px; }
-.k8s-fields dt { color: var(--muted); }
+.k8s-head .state { text-transform: none; }
+.k8s-fields { display: flex; flex-wrap: wrap; gap: 10px 36px; margin: 0; width: 100%; font-size: 13px; }
+.k8s-f { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 100%; }
+.k8s-fields dt { color: var(--muted); font-size: 12px; }
 .k8s-fields dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .k8s-hint { margin: 0; color: var(--muted); font-size: 13px; max-width: 72ch; }
 .k8s-hint.bad { color: var(--bad); }
 .k8s-hint.warn { color: var(--warn); }
-.k8s-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.k8s-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px 12px 4px; }
 td.actions.scale { white-space: nowrap; }
-td.actions .tf.replicas { width: 84px; min-width: 0; margin-right: 4px; vertical-align: middle; }
+td.actions .tf.replicas { display: inline-flex; width: 84px; min-width: 0; margin-right: 4px; vertical-align: middle; }
 td.actions .tf.replicas input { width: 100%; text-align: right; }

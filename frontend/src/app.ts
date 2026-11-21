@@ -1094,6 +1094,8 @@ export class App {
     } else if (this.st.view === "machines" || this.st.view === "kubernetes") {
       main.replaceChildren(
         pageBar(toolbar()),
+        // Kubernetes：叢集資訊卡獨立在列表面板之外（自己的卡片），資源列表才放進 .list
+        ...(this.st.view === "kubernetes" ? [el("div", { class: "k8s-top", "data-testid": "k8s-top" })] : []),
         el("div", { class: "list", "data-testid": `${this.st.view}-list` }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
@@ -2819,8 +2821,9 @@ export class App {
 
   private renderKubernetes(): void {
     const list = this.root.querySelector<HTMLElement>('[data-testid="kubernetes-list"]');
+    const top = this.root.querySelector<HTMLElement>('[data-testid="k8s-top"]');
     const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
-    if (!list || !bar) return;
+    if (!list || !top || !bar) return;
     // 使用者正在操作清單內的輸入（replicas 欄位、namespace 下拉展開）時不重建，避免每次輪詢吃掉輸入
     const ae = document.activeElement;
     if (ae && list.contains(ae) && (ae.tagName === "INPUT" || ae.getAttribute("aria-expanded") === "true")) return;
@@ -2848,12 +2851,20 @@ export class App {
     bar.replaceChildren(el("span", { class: "spacer" }), kube, reset, toggle);
 
     if (!k) {
+      top.replaceChildren();
+      list.style.display = "";
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.loading") }));
       return;
     }
-    const kids: HTMLElement[] = [this.k8sCard(k)];
-    if (k.enabled && state === "ready" && !op) kids.push(this.k8sResources());
-    list.replaceChildren(...kids);
+    top.replaceChildren(this.k8sCard(k));
+    // 沒有資源可列時（未安裝／已關閉／啟動中）不顯示空白的列表面板
+    if (k.enabled && state === "ready" && !op) {
+      list.style.display = "";
+      list.replaceChildren(this.k8sResources());
+    } else {
+      list.style.display = "none";
+      list.replaceChildren();
+    }
   }
 
   private async k8sExportKubeconfig(): Promise<void> {
@@ -2883,7 +2894,7 @@ export class App {
     }
     const grid = el("dl", { class: "k8s-fields", "data-testid": "k8s-fields" });
     for (const [key, label, value] of fields) {
-      grid.append(el("dt", { text: label }), el("dd", { "data-testid": `k8s-f-${key}`, class: key === "machine" ? "" : "mono", text: value, title: value }));
+      grid.append(el("div", { class: "k8s-f" }, el("dt", { text: label }), el("dd", { "data-testid": `k8s-f-${key}`, class: key === "machine" ? "" : "mono", text: value, title: value })));
     }
     const card = el("section", { class: "k8s-card", "data-testid": "k8s-card" }, el("div", { class: "k8s-head" }, badge), grid);
 
@@ -3608,28 +3619,28 @@ const NETWORK_COLS: Col[] = [
 
 const K8S_POD_COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 260, min: 120, resizable: true },
-  { key: "namespace", label: "gui.col.namespace", def: 110, min: 70, resizable: true },
-  { key: "status", label: "gui.col.state", def: 130, min: 90, resizable: true },
-  { key: "ready", label: "gui.col.ready", def: 60, min: 50, resizable: true },
-  { key: "restarts", label: "gui.col.restarts", def: 80, min: 60, resizable: true },
+  { key: "namespace", label: "gui.col.namespace", def: 130, min: 90, resizable: true },
+  { key: "status", label: "gui.col.state", def: 150, min: 110, resizable: true },
+  { key: "ready", label: "gui.col.ready", def: 80, min: 64, resizable: true },
+  { key: "restarts", label: "gui.col.restarts", def: 100, min: 84, resizable: true },
   { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
   { key: "actions", label: "gui.col.actions", def: 130, min: 100, resizable: false },
 ];
 
 const K8S_DEPLOY_COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 240, min: 120, resizable: true },
-  { key: "namespace", label: "gui.col.namespace", def: 110, min: 70, resizable: true },
-  { key: "ready", label: "gui.col.ready", def: 60, min: 50, resizable: true },
-  { key: "uptodate", label: "gui.col.uptodate", def: 90, min: 60, resizable: true },
-  { key: "available", label: "gui.col.available", def: 90, min: 60, resizable: true },
+  { key: "namespace", label: "gui.col.namespace", def: 130, min: 90, resizable: true },
+  { key: "ready", label: "gui.col.ready", def: 80, min: 64, resizable: true },
+  { key: "uptodate", label: "gui.col.uptodate", def: 120, min: 100, resizable: true },
+  { key: "available", label: "gui.col.available", def: 110, min: 90, resizable: true },
   { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
-  { key: "actions", label: "gui.col.actions", def: 230, min: 190, resizable: false },
+  { key: "actions", label: "gui.col.actions", def: 250, min: 210, resizable: false },
 ];
 
 const K8S_SERVICE_COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 200, min: 100, resizable: true },
-  { key: "namespace", label: "gui.col.namespace", def: 110, min: 70, resizable: true },
-  { key: "type", label: "gui.col.type", def: 100, min: 70, resizable: true },
+  { key: "namespace", label: "gui.col.namespace", def: 130, min: 90, resizable: true },
+  { key: "type", label: "gui.col.type", def: 110, min: 80, resizable: true },
   { key: "ip", label: "gui.col.cluster_ip", def: 120, min: 90, resizable: true },
   { key: "ports", label: "gui.col.ports", def: 160, min: 90, resizable: true },
   { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },

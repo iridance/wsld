@@ -85,8 +85,11 @@ test("narrow window: tabs collapse to icons but keep their names", async ({ page
   const tab = page.getByTestId("nav-images");
   await expect(tab.locator(".label")).toBeHidden();
   await expect(tab).toHaveAttribute("title", "Images");
-  await page.setViewportSize({ width: 1280, height: 720 });
+  // 七個分頁加標籤約需 1400px；更窄就只剩圖示（否則導覽會橫向捲動，把前面的分頁捲出畫面）
+  await page.setViewportSize({ width: 1500, height: 720 });
   await expect(tab.locator(".label")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(tab.locator(".label")).toBeHidden();
 });
 
 test("top bar shows the brand mark and the active distro with engine state; clicking it opens Machines", async ({ page }) => {
