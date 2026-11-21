@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iridance/wsld/internal/i18n"
@@ -148,16 +149,31 @@ func (m *Manager) Status(ctx context.Context) Status {
 		return st
 	}
 	st.Ready = true
-	if out, err := m.root(ctx, nil, "k3s", "kubectl", "get", "nodes", "-o", "json"); err == nil {
-		if n, err := ParseNode(out); err == nil {
+	// 三個查詢互不相依，每個都是一次 wsl.exe：並行以縮短輪詢耗時。
+	var wg sync.WaitGroup
+	var nodeOut, memOut, ipOut string
+	var nodeErr, memErr, ipErr error
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		nodeOut, nodeErr = m.root(ctx, nil, "k3s", "kubectl", "get", "nodes", "-o", "json")
+	}()
+	go func() {
+		defer wg.Done()
+		memOut, memErr = m.root(ctx, nil, "systemctl", "show", "k3s", "-p", "MemoryCurrent", "--value")
+	}()
+	go func() { defer wg.Done(); ipOut, ipErr = m.root(ctx, nil, "hostname", "-I") }()
+	wg.Wait()
+	if nodeErr == nil {
+		if n, err := ParseNode(nodeOut); err == nil {
 			st.NodeName, st.NodeReady, st.Version, st.NodeIP = n.Name, n.Ready, n.Version, n.IP
 		}
 	}
-	if out, err := m.root(ctx, nil, "systemctl", "show", "k3s", "-p", "MemoryCurrent", "--value"); err == nil {
-		st.MemoryBytes = parseMemory(out)
+	if memErr == nil {
+		st.MemoryBytes = parseMemory(memOut)
 	}
-	if out, err := m.root(ctx, nil, "hostname", "-I"); err == nil {
-		if eth := strings.Fields(out); len(eth) > 0 && st.NodeIP != "" && eth[0] != st.NodeIP {
+	if ipErr == nil {
+		if eth := strings.Fields(ipOut); len(eth) > 0 && st.NodeIP != "" && eth[0] != st.NodeIP {
 			st.IPMismatch = true
 		}
 	}

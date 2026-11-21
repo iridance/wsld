@@ -458,6 +458,9 @@ export class App {
     const gen = ++this.refreshGen;
     const { signal } = ac;
     try {
+      // Kubernetes 頁不依賴 Docker 引擎狀態：與 /api/k8s 並行，不讓兩段 wsl.exe 查詢串行相加
+      const k8sLoad = this.st.view === "kubernetes" ? this.loadKubernetes(signal) : undefined;
+      k8sLoad?.catch(() => {}); // 錯誤留給下面 await 處理，避免 status 先拋錯時成為未處理的 rejection
       const status = await api.status(signal);
       if (signal.aborted || gen !== this.refreshGen) return;
       this.st.status = status;
@@ -465,7 +468,7 @@ export class App {
       if (this.st.view === "machines" || this.st.view === "settings" || this.st.view === "kubernetes") {
         // WSL 清單／設定／k3s 不依賴 Docker 引擎
         if (this.st.view === "machines") this.st.machines = await api.machines(signal);
-        if (this.st.view === "kubernetes") await this.loadKubernetes(signal);
+        if (this.st.view === "kubernetes") await (k8sLoad ?? this.loadKubernetes(signal));
         if (signal.aborted || gen !== this.refreshGen) return;
         this.st.lastError = this.st.starting ? undefined : this.st.bringUpError;
       } else if (status.ready) {
@@ -2773,10 +2776,10 @@ export class App {
       return;
     }
     try {
-      this.st.k8sNamespaces = await api.k8sNamespaces(signal);
+      // 卡片與架構圖都需要全部 namespace 的資源；側欄的表格再依 namespace 過濾。
+      // 每個請求都是一次 wsl.exe + kubectl，全部並行（namespace 清單不依賴其他結果）。
+      [this.st.k8sNamespaces, this.st.k8sPods, this.st.k8sDeployments, this.st.k8sServices, this.st.k8sExtras] = await Promise.all([api.k8sNamespaces(signal), api.k8sPods("", signal), api.k8sDeployments("", signal), api.k8sServices("", signal), api.k8sExtras("", signal)]);
       if (this.st.k8sNs && !this.st.k8sNamespaces.includes(this.st.k8sNs)) this.st.k8sNs = "";
-      // 卡片與架構圖都需要全部 namespace 的資源；側欄的表格再依 namespace 過濾
-      [this.st.k8sPods, this.st.k8sDeployments, this.st.k8sServices, this.st.k8sExtras] = await Promise.all([api.k8sPods("", signal), api.k8sDeployments("", signal), api.k8sServices("", signal), api.k8sExtras("", signal)]);
       if (this.st.k8sDetail) {
         const d = this.st.k8sDetail;
         this.st.k8sDetailData = await api.k8sDeploymentDetail(d.ns, d.name, signal).catch(() => this.st.k8sDetailData);

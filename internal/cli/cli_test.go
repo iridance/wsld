@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 // ---- fakes -----------------------------------------------------------------
 
 type fakeRunner struct {
+	mu     sync.Mutex // k8s Status 會並行查詢
 	resp   map[string]string
 	errs   map[string]error
 	calls  []string
@@ -26,7 +28,9 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(_ context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
 	key := strings.Join(args, " ")
+	f.mu.Lock()
 	f.calls = append(f.calls, key)
+	f.mu.Unlock()
 	if f.onCall != nil {
 		f.onCall(key)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 // ---- fake wsl.Runner ------------------------------------------------------
 
 type fakeRunner struct {
+	mu    sync.Mutex // Status 會並行查詢
 	calls []string
 	stdin map[string]string
 	// resp：args 串接 → 依序回應（耗盡後重複最後一個）；沒有 key 視為未預期並回錯。
@@ -31,6 +33,8 @@ func (f *fakeRunner) on(args string, rs ...resp) { f.resp[args] = rs }
 
 func (f *fakeRunner) Run(_ context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
 	key := strings.Join(args, " ")
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, key)
 	if stdin != nil {
 		b, _ := io.ReadAll(stdin)
