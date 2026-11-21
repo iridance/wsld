@@ -252,7 +252,7 @@ Extra ≠ 0.5／v2.0 完成條件
 #### 完成定義
 
 - [x] PoC 關卡全過並記錄結論
-- [x] `wsld k8s on` 啟動並匯出 kubeconfig、`off` 後釋放（`k3s-killall.sh`）；單元／整合測試涵蓋
+- [x] `wsld k8s on` 啟動（kubeconfig 不自動匯出，手動 `k8s kubeconfig`）、`off` 後釋放（`k3s-killall.sh`）；單元／整合測試涵蓋
 - [x] `wsld start`／GUI 啟動引擎可恢復 k3s（若該 machine 已開）
 - [x] 第二台 machine 嘗試開啟時明確拒絕並指出目前開啟者（CLI／GUI／config 驗證）
 - [x] Kubeconfig 合併不破壞既有 context；`reset` 回到乾淨叢集

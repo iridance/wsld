@@ -173,7 +173,7 @@ wsld/
   - 安裝：`03-k3s.sh install`（內嵌 `scripts.K3sBundle()`）以 `--docker --disable traefik --write-kubeconfig-mode 644` 裝 k3s（k3s 內建 cri-dockerd，node 的 runtime 為 `docker://…`）。k3s.service 加 drop-in `After=docker.service`／`Requires=docker.service`：開機時 k3s 若早於 dockerd，agent 不會啟動 kubelet（node 永遠 NotReady）。unit 預設 disable，啟停由 wsld 管（`systemctl start k3s`）。
   - 單一叢集：所有 WSL2 distro 共用同一個 VM 網路命名空間（6443、flannel CIDR、kube-proxy 規則、node 名稱＝Windows 主機名），所以 config 中**同一時間只能有一台 machine `k8s = true`**；第二台被拒絕並指出目前開啟者（GUI 可一鍵移動）。
   - 停止：`k3s-killall.sh`（`--docker` 時 pod 容器不會隨 service 停止）。重置：停止後清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 再啟動。移除：`k3s-uninstall.sh`。
-  - kubeconfig：把 k3s.yaml 以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔）；server 固定 `https://127.0.0.1:6443`（憑證 SAN 含 127.0.0.1）。
+  - kubeconfig：機器內 k3s.yaml 為正本；啟動不自動匯出，使用者手動匯出時才把它以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔）；server 固定 `https://127.0.0.1:6443`（憑證 SAN 含 127.0.0.1）。
   - 資源管理經 `wsl.exe … k3s kubectl …`（root）；不引入 client-go。使用者輸入進引數前驗證為 DNS 標籤，避免被當成旗標。
   - 重開機：`wsld start`／GUI 啟動引擎時，若 primary 為 `k8s = true` 則一併啟動 k3s。實測 `wsl --shutdown` 後 node IP 未變、k3s 自動恢復；k3s 每次啟動重新偵測 node IP，Windows 側一律走 127.0.0.1，故不預先綁固定位址，改由 doctor 偵測 node IP 與目前 eth0 不一致。
 - 資源：單節點待機約 0.6 GB（k3s）＋dockerd；doctor 於可用記憶體不足時警告。
@@ -228,7 +228,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | `start-ct`／`stop-ct` | 啟停容器 |
 | `doctor` | 見 §5.6 |
 | `exec`（可選對齊 GUI） | 進入容器 shell（策略同 GUI） |
-| `k8s on\|off\|status\|reset\|kubeconfig\|uninstall` | 單節點 k3s（§4.6）：`on` 未安裝則先安裝、啟動、合併 kubeconfig，成功後才寫 `k8s = true`；`off` 停止（`k3s-killall.sh`）並清旗標；`status [--json]`；`reset`／`uninstall` 需 `--yes` 或互動確認；`--machine` 指定 machine |
+| `k8s on\|off\|status\|reset\|kubeconfig\|uninstall` | 單節點 k3s（§4.6）：`on` 未安裝則先安裝、啟動（不自動寫 Windows kubeconfig，手動 `kubeconfig` 匯出），成功後才寫 `k8s = true`；`off` 停止（`k3s-killall.sh`）並清旗標；`status [--json]`；`reset`／`uninstall` 需 `--yes` 或互動確認；`--machine` 指定 machine |
 | `lan on\|off\|status\|restore-nat` | 區網存取（§4.5）：on／off 寫入 `lan_access`（由 wsld-gui 轉發）；`status --json`；`restore-nat [--yes]` 還原 0.9.0 的 mirrored 設定並重啟 WSL |
 
 **退出碼**：

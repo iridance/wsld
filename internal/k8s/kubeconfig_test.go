@@ -249,3 +249,25 @@ func TestDefaultKubeconfigPathHonorsEnv(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestHasExportedContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if HasExportedContext(path, "Debian") {
+		t.Fatal("missing file must be false")
+	}
+	if err := ExportKubeconfig(path, []byte(k3sYAML), "Debian"); err != nil {
+		t.Fatal(err)
+	}
+	if !HasExportedContext(path, "Debian") {
+		t.Fatal("exported context must be found")
+	}
+	if HasExportedContext(path, "Ubuntu-26.04") {
+		t.Fatal("other distro must not match")
+	}
+	if err := os.WriteFile(path, []byte(": : not yaml ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if HasExportedContext(path, "Debian") {
+		t.Fatal("unparsable file must be false")
+	}
+}

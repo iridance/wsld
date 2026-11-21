@@ -241,13 +241,8 @@ func (s *Server) handleK8sOn(w http.ResponseWriter, r *http.Request) {
 		if err := mgr.Start(ctx); err != nil {
 			return "", err
 		}
-		if err := s.saveK8sFlag(m.Distro, true); err != nil {
-			return "", err
-		}
-		if err := s.exportKubeconfig(ctx, mgr, m.Distro); err != nil {
-			return "kubeconfig: " + err.Error(), nil
-		}
-		return "", nil
+		// 不自動寫 Windows 的 ~/.kube/config：kubeconfig 以機器內的 k3s.yaml 為準，需要時由使用者手動匯出。
+		return "", s.saveK8sFlag(m.Distro, true)
 	}) {
 		s.k8sBusy(w)
 		return
@@ -290,8 +285,11 @@ func (s *Server) handleK8sReset(w http.ResponseWriter, r *http.Request) {
 		if err := mgr.Reset(ctx); err != nil {
 			return "", err
 		}
-		if err := s.exportKubeconfig(ctx, mgr, owner.Distro); err != nil {
-			return "kubeconfig: " + err.Error(), nil
+		// 重置後憑證已換新：只有使用者曾匯出過才同步更新，不主動建立。
+		if k8s.HasExportedContext(s.kubeconfigPath(), owner.Distro) {
+			if err := s.exportKubeconfig(ctx, mgr, owner.Distro); err != nil {
+				return "kubeconfig: " + err.Error(), nil
+			}
 		}
 		return "", nil
 	}) {

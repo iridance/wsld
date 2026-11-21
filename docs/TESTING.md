@@ -69,7 +69,7 @@ DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d -p 8080:80 nginx:alpine
 本機 Kubernetes（k3s；需 Windows 端裝有 `kubectl`）：
 
 ```bash
-./dist/wsld.exe k8s on                # 首次安裝＋啟動＋合併 kubeconfig
+./dist/wsld.exe k8s on                # 首次安裝＋啟動（不寫 Windows kubeconfig；要用再 `k8s kubeconfig`）
 kubectl --context wsld-Ubuntu-26.04 get nodes   # Windows 與 WSL 內皆 Ready
 docker build -t poc-web:local . && kubectl --context wsld-Ubuntu-26.04 create deployment poc-web --image=poc-web:local --dry-run=client -o yaml   # 改 imagePullPolicy: Never 後 apply → Running
 ./dist/wsld.exe k8s status && ./dist/wsld.exe doctor   # k3s OK；記憶體／node IP／埠

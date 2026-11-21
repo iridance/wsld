@@ -96,10 +96,12 @@ func (a *App) k8sOn(ctx context.Context, cfg config.Config, machine string) erro
 		return fail(ExitError, err)
 	}
 	fmt.Fprintln(a.Stdout, i18n.T("cli.k8s.enabled", target.Distro))
-	return a.k8sExport(ctx, mgr, target.Distro)
+	// 不自動寫 Windows 的 ~/.kube/config；機器內的 k3s.yaml 為準，要在 Windows 用 kubectl 再手動匯出。
+	fmt.Fprintln(a.Stdout, i18n.T("cli.k8s.kubeconfig_hint"))
+	return nil
 }
 
-// k8sExport 把 k3s kubeconfig 合併進 Windows 使用者的 ~/.kube/config。
+// k8sExport 把 k3s kubeconfig 合併進 Windows 使用者的 ~/.kube/config（`wsld k8s kubeconfig` 或重置後同步）。
 func (a *App) k8sExport(ctx context.Context, mgr *k8s.Manager, distro string) error {
 	raw, err := mgr.Kubeconfig(ctx)
 	if err != nil {
@@ -192,7 +194,11 @@ func (a *App) k8sReset(ctx context.Context, cfg config.Config, yes bool) error {
 		return fail(ExitError, err)
 	}
 	fmt.Fprintln(a.Stdout, i18n.T("cli.k8s.reset_done", m.Distro))
-	return a.k8sExport(ctx, mgr, m.Distro) // 重置後憑證已換新
+	// 重置後憑證已換新：只有曾匯出過才同步更新，不主動建立。
+	if k8s.HasExportedContext(a.kubeconfigPath(), m.Distro) {
+		return a.k8sExport(ctx, mgr, m.Distro)
+	}
+	return nil
 }
 
 func (a *App) k8sKubeconfig(ctx context.Context, cfg config.Config) error {

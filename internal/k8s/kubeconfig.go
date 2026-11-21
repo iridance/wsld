@@ -175,6 +175,29 @@ func DefaultKubeconfigPath() string {
 	return filepath.Join(home, ".kube", "config")
 }
 
+// HasExportedContext 回報 path 的 kubeconfig 是否已有此 distro 的 wsld context（使用者曾匯出過）。
+// 檔案不存在或無法解析都回 false。
+func HasExportedContext(path, distro string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var kc struct {
+		Contexts []struct {
+			Name string `yaml:"name"`
+		} `yaml:"contexts"`
+	}
+	if yaml.Unmarshal(b, &kc) != nil {
+		return false
+	}
+	for _, c := range kc.Contexts {
+		if c.Name == ContextName(distro) {
+			return true
+		}
+	}
+	return false
+}
+
 // ExportKubeconfig 把 k3s kubeconfig 合併寫入 path（不存在則建立）。
 // 既有檔案第一次被修改前備份為 path+".wsld-bak"（之後不覆蓋該備份）；無法解析時原檔不動並回錯誤。
 func ExportKubeconfig(path string, k3sYAML []byte, distro string) error {

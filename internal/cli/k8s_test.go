@@ -67,7 +67,7 @@ func (h *harness) cfg(t *testing.T) config.Config {
 	return c
 }
 
-func TestK8sOnEnablesStartsAndExportsKubeconfig(t *testing.T) {
+func TestK8sOnEnablesStartsAndLeavesWindowsKubeconfigAlone(t *testing.T) {
 	h := newHarness(t, true)
 	h.k8sReady()
 	if code := h.run("k8s", "on"); code != ExitOK {
@@ -76,12 +76,11 @@ func TestK8sOnEnablesStartsAndExportsKubeconfig(t *testing.T) {
 	if m, ok := h.cfg(t).K8sMachine(); !ok || m.Distro != "Ubuntu-26.04" {
 		t.Fatalf("config must record k8s on: %+v %v", m, ok)
 	}
-	b, err := os.ReadFile(h.app.KubeconfigPath)
-	if err != nil || !strings.Contains(string(b), "wsld-Ubuntu-26.04") {
-		t.Fatalf("kubeconfig not exported: %v\n%s", err, b)
+	if _, err := os.Stat(h.app.KubeconfigPath); err == nil {
+		t.Fatal("k8s on must not write the Windows kubeconfig")
 	}
-	if !strings.Contains(h.out.String(), "wsld-Ubuntu-26.04") {
-		t.Fatalf("output should name the context: %s", h.out)
+	if !strings.Contains(h.out.String(), "wsld k8s kubeconfig") {
+		t.Fatalf("output should hint at the manual export: %s", h.out)
 	}
 }
 

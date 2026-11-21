@@ -31,6 +31,7 @@ var messages = map[string]map[Lang]string{
 	"cli.k8s.kubeconfig_failed":  {EN: "could not update %s", ZhTW: "無法更新 %s"},
 	"cli.k8s.kubeconfig_done":    {EN: "kubeconfig merged into %s (context: %s). Try: kubectl --context %[2]s get nodes", ZhTW: "kubeconfig 已合併到 %s（context：%s）。試試：kubectl --context %[2]s get nodes"},
 	"cli.k8s.reset_prompt":       {EN: "Reset k3s on %s? All cluster data (pods, volumes, secrets) will be deleted. [y/N] ", ZhTW: "要重置 %s 的 k3s 嗎？叢集內所有資料（pod、volume、secret）都會被刪除。[y/N] "},
+	"cli.k8s.kubeconfig_hint":    {EN: "kubectl inside the machine works as is. To use it from Windows, run: wsld k8s kubeconfig", ZhTW: "機器內可直接使用 kubectl。要在 Windows 使用，請執行：wsld k8s kubeconfig"},
 	"cli.k8s.reset_done":         {EN: "k3s on %s was reset to a clean cluster.", ZhTW: "%s 的 k3s 已重置為乾淨叢集。"},
 	"cli.k8s.uninstall_prompt":   {EN: "Uninstall k3s from %s? Cluster data will be deleted. [y/N] ", ZhTW: "要從 %s 移除 k3s 嗎？叢集資料會被刪除。[y/N] "},
 	"cli.k8s.uninstalled":        {EN: "k3s uninstalled from %s.", ZhTW: "已從 %s 移除 k3s。"},

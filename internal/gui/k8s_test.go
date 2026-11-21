@@ -118,7 +118,7 @@ func TestK8sInitialStateIsNotInstalledOnPrimary(t *testing.T) {
 	}
 }
 
-func TestK8sOnStartsInBackgroundThenPersistsAndExports(t *testing.T) {
+func TestK8sOnStartsInBackgroundThenPersistsWithoutExporting(t *testing.T) {
 	k := newK8sEnv(t)
 	k.cluster.Delay = 60 * time.Millisecond
 	resp, b := k.req(t, "POST", "/api/k8s/on", "")
@@ -140,9 +140,8 @@ func TestK8sOnStartsInBackgroundThenPersistsAndExports(t *testing.T) {
 	if m, ok := k.cfg(t).K8sMachine(); !ok || m.Distro != "Ubuntu-26.04" {
 		t.Fatal("flag must be persisted after success")
 	}
-	b2, err := os.ReadFile(k.kube)
-	if err != nil || !strings.Contains(string(b2), "wsld-Ubuntu-26.04") {
-		t.Fatalf("kubeconfig not exported: %v %s", err, b2)
+	if _, err := os.Stat(k.kube); err == nil {
+		t.Fatal("starting k8s must not write the Windows kubeconfig")
 	}
 }
 
@@ -258,6 +257,30 @@ func TestK8sResetRestoresCleanClusterAndRequiresEnabled(t *testing.T) {
 	if strings.Contains(string(b), "poc-web") {
 		t.Fatalf("reset must remove user workloads: %s", b)
 	}
+	if _, err := os.Stat(k.kube); err == nil {
+		t.Fatal("reset must not create the Windows kubeconfig when it was never exported")
+	}
+	// 曾匯出過 → 重置後同步更新（憑證已換新）
+	if resp, b := k.req(t, "POST", "/api/k8s/kubeconfig", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("export = %d %s", resp.StatusCode, b)
+	}
+	if err := os.WriteFile(k.kube, []byte(strings.Replace(mustRead(t, k.kube), k8s.APIServer, "https://stale.invalid:1", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k.req(t, "POST", "/api/k8s/reset", "")
+	k.waitIdle(t)
+	if strings.Contains(mustRead(t, k.kube), "stale.invalid") {
+		t.Fatal("reset must refresh an already-exported kubeconfig")
+	}
+}
+
+func mustRead(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func TestK8sKubeconfigEndpoint(t *testing.T) {
