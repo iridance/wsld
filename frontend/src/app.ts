@@ -2763,7 +2763,7 @@ export class App {
     if (signal?.aborted) return;
     this.st.k8s = info;
     this.k8sListError = undefined;
-    if (info.op) this.pollK8sWhilePending();
+    if (this.k8sNeedsPoll()) this.pollK8sWhilePending();
     if (!info.enabled || info.status.state !== "ready" || info.op) {
       this.st.k8sNamespaces = [];
       this.st.k8sPods = [];
@@ -2787,6 +2787,12 @@ export class App {
     }
   }
 
+  /** 作業進行中，或 k3s 已啟動但 node 尚未 Ready（state=starting）時都需要輪詢。 */
+  private k8sNeedsPoll(): boolean {
+    const k = this.st.k8s;
+    return !!k && (!!k.op || (k.enabled && k.status.state === "starting"));
+  }
+
   /** 背景作業（啟動／停止／重置）進行中時加快輪詢，完成後自動停止。 */
   private pollK8sWhilePending(): void {
     if (this.k8sPollTimer !== undefined) return;
@@ -2794,7 +2800,7 @@ export class App {
       this.k8sPollTimer = undefined;
       if (this.st.view !== "kubernetes") return;
       await this.refresh();
-      if (this.st.k8s?.op) this.pollK8sWhilePending();
+      if (this.k8sNeedsPoll()) this.pollK8sWhilePending();
     }, 700);
   }
 
