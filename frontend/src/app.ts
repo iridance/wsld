@@ -2759,6 +2759,7 @@ export class App {
 
   private k8sPollTimer?: number;
   private k8sListError?: string;
+  private k8sShowEmpty = false;
 
   /** /api/k8s 狀態；k3s 就緒（且沒有進行中的作業）時再載入 namespace 與目前分頁的資源。 */
   private async loadKubernetes(signal?: AbortSignal): Promise<void> {
@@ -2979,9 +2980,22 @@ export class App {
       wrap.append(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.k8s_namespaces") }));
       return wrap;
     }
+    // 沒有任何資源的 namespace（如 kube-public、kube-node-lease）預設收起；default 與正在檢視的一律保留。
+    const res = this.k8sRes();
+    const isEmpty = (ns: string) => ns !== "default" && ns !== this.st.k8sNs && summarizeNamespace(ns, res).health === "empty";
+    const hidden = this.st.k8sNamespaces.filter(isEmpty);
     const grid = el("div", { class: "k8s-ns-grid", "data-testid": "k8s-ns-grid" });
-    for (const ns of this.st.k8sNamespaces) grid.append(this.k8sNsCard(ns));
+    for (const ns of this.st.k8sNamespaces) if (this.k8sShowEmpty || !hidden.includes(ns)) grid.append(this.k8sNsCard(ns));
     wrap.append(grid);
+    if (hidden.length > 0 || this.k8sShowEmpty) {
+      const n = this.st.k8sNamespaces.filter((ns) => ns !== "default" && summarizeNamespace(ns, res).health === "empty").length;
+      const toggle = el("button", { type: "button", class: "k8s-ns-toggle", "data-testid": "k8s-ns-toggle", text: this.k8sShowEmpty ? t("gui.k8s.ns.hide_empty") : fmt(t("gui.k8s.ns.show_empty"), String(n)) });
+      toggle.onclick = () => {
+        this.k8sShowEmpty = !this.k8sShowEmpty;
+        this.renderKubernetes();
+      };
+      wrap.append(toggle);
+    }
     return wrap;
   }
 

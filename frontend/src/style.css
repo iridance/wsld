@@ -847,3 +847,6 @@ button.arch-node:hover:not(:disabled) { border-color: var(--accent); }
 .ns-exposed { align-self: flex-start; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
 .arch-node.exposed { border-color: var(--accent); }
 .arch-exposed { align-self: flex-start; margin-top: 2px; padding: 1px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+
+.k8s-ns-toggle { margin: 0 14px 14px; padding: 6px 12px; background: none; border: 1px dashed var(--border, currentColor); border-radius: 6px; color: inherit; opacity: .7; cursor: pointer; font: inherit; }
+.k8s-ns-toggle:hover { opacity: 1; }

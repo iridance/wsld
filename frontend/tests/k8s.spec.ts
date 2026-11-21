@@ -291,6 +291,20 @@ test("top nav never scrolls: all seven tabs stay reachable at common window widt
 
 // ---- namespace flow cards、右側面板與架構圖 -----------------------------------------
 
+test("empty namespaces are folded behind a toggle; default and the open namespace stay", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(2);
+  await expect(page.getByTestId("k8s-ns-card-kube-public")).toHaveCount(0);
+  const toggle = page.getByTestId("k8s-ns-toggle");
+  await expect(toggle).toContainText("2");
+  await toggle.click();
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
+  await expect(page.getByTestId("k8s-ns-card-kube-public")).toHaveAttribute("data-health", "empty");
+  await toggle.click();
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(2);
+});
+
 test("namespaces are shown as flow cards: Service → Deployment → Pods counts per namespace", async ({ page }) => {
   await goK8s(page);
   await startCluster(page);

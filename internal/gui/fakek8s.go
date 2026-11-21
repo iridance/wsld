@@ -42,7 +42,7 @@ func NewFakeK8sCluster() *FakeK8sCluster {
 
 func (c *FakeK8sCluster) seed() {
 	t0 := time.Now().Add(-2 * time.Hour)
-	c.namespaces = []string{"default", "kube-system"}
+	c.namespaces = []string{"default", "kube-system", "kube-public", "kube-node-lease"}
 	c.pods = []k8s.Pod{
 		{Name: "coredns-577d995dff-74qgr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.10", Labels: map[string]string{"k8s-app": "kube-dns"}, CreatedAt: t0},
 		{Name: "local-path-provisioner-56c6584955-w6bbr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.11", CreatedAt: t0},
@@ -210,7 +210,7 @@ func (f *FakeK8s) Reset(ctx context.Context) error {
 	}
 	f.c.pods = keep
 	f.c.ingresses, f.c.configmaps, f.c.pvcs, f.c.sts = nil, nil, nil, nil
-	f.c.namespaces = []string{"default", "kube-system"}
+	f.c.namespaces = []string{"default", "kube-system", "kube-public", "kube-node-lease"}
 	f.c.running = f.distro
 	f.c.mu.Unlock()
 	return nil
