@@ -32,7 +32,8 @@ const (
 	StateOff          State = "off"           // 已安裝、服務未啟動
 	StateStarting     State = "starting"      // 服務 active 但 API／node 尚未 Ready
 	StateReady        State = "ready"
-	StateError        State = "error" // systemd unit failed
+	StateError        State = "error"   // systemd unit failed
+	StateUnknown      State = "unknown" // 查詢失敗（wsl.exe 逾時等），無法判斷；呼叫端應沿用上一次狀態
 )
 
 // Status 是單台 machine 的 k3s 狀態。
@@ -108,6 +109,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 	st := Status{Distro: m.Distro, State: StateStopped, Endpoint: APIServer, Context: ContextName(m.Distro)}
 	list, err := wsl.ListDistros(ctx, m.WSL)
 	if err != nil {
+		st.State = StateUnknown
 		return st
 	}
 	d, ok := wsl.FindDistro(list, m.Distro)
@@ -115,19 +117,30 @@ func (m *Manager) Status(ctx context.Context) Status {
 		return st
 	}
 	if _, err := m.root(ctx, nil, "test", "-x", k3sBin); err != nil {
-		st.State = StateNotInstalled
+		// 只有 test 本身以 1 結束才代表檔案不存在；wsl.exe 逾時等其他錯誤是「不知道」。
+		if wsl.ExitCode(err) == 1 {
+			st.State = StateNotInstalled
+		} else {
+			st.State = StateUnknown
+		}
 		return st
 	}
 	st.Installed = true
+	// is-active 未啟動時以非 0 結束但仍會印出狀態字，所以只看輸出；沒有輸出＝查詢失敗。
 	out, _ := m.root(ctx, nil, "systemctl", "is-active", "k3s")
 	switch strings.TrimSpace(out) {
 	case "active":
 		st.Active = true
+	case "activating", "reloading":
+		// k3s 是 Type=notify：啟動期間為 activating，仍屬啟動中。
 	case "failed":
 		st.State = StateError
 		return st
-	default:
+	case "inactive", "deactivating":
 		st.State = StateOff
+		return st
+	default:
+		st.State = StateUnknown
 		return st
 	}
 	st.State = StateStarting

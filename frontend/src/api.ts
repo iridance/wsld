@@ -215,7 +215,7 @@ export interface LANStatus {
   firewall_pending?: boolean;
 }
 
-export type K8sState = "stopped" | "not-installed" | "off" | "starting" | "ready" | "error";
+export type K8sState = "stopped" | "not-installed" | "off" | "starting" | "ready" | "error" | "unknown";
 
 export interface K8sStatus {
   distro: string;

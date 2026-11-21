@@ -118,7 +118,21 @@ func (s *Server) k8sSnapshot(ctx context.Context) K8sResponse {
 		return resp
 	}
 	if mgr := s.k8sMgr(target); mgr != nil {
-		resp.Status = mgr.Status(ctx)
+		st := mgr.Status(ctx)
+		s.k8sMu.Lock()
+		if st.State == k8s.StateUnknown {
+			// 查詢偶爾逾時：沿用同一台機器上一次的確定狀態，避免徽章在啟動中／未啟動間閃動。
+			if last, ok := s.k8sLast[target]; ok {
+				st = last
+			}
+		} else {
+			if s.k8sLast == nil {
+				s.k8sLast = map[string]k8s.Status{}
+			}
+			s.k8sLast[target] = st
+		}
+		s.k8sMu.Unlock()
+		resp.Status = st
 	}
 	return resp
 }

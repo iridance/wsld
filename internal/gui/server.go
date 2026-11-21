@@ -24,6 +24,7 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/doctor"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
@@ -121,6 +122,7 @@ type Server struct {
 	k8sOp   string
 	k8sErr  string
 	k8sWarn string
+	k8sLast map[string]k8s.Status // 各機器最近一次確定的狀態（查詢逾時時沿用）
 
 	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC
 	fwPending atomic.Bool

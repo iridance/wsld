@@ -2882,7 +2882,7 @@ export class App {
   private k8sCard(k: K8sInfo): HTMLElement {
     const s = k.status;
     const stateKey = k.op ? `op.${k.op}` : `state.${s.state}`;
-    const cls = k.op || s.state === "starting" ? "pending" : s.state === "ready" ? "running" : s.state === "error" ? "failed" : "exited";
+    const cls = k.op || s.state === "starting" || s.state === "unknown" ? "pending" : s.state === "ready" ? "running" : s.state === "error" ? "failed" : "exited";
     const badge = el("span", { class: `state ${cls}`, "data-testid": "k8s-state", "data-state": k.op ?? s.state, text: t(`gui.k8s.${stateKey}`) });
     const fields: [string, string, string][] = [["machine", t("gui.k8s.f.machine"), k.machine]];
     if (s.state === "ready") {

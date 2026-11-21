@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iridance/wsld/internal/wsl"
 )
 
 // ---- fake wsl.Runner ------------------------------------------------------
@@ -90,7 +92,7 @@ func TestStatusDistroStoppedDoesNotWake(t *testing.T) {
 func TestStatusNotInstalled(t *testing.T) {
 	f := newFake()
 	f.running()
-	f.on(d+" test -x /usr/local/bin/k3s", resp{err: errors.New("exit 1")})
+	f.on(d+" test -x /usr/local/bin/k3s", resp{err: &wsl.ExitError{Code: 1}})
 	st := newMgr(f).Status(context.Background())
 	if st.State != StateNotInstalled || st.Installed {
 		t.Fatalf("%+v", st)
@@ -177,6 +179,58 @@ func TestStatusFailedUnitIsError(t *testing.T) {
 	if st.State != StateError {
 		t.Fatalf("State = %q", st.State)
 	}
+}
+
+func TestStatusActivatingIsStarting(t *testing.T) {
+	for _, word := range []string{"activating", "reloading"} {
+		f := newFake()
+		f.running()
+		f.on(d+" test -x /usr/local/bin/k3s", resp{})
+		f.on(d+" systemctl is-active k3s", resp{out: word + "\n", err: errors.New("exit 3")})
+		f.on(d+" k3s kubectl get --raw /readyz", resp{err: errors.New("exit 1")})
+		if st := newMgr(f).Status(context.Background()); st.State != StateStarting {
+			t.Fatalf("%s: State = %q", word, st.State)
+		}
+	}
+}
+
+func TestStatusDeactivatingIsOff(t *testing.T) {
+	f := newFake()
+	f.running()
+	f.on(d+" test -x /usr/local/bin/k3s", resp{})
+	f.on(d+" systemctl is-active k3s", resp{out: "deactivating\n", err: errors.New("exit 3")})
+	if st := newMgr(f).Status(context.Background()); st.State != StateOff {
+		t.Fatalf("State = %q", st.State)
+	}
+}
+
+// wsl.exe 逾時（沒有輸出、非 ExitError）不能被當成「未啟動／未安裝／已停止」。
+func TestStatusQueryFailuresAreUnknown(t *testing.T) {
+	timeout := errors.New("WSAETIMEDOUT")
+	t.Run("is-active", func(t *testing.T) {
+		f := newFake()
+		f.running()
+		f.on(d+" test -x /usr/local/bin/k3s", resp{})
+		f.on(d+" systemctl is-active k3s", resp{err: timeout})
+		if st := newMgr(f).Status(context.Background()); st.State != StateUnknown {
+			t.Fatalf("State = %q", st.State)
+		}
+	})
+	t.Run("test -x", func(t *testing.T) {
+		f := newFake()
+		f.running()
+		f.on(d+" test -x /usr/local/bin/k3s", resp{err: timeout})
+		if st := newMgr(f).Status(context.Background()); st.State != StateUnknown {
+			t.Fatalf("State = %q", st.State)
+		}
+	})
+	t.Run("list", func(t *testing.T) {
+		f := newFake()
+		f.on("--list --verbose", resp{err: timeout})
+		if st := newMgr(f).Status(context.Background()); st.State != StateUnknown {
+			t.Fatalf("State = %q", st.State)
+		}
+	})
 }
 
 // ---- Install / Start / Stop / Reset ----------------------------------------

@@ -494,3 +494,38 @@ func TestEngineStartLeavesK3sAloneWhenOff(t *testing.T) {
 		t.Fatalf("k3s must not be touched: %v", k.cluster.Called())
 	}
 }
+
+// scriptedStatus 依序回傳預先排好的狀態，其餘方法沿用內嵌的 K8s。
+type scriptedStatus struct {
+	K8s
+	seq []k8s.State
+}
+
+func (s *scriptedStatus) Status(context.Context) k8s.Status {
+	st := k8s.Status{Distro: "Ubuntu-26.04", State: s.seq[0]}
+	if len(s.seq) > 1 {
+		s.seq = s.seq[1:]
+	}
+	return st
+}
+
+// wsl.exe 偶爾逾時（Unknown）時，徽章沿用上一次確定的狀態，不在啟動中／未啟動間閃動。
+func TestK8sUnknownStatusKeepsLastKnown(t *testing.T) {
+	k := newK8sEnv(t)
+	sc := &scriptedStatus{K8s: k.cluster.For("Ubuntu-26.04"), seq: []k8s.State{k8s.StateStarting, k8s.StateUnknown, k8s.StateReady, k8s.StateUnknown}}
+	k.s.K8sFor = func(string) K8s { return sc }
+	for i, want := range []k8s.State{k8s.StateStarting, k8s.StateStarting, k8s.StateReady, k8s.StateReady} {
+		if got := k.get(t).Status.State; got != want {
+			t.Fatalf("poll %d: state = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestK8sUnknownStatusWithoutHistoryStaysUnknown(t *testing.T) {
+	k := newK8sEnv(t)
+	sc := &scriptedStatus{K8s: k.cluster.For("Ubuntu-26.04"), seq: []k8s.State{k8s.StateUnknown}}
+	k.s.K8sFor = func(string) K8s { return sc }
+	if got := k.get(t).Status.State; got != k8s.StateUnknown {
+		t.Fatalf("state = %q", got)
+	}
+}
