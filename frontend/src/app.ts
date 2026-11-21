@@ -23,6 +23,7 @@ import {
 import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
 import { brandMark, icon, type IconName } from "./icons";
+import { distroLogo } from "./distroLogos";
 
 /** k8s：Kubernetes 頁的 Pod 面板（logs／exec 走 /api/k8s/pods/...），其餘為容器／machine 面板。 */
 type PanelK8s = { ns: string; pod: string };
@@ -2027,7 +2028,7 @@ export class App {
       grid.append(
         el("article", attrs,
           el("div", { class: "machine-head" },
-            el("span", { class: "machine-icon", "aria-hidden": "true" }, icon("machines")),
+            el("span", { class: "machine-icon", "aria-hidden": "true" }, distroLogo(d.name) ?? icon("machines")),
             el("div", { class: "machine-title" },
               el("div", { class: "machine-name-row" },
                 el("h2", { class: "machine-name", "data-testid": "machine-name", text: d.name, title: d.name }),

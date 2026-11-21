@@ -170,6 +170,14 @@ test("Machines: lists local WSL distros with state, version and role badges", as
   await expect(dd.getByTestId("machine-flag-active")).toHaveCount(0);
 });
 
+test("Machines: card icon is the distro logo, generic icon when unrecognised", async ({ page }) => {
+  await go(page, "machines");
+  const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
+  await expect(u.locator('.machine-icon svg[data-distro="ubuntu"]')).toBeVisible();
+  const dd = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
+  await expect(dd.locator('.machine-icon svg[data-icon="machines"]')).toBeVisible();
+});
+
 test("Machines: primary machine is labelled Primary and others offer Set as primary", async ({ page }) => {
   await go(page, "machines");
   const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
