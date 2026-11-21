@@ -212,11 +212,15 @@ Extra ≠ 0.5／v2.0 完成條件
 
 #### 0. PoC（go/no-go 關卡，先於交付）
 
-- [ ] **node IP 漂移**：WSL NAT 每次重啟 eth0 IP 會變；驗證重開 WSL 後單節點 k3s 仍可用（試 `--node-ip`／`--advertise-address` 綁固定位址、dummy 介面等）
-- [ ] **iptables 共存**：Docker 29 與 k3s（內建 iptables）nft／legacy 後端不衝突；同時跑 docker 容器與 pod，雙方網路皆通
-- [ ] **`--docker` 路徑**：確認當期 k3s 版本仍支援內建 cri-dockerd；本機 `docker build` 的映像可被 pod 以 `imagePullPolicy: Never` 使用
-- [ ] Windows 側 `kubectl --server https://127.0.0.1:6443` 可連（k3s 證書 SAN 預設含 127.0.0.1）
-- [ ] 量測待機記憶體／CPU，訂出 doctor 警告門檻
+> 結論（2026-11-21，測試機 `Ubuntu-k3s-poc`、k3s v1.37.2+k3s1、Docker 29.10.0、WSL 6.18）：**go**，五項皆已驗證，進入交付。
+
+- [x] **node IP 漂移**：實測一次完整 `wsl --shutdown`（VM 重新開機）後 eth0 仍為 172.20.3.68，k3s 隨 docker 自動啟動、node 回到 Ready、pod 全數恢復、NodePort 可連、憑證 SAN 仍含 127.0.0.1。**限制**：僅驗證到 IP 未變的情況（未能人為製造漂移）；k3s 每次啟動會重新偵測 node IP 並由 dynamiclistener 補憑證 SAN，Windows 側一律走 127.0.0.1，故判定風險可接受 → 不預先綁固定位址。交付時由 doctor 檢查 node InternalIP 與 eth0 是否一致，不一致時提示 `wsld k8s off && on`
+- [x] **iptables 共存**：iptables 為 nf_tables 後端；Docker 與 k3s 並存，雙向皆通——pod 經 NodePort（127.0.0.1:30080）可達、Docker `-p` 容器可達、pod → Docker 容器（經主機 IP）、Docker 容器 → pod NodePort、pod DNS 與對外連線皆成功
+- [x] **`--docker` 路徑**：v1.37.2 仍內建 cri-dockerd（node `CONTAINER-RUNTIME=docker://29.10.0`）；`docker build` 的映像以 `imagePullPolicy: Never` 直接跑成 pod
+  - **發現：k3s 必須排在 docker 之後啟動**。開機時 k3s 先於 dockerd 起來，agent 不會啟動 kubelet／cri-dockerd（node NotReady、pod 永遠 Pending）；手動 `systemctl restart k3s` 即恢復。k3s unit 預設只 `After=network-online.target` → 交付須加 drop-in：`After=docker.service`＋`Requires=docker.service`（或由 `wsld` 依序啟動 docker → k3s）
+- [x] Windows 側連 `127.0.0.1:6443`：Windows `curl.exe` 以 k3s CA 驗證 TLS 通過（http 401＝需憑證，符合預期）；伺服器憑證 SAN 含 127.0.0.1。（Windows 尚未安裝 `kubectl.exe`，完整 kubectl 流程留待交付驗證）
+- [x] 量測待機資源（單節點、僅系統 pod）：k3s cgroup 約 440 MB、`k3s-server` RSS 約 590 MB、dockerd 約 145 MB、containerd 約 60 MB → k3s 約 0.6 GB。doctor 門檻：記憶體總量 < 4 GiB 時警告，開啟當下 MemAvailable < 1.5 GiB 時警告
+- **其他發現**：所有 WSL2 distro 共用網路命名空間——測試機看得到主 distro 的 docker 網橋與 :23750，兩台 dockerd 的 docker0／使用者網路子網（172.17–172.21.0.0/16）不與 k3s 的 pod 10.42.0.0/16、service 10.43.0.0/16 重疊；node 名稱沿用 Windows 主機名（`framework`），兩台 distro 同名，故只允許單台開 k3s 的限制成立；distro 在沒有任何 wsl.exe 連線時會被 WSL 關閉（k3s 隨之停止），`wsld start` 需讓 distro 保持運行
 
 **go/no-go**：上列皆通過 → 進入交付。node IP 漂移無合理解 → 改評估 k3d 備案，回頭修訂本節。
 
@@ -240,7 +244,7 @@ Extra ≠ 0.5／v2.0 完成條件
 
 #### 完成定義
 
-- [ ] PoC 關卡全過並記錄結論
+- [x] PoC 關卡全過並記錄結論
 - [ ] `wsld k8s on` → `kubectl get nodes` 於 Windows 與 WSL 皆 Ready；`off` 後釋放記憶體與 6443
 - [ ] 重開 WSL／重開機後 `wsld start` 可恢復 k3s（若該 machine 已開）
 - [ ] 第二台 machine 嘗試開啟時明確拒絕並指出目前開啟者
