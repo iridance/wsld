@@ -23,9 +23,6 @@ const (
 	k3sScriptTmp = "/tmp/wsld-k3s.sh"
 )
 
-// MachineKubeconfigPath 是機器內 k3s 產生的 kubeconfig（正本）；Windows 那份只在使用者手動匯出時才有。
-const MachineKubeconfigPath = k3sKubeconf
-
 // State 是 k3s 的概括狀態（GUI 徽章／CLI status）。
 type State string
 

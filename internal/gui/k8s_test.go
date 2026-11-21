@@ -140,9 +140,6 @@ func TestK8sOnStartsInBackgroundThenPersistsWithoutExporting(t *testing.T) {
 	if m, ok := k.cfg(t).K8sMachine(); !ok || m.Distro != "Ubuntu-26.04" {
 		t.Fatal("flag must be persisted after success")
 	}
-	if r.MachineKubeconfig != "/etc/rancher/k3s/k3s.yaml" {
-		t.Fatalf("info card must show the in-machine kubeconfig, got %q", r.MachineKubeconfig)
-	}
 	if _, err := os.Stat(k.kube); err == nil {
 		t.Fatal("starting k8s must not write the Windows kubeconfig")
 	}

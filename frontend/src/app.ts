@@ -2892,7 +2892,6 @@ export class App {
       fields.push(["api", t("gui.k8s.f.api"), s.endpoint]);
       fields.push(["context", t("gui.k8s.f.context"), s.context]);
       if (s.memory_bytes) fields.push(["memory", t("gui.k8s.f.memory"), humanSize(s.memory_bytes)]);
-      fields.push(["kubeconfig", t("gui.k8s.f.kubeconfig"), k.machine_kubeconfig]);
     }
     const grid = el("dl", { class: "k8s-fields", "data-testid": "k8s-fields" });
     for (const [key, label, value] of fields) {

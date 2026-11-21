@@ -61,8 +61,6 @@ type K8sResponse struct {
 	Status  k8s.Status `json:"status"`
 	// KubeconfigPath：匯出 kubeconfig 的目標檔。
 	KubeconfigPath string `json:"kubeconfig_path"`
-	// MachineKubeconfig：機器內 k3s 產生的 kubeconfig 正本（資訊卡顯示這個，不是 Windows 那份）。
-	MachineKubeconfig string `json:"machine_kubeconfig"`
 }
 
 // ResetK8sState 清除背景作業狀態（測試主機 /__test/reset 用）。
@@ -117,7 +115,7 @@ func (s *Server) k8sSnapshot(ctx context.Context) K8sResponse {
 	s.k8sMu.Unlock()
 	cfg := s.cfg()
 	target, enabled := k8sTarget(cfg)
-	resp := K8sResponse{Machine: target, Enabled: enabled, KubeconfigPath: s.kubeconfigPath(), MachineKubeconfig: k8s.MachineKubeconfigPath}
+	resp := K8sResponse{Machine: target, Enabled: enabled, KubeconfigPath: s.kubeconfigPath()}
 	resp.Op, resp.Error, resp.Warning = op, opErr, opWarn
 	if target == "" {
 		return resp
