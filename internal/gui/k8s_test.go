@@ -326,7 +326,7 @@ func TestK8sLists(t *testing.T) {
 	var ns []string
 	_, b := k.req(t, "GET", "/api/k8s/namespaces", "")
 	_ = json.Unmarshal(b, &ns)
-	if len(ns) != 5 {
+	if len(ns) != 4 {
 		t.Fatalf("ns = %s", b)
 	}
 	var pods []k8s.Pod

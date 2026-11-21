@@ -11,8 +11,15 @@ async function goK8s(page: Page) {
   await expect(page.getByTestId("view-kubernetes")).toBeVisible();
 }
 
+/** 切到 Workloads／System 頁籤（kube-* 在 System）。 */
+async function showGroup(page: Page, group: "workloads" | "system") {
+  await page.getByTestId(`k8s-group-${group}`).click();
+  await expect(page.getByTestId(`k8s-group-${group}`)).toHaveAttribute("aria-selected", "true");
+}
+
 /** 點 namespace 卡片開啟右側面板（可指定分頁）。 */
-async function openNs(page: Page, ns: string, tab?: "architecture" | "pods" | "workloads" | "services" | "config" | "storage") {
+async function openNs(page: Page, ns: string, tab?: "architecture" | "pods" | "workloads" | "services" | "config" | "storage" | "others") {
+  await showGroup(page, ns.startsWith("kube-") ? "system" : "workloads");
   await page.getByTestId(`k8s-ns-card-${ns}`).click();
   await expect(page.getByTestId("k8s-side")).toBeVisible();
   await expect(page.getByTestId("k8s-side-title")).toHaveText(ns);
@@ -106,6 +113,7 @@ test("Reset asks for confirmation, can be cancelled, and wipes user workloads", 
   await dlg.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("k8s-state")).toHaveAttribute("data-state", "ready", { timeout: 10_000 });
   await expect(defaultPods).toHaveText("0/0");
+  await showGroup(page, "system");
   await expect(page.getByTestId("k8s-ns-card-kube-system").getByTestId("k8s-ns-node-pods")).toHaveText("3/3");
 });
 
@@ -119,8 +127,7 @@ test("Pods tab: lists the namespace's pods with status, ready and restarts (no n
   await expect(web.getByTestId("pod-ready")).toHaveText("1/1");
   await expect(page.getByTestId("pod-ns-cell")).toHaveCount(0);
   // 切到另一個 namespace：面板內容跟著換
-  await page.getByTestId("k8s-ns-card-kube-system").click();
-  await expect(page.getByTestId("k8s-side-title")).toHaveText("kube-system");
+  await openNs(page, "kube-system");
   await expect(page.getByTestId("pod-row")).toHaveCount(3);
   await expect(page.locator('[data-testid="pod-row"]', { hasText: "metrics-server" }).getByTestId("pod-restarts")).toHaveText("1");
 });
@@ -291,47 +298,59 @@ test("top nav never scrolls: all seven tabs stay reachable at common window widt
 
 // ---- namespace flow cards、右側面板與架構圖 -----------------------------------------
 
-test("namespace cards show what is really inside, and only truly empty namespaces fold behind a toggle", async ({ page }) => {
+test("Workloads and System are separate tabs; system namespaces list what is really inside", async ({ page }) => {
   await goK8s(page);
   await startCluster(page);
-  // kube-node-lease／kube-public 沒有 Pod／Service，但有 Lease／Role／RoleBinding：如實列出，不算空
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
-  await expect(page.getByTestId("k8s-ns-card-kube-node-lease").getByTestId("k8s-ns-others")).toHaveText("Lease 1");
-  await expect(page.getByTestId("k8s-ns-card-kube-public").getByTestId("k8s-ns-others")).toHaveText("Role 1 · RoleBinding 1");
-  await expect(page.getByTestId("k8s-ns-card-kube-public")).not.toHaveAttribute("data-health", "empty");
-  // 什麼都沒有的 namespace 才收起
-  await expect(page.getByTestId("k8s-ns-card-scratch")).toHaveCount(0);
-  const toggle = page.getByTestId("k8s-ns-toggle");
-  await expect(toggle).toContainText("1");
-  await toggle.click();
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(5);
-  await expect(page.getByTestId("k8s-ns-card-scratch")).toHaveAttribute("data-health", "empty");
-  await toggle.click();
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
-  // Other 分頁列出實際的資源
+  // 預設在 Workloads：只有 default（kube-* 不在這裡），並給空狀態提示
+  await expect(page.getByTestId("k8s-group-workloads")).toContainText("1");
+  await expect(page.getByTestId("k8s-group-system")).toContainText("3");
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(1);
+  await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-kind")).toHaveText("Default");
+  await expect(page.getByTestId("k8s-ns-hint")).toBeVisible();
+  // 健康狀態正常時不顯示徽章
+  await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-health")).toHaveCount(0);
+  await page.getByTestId("k8s-group-system").click();
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(3);
+  await expect(page.getByTestId("k8s-ns-hint")).toHaveCount(0);
+  // kube-system 有工作負載：畫流程；kube-public／kube-node-lease 沒有：直接列出實際內容
+  await expect(page.getByTestId("k8s-ns-card-kube-system").getByTestId("k8s-ns-node-pods")).toHaveText("3/3");
+  const pub = page.getByTestId("k8s-ns-card-kube-public");
+  await expect(pub.getByTestId("k8s-ns-node-pods")).toHaveCount(0);
+  await expect(pub.getByTestId("k8s-ns-items")).toHaveText("Role 1RoleBinding 1");
+  await expect(page.getByTestId("k8s-ns-card-kube-node-lease").getByTestId("k8s-ns-items")).toHaveText("Lease 1");
+  // 選取的頁籤會記住
+  await page.reload();
+  await expect(page.getByTestId("k8s-group-system")).toHaveAttribute("aria-selected", "true");
+  // 側欄：架構圖是空的時，直接列出 Role／RoleBinding；Other 分頁有同樣的資源
   await page.getByTestId("k8s-ns-card-kube-public").click();
-  await page.getByTestId("k8s-tabs-others").click();
+  await expect(page.getByTestId("arch-only-others")).toBeVisible();
   await expect(page.getByTestId("other-row")).toHaveCount(2);
+  await page.getByTestId("k8s-tabs-others").click();
   await expect(page.getByTestId("other-row").first().getByTestId("other-kind")).toHaveText("Role");
+  // 切回 Workloads：已開的 system namespace 側欄關閉
+  await page.getByTestId("k8s-group-workloads").click();
+  await expect(page.getByTestId("k8s-side")).toBeHidden();
 });
 
 test("namespaces are shown as flow cards: Service → Deployment → Pods counts per namespace", async ({ page }) => {
   await goK8s(page);
   await startCluster(page);
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(1);
   const def = page.getByTestId("k8s-ns-card-default");
   await expect(def.getByTestId("k8s-ns-name")).toHaveText("default");
   await expect(def.getByTestId("k8s-ns-node-services")).toHaveText("2");
   await expect(def.getByTestId("k8s-ns-node-workloads")).toHaveText("1");
   await expect(def.getByTestId("k8s-ns-node-pods")).toHaveText("1/1");
   await expect(def).toHaveAttribute("data-health", "ok");
-  const sys = page.getByTestId("k8s-ns-card-kube-system");
-  await expect(sys.getByTestId("k8s-ns-node-pods")).toHaveText("3/3");
   // Ingress 節點只在該 namespace 有 Ingress 時出現（本地常用 NodePort，不必佔一格）；對外的 NodePort 另標在卡片上
   await expect(def.getByTestId("k8s-ns-node-ingresses")).toHaveText("1");
+  await showGroup(page, "system");
+  const sys = page.getByTestId("k8s-ns-card-kube-system");
+  await expect(sys.getByTestId("k8s-ns-node-pods")).toHaveText("3/3");
   await expect(sys.getByTestId("k8s-ns-node-ingresses")).toHaveCount(0);
-  await expect(def.getByTestId("k8s-ns-exposed")).toContainText("NodePort 30080");
   await expect(sys.getByTestId("k8s-ns-exposed")).toHaveCount(0);
+  await showGroup(page, "workloads");
+  await expect(def.getByTestId("k8s-ns-exposed")).toContainText("NodePort 30080");
   // 側欄還沒開；沒有舊的分頁／namespace 下拉
   await expect(page.getByTestId("k8s-side")).toBeHidden();
   await expect(page.getByTestId("k8s-ns")).toHaveCount(0);

@@ -26,7 +26,7 @@ import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
 import { brandMark, icon, type IconName } from "./icons";
 import { distroLogo } from "./distroLogos";
-import { buildNamespaceGraph, endpointCount, nodePortsOf, ownerOf, serviceTargets, summarizeNamespace, usedBy, type K8sResources } from "./k8sGraph";
+import { buildNamespaceGraph, endpointCount, isSystemNs, nodePortsOf, ownerOf, serviceTargets, summarizeNamespace, usedBy, type K8sResources } from "./k8sGraph";
 
 /** k8s：Kubernetes 頁的 Pod 面板（logs／exec 走 /api/k8s/pods/...），其餘為容器／machine 面板。 */
 type PanelK8s = { ns: string; pod: string };
@@ -41,6 +41,7 @@ type InfoDrawer =
 /** 側欄視圖。 */
 export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "kubernetes" | "settings";
 type K8sTab = "architecture" | "pods" | "workloads" | "services" | "config" | "storage" | "others";
+type K8sGroup = "workloads" | "system";
 const K8S_TABS: K8sTab[] = ["architecture", "pods", "workloads", "services", "config", "storage", "others"];
 type CtFilter = "all" | "running" | "stopped";
 type ImgKind = "inuse" | "unused" | "dangling" | "unknown";
@@ -2759,7 +2760,7 @@ export class App {
 
   private k8sPollTimer?: number;
   private k8sListError?: string;
-  private k8sShowEmpty = false;
+  private k8sGroup: K8sGroup = loadJSON<string>(LS_K8S_GROUP, "workloads") === "system" ? "system" : "workloads";
 
   /** /api/k8s 狀態；k3s 就緒（且沒有進行中的作業）時再載入 namespace 與目前分頁的資源。 */
   private async loadKubernetes(signal?: AbortSignal): Promise<void> {
@@ -2980,22 +2981,33 @@ export class App {
       wrap.append(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.k8s_namespaces") }));
       return wrap;
     }
-    // 沒有任何資源的 namespace（如 kube-public、kube-node-lease）預設收起；default 與正在檢視的一律保留。
+    // 頁籤：Workloads（default 與自建）／System（kube-*，Kubernetes 內建）。各自佔滿內容區，不互搶空間。
     const res = this.k8sRes();
-    const isEmpty = (ns: string) => ns !== "default" && ns !== this.st.k8sNs && summarizeNamespace(ns, res).health === "empty";
-    const hidden = this.st.k8sNamespaces.filter(isEmpty);
-    const grid = el("div", { class: "k8s-ns-grid", "data-testid": "k8s-ns-grid" });
-    for (const ns of this.st.k8sNamespaces) if (this.k8sShowEmpty || !hidden.includes(ns)) grid.append(this.k8sNsCard(ns));
-    wrap.append(grid);
-    if (hidden.length > 0 || this.k8sShowEmpty) {
-      const n = this.st.k8sNamespaces.filter((ns) => ns !== "default" && summarizeNamespace(ns, res).health === "empty").length;
-      const toggle = el("button", { type: "button", class: "k8s-ns-toggle", "data-testid": "k8s-ns-toggle", text: this.k8sShowEmpty ? t("gui.k8s.ns.hide_empty") : fmt(t("gui.k8s.ns.show_empty"), String(n)) });
-      toggle.onclick = () => {
-        this.k8sShowEmpty = !this.k8sShowEmpty;
-        this.renderKubernetes();
-      };
-      wrap.append(toggle);
+    const groups: Record<K8sGroup, string[]> = {
+      workloads: this.st.k8sNamespaces.filter((ns) => !isSystemNs(ns)),
+      system: this.st.k8sNamespaces.filter(isSystemNs),
+    };
+    const sysAbnormal = groups.system.some((ns) => {
+      const h = summarizeNamespace(ns, res).health;
+      return h === "warn" || h === "error";
+    });
+    const bar = el("div", { class: "k8s-group-tabs", role: "tablist", "data-testid": "k8s-group-tabs" });
+    for (const id of ["workloads", "system"] as K8sGroup[]) {
+      const tab = el("button", { type: "button", role: "tab", class: `k8s-group-tab${this.k8sGroup === id ? " on" : ""}`, "data-testid": `k8s-group-${id}`, "aria-selected": String(this.k8sGroup === id) },
+        el("span", { text: t(`gui.k8s.group.${id}`) }),
+        el("span", { class: "k8s-group-count", text: String(groups[id].length) }),
+        ...(id === "system" && sysAbnormal ? [el("span", { class: "k8s-group-dot", "data-testid": "k8s-group-dot", title: t("gui.k8s.group.abnormal") })] : []),
+      );
+      tab.onclick = () => this.k8sSelectGroup(id);
+      bar.append(tab);
     }
+    wrap.append(bar);
+    const grid = el("div", { class: "k8s-ns-grid", "data-testid": "k8s-ns-grid" });
+    for (const ns of groups[this.k8sGroup]) grid.append(this.k8sNsCard(ns));
+    if (this.k8sGroup === "workloads" && groups.workloads.length === 1 && groups.workloads[0] === "default") {
+      grid.append(el("div", { class: "k8s-ns-hint", "data-testid": "k8s-ns-hint" }, el("strong", { text: t("gui.k8s.ns.hint_title") }), el("span", { text: t("gui.k8s.ns.hint_body") })));
+    }
+    wrap.append(grid);
     return wrap;
   }
 
@@ -3008,22 +3020,32 @@ export class App {
       );
     const arrow = () => el("span", { class: "ns-arrow", "aria-hidden": "true", text: "→" });
     const open = this.st.k8sNs === ns;
+    // 系統 namespace 沒有 Service／Workload／Pod 時，流程圖只會是一排 0：改為直接列出裡面實際有的東西
+    const flowless = isSystemNs(ns) && sum.ingresses + sum.services + sum.workloads + sum.pods === 0;
+    const chips = [...sum.others.map((o) => [o.kind, o.count] as const), ...(sum.configMaps ? [["ConfigMap", sum.configMaps] as const] : []), ...(sum.pvcs ? [["PVC", sum.pvcs] as const] : [])];
+    const flowlessBody = el("span", { class: "ns-items", "data-testid": "k8s-ns-items" },
+      ...(chips.length ? chips.map(([k, n]) => el("span", { class: "ns-chip", "data-kind": k, text: `${k} ${n}` })) : [el("span", { class: "muted", text: t("gui.k8s.health.empty") })]),
+    );
     const card = el("button", { type: "button", class: "k8s-ns-card", "data-testid": `k8s-ns-card-${ns}`, "data-ns": ns, "data-health": sum.health, "aria-pressed": String(open) },
       el("span", { class: "ns-head" },
         el("span", { class: "ns-name", "data-testid": "k8s-ns-name", text: ns, title: ns }),
-        el("span", { class: `ns-health ${sum.health}`, "data-testid": "k8s-ns-health", text: t(`gui.k8s.health.${sum.health}`) }),
+        el("span", { class: "ns-head-tags" },
+          // 健康狀態只在異常時標示；正常不顯示，避免每張卡都貼狀態
+          ...(sum.health === "warn" || sum.health === "error" ? [el("span", { class: `ns-health ${sum.health}`, "data-testid": "k8s-ns-health", text: t(`gui.k8s.health.${sum.health}`) })] : []),
+          el("span", { class: "ns-kind", "data-testid": "k8s-ns-kind", text: t(`gui.k8s.ns.kind.${ns === "default" ? "default" : isSystemNs(ns) ? "system" : "user"}`) }),
+        ),
       ),
-      el("span", { class: "ns-flow" },
+      ...(flowless ? [flowlessBody] : [el("span", { class: "ns-flow" },
         ...(sum.ingresses > 0 ? [node("ingresses", t("gui.k8s.node.ingresses"), String(sum.ingresses), sum.ingresses), arrow()] : []),
         node("services", t("gui.k8s.node.services"), String(sum.services), sum.services),
         arrow(),
         node("workloads", t("gui.k8s.node.workloads"), String(sum.workloads), sum.workloads),
         arrow(),
         node("pods", t("gui.k8s.node.pods"), `${sum.podsReady}/${sum.pods}`, sum.pods),
-      ),
+      )]),
       ...(sum.nodePorts.length ? [el("span", { class: "ns-exposed", "data-testid": "k8s-ns-exposed", text: `NodePort ${sum.nodePorts.join(", ")}`, title: t("gui.k8s.exposed") })] : []),
-      el("span", { class: "ns-foot muted", "data-testid": "k8s-ns-foot", text: fmt(t("gui.k8s.ns.foot"), String(sum.configMaps), String(sum.pvcs)) }),
-      ...(sum.others.length ? [el("span", { class: "ns-others muted", "data-testid": "k8s-ns-others", text: sum.others.map((o) => `${o.kind} ${o.count}`).join(" · "), title: sum.others.map((o) => `${o.kind} ${o.count}`).join("\n") })] : []),
+      ...(flowless ? [] : [el("span", { class: "ns-foot muted", "data-testid": "k8s-ns-foot", text: fmt(t("gui.k8s.ns.foot"), String(sum.configMaps), String(sum.pvcs)) })]),
+      ...(!flowless && sum.others.length ? [el("span", { class: "ns-others muted", "data-testid": "k8s-ns-others", text: sum.others.map((o) => `${o.kind} ${o.count}`).join(" · "), title: sum.others.map((o) => `${o.kind} ${o.count}`).join("\n") })] : []),
     );
     card.onclick = () => this.k8sSelectNs(ns);
     return card;
@@ -3306,11 +3328,10 @@ export class App {
     return wrap;
   }
 
-  /** Other 分頁：沒有專屬分頁的資源（Lease、Role、Secret…）如實列出種類與名稱，只讀。 */
-  private k8sOthersTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
+  /** 沒有專屬分頁的資源（Lease、Role、Secret…）的唯讀表；沒有時回 null。 */
+  private k8sOthersTable(ns: string): HTMLElement | null {
     const items = this.st.k8sExtras.others.filter((c) => c.namespace === ns);
-    if (items.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_others")), wrap;
+    if (items.length === 0) return null;
     const { table: tbl, tbody } = this.k8sTable("others", K8S_OTHER_COLS);
     for (const o of [...items].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))) {
       tbody.append(
@@ -3321,6 +3342,14 @@ export class App {
         ),
       );
     }
+    return tbl;
+  }
+
+  /** Other 分頁。 */
+  private k8sOthersTab(ns: string): HTMLElement {
+    const wrap = el("div", { class: "k8s-resources" });
+    const tbl = this.k8sOthersTable(ns);
+    if (!tbl) return wrap.append(this.k8sEmpty("gui.empty.k8s_others")), wrap;
     wrap.append(tbl);
     return wrap;
   }
@@ -3359,7 +3388,7 @@ export class App {
     const head = el("div", { class: "k8s-side-head" },
       el("div", { class: "k8s-side-titles" },
         el("strong", { "data-testid": "k8s-side-title", text: ns }),
-        el("span", { class: `ns-health ${sum.health}`, text: t(`gui.k8s.health.${sum.health}`) }),
+        ...(sum.health === "warn" || sum.health === "error" ? [el("span", { class: `ns-health ${sum.health}`, text: t(`gui.k8s.health.${sum.health}`) })] : []),
         el("span", { class: "muted", "data-testid": "k8s-side-sub", text: fmt(t("gui.k8s.side.sub"), String(sum.pods), String(sum.workloads), String(sum.services)) }),
       ),
       close,
@@ -3382,6 +3411,18 @@ export class App {
   }
 
   /** 選取（或再點一次取消）namespace，更新卡片選取狀態與側欄。 */
+  /** 切換 Workloads／System 頁籤；已開的 namespace 不在新頁籤時一併關閉側欄。 */
+  private k8sSelectGroup(g: K8sGroup): void {
+    if (this.k8sGroup === g) return;
+    this.k8sGroup = g;
+    saveJSON(LS_K8S_GROUP, g);
+    if (this.st.k8sNs && isSystemNs(this.st.k8sNs) !== (g === "system")) {
+      this.st.k8sNs = "";
+      this.st.k8sDetail = undefined;
+    }
+    this.renderKubernetes();
+  }
+
   private k8sSelectNs(ns: string): void {
     this.st.k8sNs = this.st.k8sNs === ns ? "" : ns;
     this.st.k8sDetail = undefined;
@@ -3492,7 +3533,10 @@ export class App {
     const g = buildNamespaceGraph(ns, this.k8sRes());
     const root = el("div", { class: "arch", "data-testid": "arch" });
     if (g.ingresses.length + g.services.length + g.columns.length + g.mounts.length === 0) {
-      root.append(this.k8sEmpty("gui.k8s.arch.empty"));
+      // 圖是空的但 namespace 裡有 Lease／Role 等資源：直接列出，不要只說「沒有資源」
+      const others = this.k8sOthersTable(ns);
+      if (others) root.append(el("p", { class: "muted", "data-testid": "arch-only-others", text: t("gui.k8s.arch.only_others") }), others);
+      else root.append(this.k8sEmpty("gui.k8s.arch.empty"));
       return root;
     }
     const node = (cls: string, testid: string, name: string, nodeId: string, kind: string, sub: string, tag: "div" | "button" = "div") =>
@@ -4221,6 +4265,7 @@ const LS_COLS = "wsld.colWidths";
 const LS_COLLAPSED = "wsld.collapsedGroups";
 const LS_VIEW = "wsld.view";
 const LS_K8S_TAB = "wsld.k8s.tab";
+const LS_K8S_GROUP = "wsld.k8s.group";
 const LS_K8S_GROUP_SEEN = "wsld.k8s.groupSeen";
 const LABEL_PROJECT = "com.docker.compose.project";
 const LABEL_SERVICE = "com.docker.compose.service";

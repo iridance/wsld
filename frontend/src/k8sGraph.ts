@@ -12,6 +12,9 @@ export interface K8sResources {
   others: K8sOther[];
 }
 
+/** `kube-` 開頭是 Kubernetes 保留給內建 namespace 的前綴（使用者不能建立）。 */
+export const isSystemNs = (ns: string): boolean => ns.startsWith("kube-");
+
 export type NsHealth = "ok" | "warn" | "error" | "empty";
 
 export interface NsSummary {
