@@ -47,7 +47,7 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 ## 實機驗收（Windows）
 
 ```bash
-make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.17.0）
+make build-win                        # dist/wsld.exe + wsld-gui.exe（VERSION←git exact tag，預設 0.17.1）
 ./dist/wsld.exe init                  # 在 WSL Ubuntu 內安裝 Docker、寫 %APPDATA%\wsld\config.toml
 curl.exe http://127.0.0.1:23750/_ping # OK
 ./dist/wsld.exe status && ./dist/wsld.exe doctor

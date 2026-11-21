@@ -39,6 +39,23 @@ type FakeWSL struct {
 	users       map[string]map[string]bool   // distro → useradd 建立的使用者
 	passwords   map[string]map[string]string // distro → user → chpasswd 設定的密碼
 	shutdowns   int
+	// WakeExempt 非 nil 且回傳 true 時，該次 -d 命令不把 distro 開起來（測試明確豁免用）。
+	// 預設（nil）與實機相同：任何 wsl -d <name> 命令都會喚醒 distro。
+	WakeExempt func(args []string) bool
+}
+
+// Attached 回傳 distro 的 VHD 是否掛在 WSL VM 上（測試用）。
+func (f *FakeWSL) Attached(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attached[name]
+}
+
+// SetConf 設定 distro 的 /etc/wsl.conf 內容（測試用）。
+func (f *FakeWSL) SetConf(distro, conf string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.confs[distro] = conf
 }
 
 // Shutdowns 回傳 wsl --shutdown 的次數。
@@ -83,6 +100,7 @@ func (f *FakeWSL) Reset() {
 	f.fsMinBlocks = map[string]int64{}
 	f.sizes = map[string]int64{}
 	f.compacts = nil
+	f.WakeExempt = nil
 	f.procStatN = map[string]int{}
 	f.users = map[string]map[string]bool{}
 	f.passwords = map[string]map[string]string{}
@@ -382,24 +400,22 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 		return nil, nil, nil
 	case len(args) >= 2 && args[0] == "-d":
 		name := args[1]
-		found := false
-		for _, d := range f.distros {
-			if strings.EqualFold(d.Name, name) {
-				found = true
+		idx := -1
+		for i := range f.distros {
+			if strings.EqualFold(f.distros[i].Name, name) {
+				idx = i
 			}
 		}
-		if !found {
+		if idx < 0 {
 			return nil, []byte("There is no distribution with the supplied name."), &wsl.ExitError{Code: 1}
 		}
+		// 與實機相同：wsl -d <name> 執行任何命令都會把停止中的 distro 開起來並掛上 VHD
+		if f.WakeExempt == nil || !f.WakeExempt(args) {
+			f.distros[idx].State = "Running"
+			f.attached[f.distros[idx].Name] = true
+		}
 		if strings.HasSuffix(joined, "-- true") {
-			// wsl.Wake：真實 wsl.exe 執行任何命令都會把 distro 開起來
-			for i := range f.distros {
-				if strings.EqualFold(f.distros[i].Name, name) {
-					f.distros[i].State = "Running"
-					f.attached[f.distros[i].Name] = true
-				}
-			}
-			return nil, nil, nil
+			return nil, nil, nil // wsl.Wake
 		}
 		if strings.HasSuffix(joined, "-- cat /etc/wsl.conf") {
 			conf, ok := f.confs[name]

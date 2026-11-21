@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.17.0（git tag `v0.17.0`）  
-狀態：**0.17.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.17.1（git tag `v0.17.1`）  
+狀態：**0.17.1 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-20
 
 ## 1. 問題與目標
@@ -251,7 +251,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Images | 列表、移除、清除未使用；使用中不強制刪 |
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
-| Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要、磁碟上限＋調整）；新增機器（磁碟上限，預設 60 GB；下載進度：進度條、已下載／總量、速度、經過時間） |
+| Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf（停止中不讀：顯示「啟動機器後才能查看」，不喚醒）、tcp endpoint、CPU／Mem 摘要、磁碟上限＋調整）；新增機器（磁碟上限，預設 60 GB；下載進度：進度條、已下載／總量、速度、經過時間） |
 | Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；未授權防火牆時先顯示說明對話框；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列常駐地球按鈕，以系統瀏覽器開啟區網位址（區網存取關閉或無轉發時開 `http://localhost:<埠>`；多埠跳選單），Info 以文字列出 |
 | Kubernetes | 頂部導覽（Machines 旁）：一鍵啟動／停止（背景作業＋輪詢，首次含安裝）、重置、匯出 kubeconfig、叢集資訊卡（狀態、版本、node、API、context、記憶體）、另一台持有時一鍵移動；namespace 下拉＋ Pods（logs 串流、exec 終端、刪除）／Deployments（scale、rollout restart、刪除）／Services（NodePort 開瀏覽器、刪除）；Containers 頁把 `k8s_*` 容器摺成預設收合的群組（§4.6） |
 | Logs | 預設 100 行；Live 預設關 |

@@ -108,6 +108,9 @@ export interface MachinesResponse {
 export interface MachineConfig {
   name: string;
   wsl_conf: string;
+  /** 停止中（或調整磁碟中）不讀 wsl.conf：wsl -d 會把機器開起來 */
+  wsl_conf_unavailable?: boolean;
+  running?: boolean;
   systemd: boolean;
   api_endpoint?: string;
   user?: string;

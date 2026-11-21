@@ -118,3 +118,44 @@ test("header distro has open-folder and open-terminal icon buttons; refresh inte
   const win = await (await request.get("/__test/window")).json();
   expect(win.actions).toEqual(expect.arrayContaining(["open-folder", "open-terminal"]));
 });
+
+// 實機上任何 wsl -d 都會把停止中的機器開起來：開 Info／輪詢都不可讀 wsl.conf 或取樣用量。
+test("machine Info on a stopped machine does not start it; it shows wsl.conf once the machine is started", async ({ page, request }) => {
+  await request.put("/api/settings", {
+    data: { refresh_interval_sec: 1, exec_shell: "", tray_autostart: false, lang: "en", theme: "system" },
+  });
+  await open(page);
+  await page.getByTestId("nav-machines").click();
+  const card = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
+  await expect(card).toHaveAttribute("data-state", "stopped");
+  let configCalls = 0;
+  page.on("request", (r) => {
+    if (r.method() === "GET" && r.url().endsWith("/api/machines/docker-desktop/config")) configCalls++;
+  });
+
+  await page.getByTestId("btn-machine-config-docker-desktop").click();
+  const drawer = page.getByTestId("info-drawer");
+  await expect(drawer.getByTestId("info-title")).toHaveText("docker-desktop");
+  await expect(drawer.getByTestId("machine-config-unavailable")).toHaveText("Start the machine to view /etc/wsl.conf");
+  await expect(drawer.getByTestId("machine-config-systemd")).toHaveCount(0);
+  await expect(drawer.getByTestId("machine-config-conf")).toHaveCount(0);
+
+  // 數個輪詢週期後仍停止，且停止中不再打 config API
+  await page.waitForTimeout(3500);
+  await expect(card).toHaveAttribute("data-state", "stopped");
+  expect(configCalls).toBe(1);
+  const m = await (await request.get("/api/machines")).json();
+  expect(m.machines.find((x: { name: string }) => x.name === "docker-desktop").state).toBe("Stopped");
+
+  // 啟動後 Info 自動換成實際的 wsl.conf
+  await page.getByTestId("btn-machine-start-docker-desktop").click();
+  await expect(card).toHaveAttribute("data-state", "running");
+  await expect(drawer.getByTestId("machine-config-conf")).toHaveText("(no /etc/wsl.conf)", { timeout: 5000 });
+  await expect(drawer.getByTestId("machine-config-systemd")).toBeVisible();
+  await expect(drawer.getByTestId("machine-config-unavailable")).toHaveCount(0);
+
+  // 再停止：回到「啟動後才能查看」
+  await page.getByTestId("btn-machine-stop-docker-desktop").click();
+  await expect(card).toHaveAttribute("data-state", "stopped");
+  await expect(drawer.getByTestId("machine-config-unavailable")).toBeVisible({ timeout: 5000 });
+});

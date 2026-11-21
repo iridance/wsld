@@ -88,7 +88,7 @@
 | Kubernetes | 頂部導覽（Machines 旁）：一鍵啟動／停止（背景作業，狀態徽章 Starting…／Ready／Off…，首次含安裝）、重置（確認）、匯出 kubeconfig；叢集資訊卡（版本、node、API、context、記憶體）；另一台持有 k3s 時顯示說明與「移到 …」；namespace 下拉＋分頁 Pods（logs 串流／exec 終端 在底部 panel、刪除）／Deployments（副本數＋套用、rollout restart、刪除）／Services（NodePort 開瀏覽器、刪除；內建 kubernetes 服務不可刪）；分頁選擇記住 | `k8s.spec.ts` |
 | Containers › k3s 群組 | `k8s_*`（含 `io.kubernetes.pod.name` 標籤）的容器摺成預設收合的「Kubernetes (k3s)」群組（無整組 Start／Stop；展開／收合記住） | `k8s.spec.ts` |
 | Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
-| Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）、**磁碟上限**＋調整鈕（對話框：GB；需要關閉 WSL 時列出會被停止的機器、按鈕改為「關閉 WSL 並套用」——目標執行中時一開始就顯示，已停止但 VHD 仍被占用時於第一次套用後顯示；執行中顯示「最小可設約 N GB」（`resize-info`）並擋下更小的值，伺服器回 `too_small` 時也記住最小值；縮小時的備份提醒；wsl 錯誤與「從 WSL 內執行」的拒絕訊息留在對話框；調整期間暫停 Info 輪詢）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts`；上限 `vhd.spec.ts` |
+| Machines Info | `.wslconfig` memory／processors、`wsl.conf`（停止中不讀——`wsl -d` 會把機器開起來——改顯示「啟動機器後才能查看」，且停止中不輪詢用量；啟動／停止後自動更新）、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）、**磁碟上限**＋調整鈕（對話框：GB；需要關閉 WSL 時列出會被停止的機器、按鈕改為「關閉 WSL 並套用」——目標執行中時一開始就顯示，已停止但 VHD 仍被占用時於第一次套用後顯示；執行中顯示「最小可設約 N GB」（`resize-info`）並擋下更小的值，伺服器回 `too_small` 時也記住最小值；縮小時的備份提醒；wsl 錯誤與「從 WSL 內執行」的拒絕訊息留在對話框；調整期間暫停 Info 輪詢）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts`；上限 `vhd.spec.ts` |
 | Machines › 釋放磁碟空間 | 卡片的縮小箭頭鈕（`btn-machine-compact-<name>`）：磁碟未被占用直接壓縮；執行中先確認（列出會被停止的機器，「關閉 WSL 並釋放空間」），停止但仍被占用則於第一次嘗試後確認；完成通知釋放量與 Windows 上的佔用；調整大小成功後也會一併壓縮並在通知中報告。這兩種結果通知**不自動消失**（作業常要將近一分鐘，使用者可能已切走），按右側 ✕ 關閉；其他通知仍 8 秒後消失 | `vhd.spec.ts` |
 | Add machine › 磁碟上限 | 與自訂名稱同列的 GB 欄（預設 60；留空＝WSL 預設 1 TB；8–16384 以外顯示錯誤且不能安裝） | `vhd.spec.ts` |
 | 磁碟用量 | 四頁的用量鈕（不加高度、點開／Esc／點外面、刷新時維持；明細每項大小與占比、前 5 大＋其他、總計）、容器／Volume Size 欄與副標總計、compose 群組加總、Machines 卡片磁碟與合計、Info 磁碟長條 | `disk.spec.ts` |
@@ -134,7 +134,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.17.0 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.17.1 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 

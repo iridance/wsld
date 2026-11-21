@@ -232,22 +232,26 @@ type MachinesResponse struct {
 
 // MachineConfig 是 /api/machines/{name}/config 回應。
 type MachineConfig struct {
-	Name           string  `json:"name"`
-	WSLConf        string  `json:"wsl_conf"`
-	Systemd        bool    `json:"systemd"`
-	APIEndpoint    string  `json:"api_endpoint,omitempty"`
-	User           string  `json:"user,omitempty"`
-	Managed        bool    `json:"managed"`
-	Ready          bool    `json:"ready"`
-	Memory         string  `json:"memory,omitempty"`     // .wslconfig
-	Processors     string  `json:"processors,omitempty"` // .wslconfig
-	CPUPercent     float64 `json:"cpu_percent"`
-	MemoryUsedMB   int64   `json:"memory_used_mb"`
-	MemoryTotalMB  int64   `json:"memory_total_mb"`
-	DiskBytes      int64   `json:"disk_bytes,omitempty"`       // ext4.vhdx 檔案大小
-	DiskUsedBytes  int64   `json:"disk_used_bytes,omitempty"`  // 執行中：df / used
-	DiskTotalBytes int64   `json:"disk_total_bytes,omitempty"` // 執行中：df / size
-	DiskLimitBytes int64   `json:"disk_limit_bytes,omitempty"` // 虛擬磁碟容量上限（VHDX 標頭）
+	Name    string `json:"name"`
+	WSLConf string `json:"wsl_conf"`
+	// WSLConfUnavailable：機器停止中（或正在調整磁碟）時不讀 /etc/wsl.conf——wsl -d 會把機器開起來；
+	// UI 顯示「啟動機器後才能查看」，Systemd 也因此未知（false）。
+	WSLConfUnavailable bool    `json:"wsl_conf_unavailable,omitempty"`
+	Running            bool    `json:"running"`
+	Systemd            bool    `json:"systemd"`
+	APIEndpoint        string  `json:"api_endpoint,omitempty"`
+	User               string  `json:"user,omitempty"`
+	Managed            bool    `json:"managed"`
+	Ready              bool    `json:"ready"`
+	Memory             string  `json:"memory,omitempty"`     // .wslconfig
+	Processors         string  `json:"processors,omitempty"` // .wslconfig
+	CPUPercent         float64 `json:"cpu_percent"`
+	MemoryUsedMB       int64   `json:"memory_used_mb"`
+	MemoryTotalMB      int64   `json:"memory_total_mb"`
+	DiskBytes          int64   `json:"disk_bytes,omitempty"`       // ext4.vhdx 檔案大小
+	DiskUsedBytes      int64   `json:"disk_used_bytes,omitempty"`  // 執行中：df / used
+	DiskTotalBytes     int64   `json:"disk_total_bytes,omitempty"` // 執行中：df / size
+	DiskLimitBytes     int64   `json:"disk_limit_bytes,omitempty"` // 虛擬磁碟容量上限（VHDX 標頭）
 }
 
 // distroDisk 回傳 distro 虛擬磁碟大小；未注入或失敗回 0（欄位省略）。
@@ -314,15 +318,17 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", errors.New("distro not found: "+name))
 		return
 	}
-	// 調整磁碟期間不進 distro 執行命令：wsl -d 會把剛關掉的 WSL 叫醒、重新掛上 VHD
-	quiet := s.diskBusy.Load()
-	conf := ""
-	if !quiet {
+	// 只對執行中的 distro 執行命令：wsl -d 會把停止中的機器開起來（開 Info／每 3 秒輪詢都會）；
+	// 調整磁碟期間也不進 distro，否則會叫醒剛關掉的 WSL、重新掛上 VHD。
+	running := strings.EqualFold(d.State, "Running")
+	canExec := running && !s.diskBusy.Load()
+	mc := MachineConfig{Name: d.Name, Running: running, WSLConfUnavailable: !canExec}
+	if canExec {
 		if out, _, err := wsl.RunIn(r.Context(), s.WSL, d.Name, "root", nil, "cat", "/etc/wsl.conf"); err == nil {
-			conf = wsl.DecodeOutput(out)
+			mc.WSLConf = wsl.DecodeOutput(out)
 		}
+		mc.Systemd = wslConfSystemd(mc.WSLConf)
 	}
-	mc := MachineConfig{Name: d.Name, WSLConf: conf, Systemd: wslConfSystemd(conf)}
 	if pm, ok := s.cfg().FindMachine(d.Name); ok {
 		mc.Managed = true
 		mc.Ready = pm.Ready()
@@ -333,7 +339,7 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 	mc.Memory, mc.Processors = mem, procs
 	mc.DiskBytes = s.distroDisk(d.Name)
 	mc.DiskLimitBytes = s.distroDiskLimit(d.Name)
-	if !quiet && strings.EqualFold(d.State, "Running") {
+	if canExec {
 		cpu, used, total := wsl.SampleDistroUsage(r.Context(), s.WSL, d.Name)
 		mc.CPUPercent = cpu
 		mc.MemoryUsedMB = int64(used)

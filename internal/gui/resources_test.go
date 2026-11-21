@@ -874,3 +874,36 @@ func TestMachineDiskResizeAlsoCompacts(t *testing.T) {
 		t.Fatalf("no compact after a failed resize: %v", got)
 	}
 }
+
+// 開停止中機器的 Info（與前端每 3 秒的輪詢）不可執行 wsl -d：那會把機器開起來。
+func TestMachineConfigDoesNotWakeStoppedDistro(t *testing.T) {
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	w.SetConf("docker-desktop", "[boot]\nsystemd=true\n")
+	e.s.WSL = w
+	for i := 0; i < 3; i++ {
+		resp, b := e.req(t, http.MethodGet, "/api/machines/docker-desktop/config", "")
+		if resp.StatusCode != 200 {
+			t.Fatalf("config = %d %s", resp.StatusCode, b)
+		}
+		var cfg MachineConfig
+		_ = json.Unmarshal(b, &cfg)
+		if cfg.Running || !cfg.WSLConfUnavailable || cfg.WSLConf != "" || cfg.Systemd {
+			t.Fatalf("stopped config = %+v", cfg)
+		}
+	}
+	if w.Ran("-d docker-desktop") {
+		t.Fatal("config ran a command inside a stopped distro")
+	}
+	if st := fakeState(t, w, "docker-desktop"); st != "Stopped" {
+		t.Fatalf("docker-desktop woke up: %s", st)
+	}
+
+	// 執行中：照常讀 wsl.conf
+	_, b := e.req(t, http.MethodGet, "/api/machines/Ubuntu-26.04/config", "")
+	var cfg MachineConfig
+	_ = json.Unmarshal(b, &cfg)
+	if !cfg.Running || cfg.WSLConfUnavailable || !strings.Contains(cfg.WSLConf, "[boot]") {
+		t.Fatalf("running config = %+v", cfg)
+	}
+}

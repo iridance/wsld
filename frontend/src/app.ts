@@ -1676,8 +1676,12 @@ export class App {
             : []),
           infoField(t("gui.machines.disk_hint"), (d.disk_bytes ?? 0) > 0 ? humanSize(d.disk_bytes ?? 0) : "—", "info-disk"),
           this.diskLimitField(info.name, d),
-          el("div", { class: `tag ${d.systemd ? "ok" : ""}`, "data-testid": "machine-config-systemd", text: d.systemd ? t("gui.machines.systemd_on") : t("gui.machines.systemd_off") }),
-          el("pre", { class: "conf", "data-testid": "machine-config-conf", text: d.wsl_conf || t("gui.machines.no_conf") }),
+          ...(d.wsl_conf_unavailable
+            ? [el("p", { class: "muted", "data-testid": "machine-config-unavailable", text: d.running ? "…" : t("gui.machines.conf_stopped") })]
+            : [
+              el("div", { class: `tag ${d.systemd ? "ok" : ""}`, "data-testid": "machine-config-systemd", text: d.systemd ? t("gui.machines.systemd_on") : t("gui.machines.systemd_off") }),
+              el("pre", { class: "conf", "data-testid": "machine-config-conf", text: d.wsl_conf || t("gui.machines.no_conf") }),
+            ]),
         );
       } else {
         body.append(el("p", { class: "muted", text: "…" }));
@@ -2129,10 +2133,19 @@ export class App {
   }
 
   private async pollMachineUsage(name: string): Promise<void> {
+    const shown = this.st.info?.kind === "machine" && this.st.info.name === name ? this.st.info.detail : undefined;
+    const m = this.st.machines?.machines.find((x) => x.name === name);
+    // 停止中且 Info 已顯示停止狀態：沒有用量可取，不打 API（避免任何會叫醒機器的取樣）
+    if (m && m.state.toLowerCase() !== "running" && shown && !shown.running) return;
     try {
       const detail = await api.machineConfig(name);
       if (this.st.info?.kind !== "machine" || this.st.info.name !== name) return;
-      // 只就地更新 CPU／記憶體兩個元件，不重建整塊 Info
+      // 啟動／停止後 wsl.conf 由不可讀變可讀（或反之）：重建 Info；否則只就地更新用量元件
+      if (shown && !!shown.wsl_conf_unavailable !== !!detail.wsl_conf_unavailable) {
+        this.st.info = { kind: "machine", name, detail };
+        this.renderInfoDrawer();
+        return;
+      }
       this.updateMachineUsageBars(detail);
     } catch {
       // 輪詢失敗不打斷 Info；下次再試

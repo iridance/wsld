@@ -247,8 +247,10 @@ test("Machines: Info opens a right-side drawer with wsl.conf and usage bars", as
   await page.getByTestId("btn-info-close").click();
   await expect(drawer).toBeHidden();
 
+  // 停止中：不讀 wsl.conf（wsl -d 會把機器開起來）
   await page.getByTestId("btn-machine-config-docker-desktop").click();
-  await expect(page.getByTestId("machine-config-conf")).toContainText("(no /etc/wsl.conf)");
+  await expect(page.getByTestId("machine-config-unavailable")).toHaveText("Start the machine to view /etc/wsl.conf");
+  await expect(page.getByTestId("machine-config-conf")).toHaveCount(0);
   await expect(page.getByTestId("info-cpu-bar")).toHaveAttribute("data-pct", "0");
 });
 
