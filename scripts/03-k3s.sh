@@ -25,12 +25,13 @@ install_k3s() {
     log "k3s 已安裝"
   else
     command -v curl >/dev/null 2>&1 || die "需要 curl" 3
-    log "下載並安裝 k3s（$(wsld_k3s_install_exec)）"
+    install_exec="$(wsld_k3s_install_exec "$(wsld_k3s_node_name)")"
+    log "下載並安裝 k3s（$install_exec）"
     # 先下載再執行：不可寫成 `curl … | sh - </dev/null`（</dev/null 會蓋掉管線，sh 讀到空腳本、curl 以 23 結束）
     tmp="$(mktemp)"
     trap 'rm -f "$tmp"' RETURN
     curl -sfL -o "$tmp" https://get.k3s.io || die "下載 k3s 安裝腳本失敗（網路？）" 6
-    INSTALL_K3S_SKIP_START=true INSTALL_K3S_EXEC="$(wsld_k3s_install_exec)" sh "$tmp" </dev/null
+    INSTALL_K3S_SKIP_START=true INSTALL_K3S_EXEC="$install_exec" sh "$tmp" </dev/null
   fi
   mkdir -p "$DROPIN_DIR"
   wsld_render_k3s_dropin > "$DROPIN"

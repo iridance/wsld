@@ -414,6 +414,32 @@ SCRIPT
   [[ "$output" == *"--write-kubeconfig-mode 644"* ]]
 }
 
+@test "k3s_install_exec adds --node-name only when given one" {
+  run wsld_k3s_install_exec debian
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--node-name debian"* ]]
+  run wsld_k3s_install_exec
+  [[ "$output" != *"--node-name"* ]]
+}
+
+@test "k3s_node_name makes a valid lowercase k8s node name from the distro name" {
+  run wsld_k3s_node_name Ubuntu-26.04
+  [ "$output" = "ubuntu-26.04" ]
+  run wsld_k3s_node_name "My_Distro 1"
+  [ "$output" = "my-distro-1" ]
+  run wsld_k3s_node_name "_-weird-_"
+  [ "$output" = "weird" ]
+  run wsld_k3s_node_name "$(printf 'a%.0s' $(seq 1 70))"
+  [ "${#output}" -eq 63 ]
+}
+
+@test "k3s_node_name falls back to WSL_DISTRO_NAME, empty when unusable" {
+  WSL_DISTRO_NAME=Debian run wsld_k3s_node_name
+  [ "$output" = "debian" ]
+  WSL_DISTRO_NAME="" run wsld_k3s_node_name
+  [ -z "$output" ]
+}
+
 @test "render_k3s_dropin orders k3s after docker.service" {
   run wsld_render_k3s_dropin
   [ "$status" -eq 0 ]

@@ -220,7 +220,7 @@ Extra ≠ 0.5／v2.0 完成條件
   - **發現：k3s 必須排在 docker 之後啟動**。開機時 k3s 先於 dockerd 起來，agent 不會啟動 kubelet／cri-dockerd（node NotReady、pod 永遠 Pending）；手動 `systemctl restart k3s` 即恢復。k3s unit 預設只 `After=network-online.target` → 交付須加 drop-in：`After=docker.service`＋`Requires=docker.service`（或由 `wsld` 依序啟動 docker → k3s）
 - [x] Windows 側連 `127.0.0.1:6443`：Windows `curl.exe` 以 k3s CA 驗證 TLS 通過（http 401＝需憑證，符合預期）；伺服器憑證 SAN 含 127.0.0.1。（Windows 尚未安裝 `kubectl.exe`，完整 kubectl 流程留待交付驗證）
 - [x] 量測待機資源（單節點、僅系統 pod）：k3s cgroup 約 440 MB、`k3s-server` RSS 約 590 MB、dockerd 約 145 MB、containerd 約 60 MB → k3s 約 0.6 GB。doctor 門檻：尚未執行時 MemAvailable < 1.5 GiB 警告；執行中 MemAvailable < 512 MiB 警告（不以總量判斷：3.9 GB 的 WSL 實測可跑）
-- **其他發現**：所有 WSL2 distro 共用網路命名空間——測試機看得到主 distro 的 docker 網橋與 :23750，兩台 dockerd 的 docker0／使用者網路子網（172.17–172.21.0.0/16）不與 k3s 的 pod 10.42.0.0/16、service 10.43.0.0/16 重疊；node 名稱沿用 Windows 主機名（`framework`），兩台 distro 同名，故只允許單台開 k3s 的限制成立；distro 在沒有任何 wsl.exe 連線時會被 WSL 關閉（k3s 隨之停止），`wsld start` 需讓 distro 保持運行
+- **其他發現**：所有 WSL2 distro 共用網路命名空間——測試機看得到主 distro 的 docker 網橋與 :23750，兩台 dockerd 的 docker0／使用者網路子網（172.17–172.21.0.0/16）不與 k3s 的 pod 10.42.0.0/16、service 10.43.0.0/16 重疊；node 名稱當時沿用 Windows 主機名（`framework`），兩台 distro 同名（v0.19.0 起新安裝改以 machine 名稱命名，見 `--node-name`），故只允許單台開 k3s 的限制成立；distro 在沒有任何 wsl.exe 連線時會被 WSL 關閉（k3s 隨之停止），`wsld start` 需讓 distro 保持運行
 
 **go/no-go**：上列皆通過 → 進入交付。node IP 漂移無合理解 → 改評估 k3d 備案，回頭修訂本節。
 

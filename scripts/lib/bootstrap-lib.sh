@@ -347,8 +347,22 @@ wsld_ensure_wsl_conf_systemd() {
 
 # k3s 安裝參數（PoC 定案）：與 dockerd 共用映像檔（--docker）、不啟用 traefik（避免搶 80/443）、
 # kubeconfig 對一般使用者可讀（WSL 內免 sudo 即可 kubectl）。
+# 可帶一個 node 名稱參數：node 以 WSL machine（distro）命名，而不是 k3s 預設的 hostname
+# （WSL2 的 hostname 預設沿用 Windows 電腦名稱，每台 machine 都一樣，無法分辨）。
 wsld_k3s_install_exec() {
-  printf '%s\n' '--docker --disable traefik --write-kubeconfig-mode 644'
+  local node="${1:-}" exec_args='--docker --disable traefik --write-kubeconfig-mode 644'
+  if [ -n "$node" ]; then exec_args="$exec_args --node-name $node"; fi
+  printf '%s\n' "$exec_args"
+}
+
+# k3s node 名稱：distro 名稱轉成合法的 k8s node 名稱（小寫 DNS 子網域：英數、-、.；頭尾須為英數；≤63）。
+# 取自參數，缺省時用 WSL 提供的 $WSL_DISTRO_NAME；轉完是空字串就不指定（交給 k3s 用 hostname）。
+wsld_k3s_node_name() {
+  local n="${1:-${WSL_DISTRO_NAME:-}}"
+  n="$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9.-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/[^a-z0-9]*$//')"
+  n="${n:0:63}"
+  n="$(printf '%s' "$n" | sed -e 's/[^a-z0-9]*$//')"
+  printf '%s\n' "$n"
 }
 
 # k3s.service drop-in：必須排在 docker.service 之後。
