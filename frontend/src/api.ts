@@ -243,6 +243,7 @@ export interface K8sInfo {
   warning?: string;
   status: K8sStatus;
   kubeconfig_path: string;
+  machine_kubeconfig: string;
 }
 
 export interface K8sPod {

@@ -44,6 +44,8 @@ test("one-click start shows progress, then Ready with cluster info", async ({ pa
   await expect(page.getByTestId("k8s-f-node")).toContainText("framework");
   await expect(page.getByTestId("k8s-f-api")).toHaveText("https://127.0.0.1:6443");
   await expect(page.getByTestId("k8s-f-context")).toHaveText("wsld-Ubuntu-26.04");
+  // 資訊卡顯示機器內的 kubeconfig 正本，不是 Windows 的 ~\.kube\config
+  await expect(page.getByTestId("k8s-f-kubeconfig")).toHaveText("/etc/rancher/k3s/k3s.yaml");
   await expect(page.getByTestId("k8s-f-memory")).toHaveText("419.4 MB");
   await expect(page.getByTestId("page-sub")).toContainText("Ready");
   // 啟動鈕變成停止鈕；重置與匯出可用
@@ -60,6 +62,10 @@ test("one-click stop returns to Off and keeps k3s installed", async ({ page, req
   await expect(page.getByTestId("k8s-hint")).toContainText("k3s is off");
   await expect(page.getByTestId("btn-k8s-start")).toBeEnabled();
   expect((await k8sState(request)).running).toBe("");
+  // 匯出只讀機器內的 k3s.yaml，與 k3s 是否啟動無關
+  await expect(page.getByTestId("btn-k8s-kubeconfig")).toBeEnabled();
+  await page.getByTestId("btn-k8s-kubeconfig").click();
+  await expect(page.getByTestId("notice")).toContainText("wsld-Ubuntu-26.04");
 });
 
 test("a failed start surfaces the error on the card and nothing stays enabled", async ({ page, request }) => {

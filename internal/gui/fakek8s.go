@@ -181,8 +181,8 @@ func (f *FakeK8s) Reset(ctx context.Context) error {
 func (f *FakeK8s) Kubeconfig(context.Context) ([]byte, error) {
 	f.c.mu.Lock()
 	defer f.c.mu.Unlock()
-	if !strings.EqualFold(f.c.running, f.distro) {
-		return nil, errors.New("k3s is not running")
+	if !f.c.installed[f.distro] {
+		return nil, errors.New("k3s is not installed")
 	}
 	return []byte(`apiVersion: v1
 clusters:

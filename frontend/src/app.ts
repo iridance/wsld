@@ -2834,13 +2834,14 @@ export class App {
     const running = state === "ready" || state === "starting";
     const busyOp = !!op;
 
-    const kube = btn({ "data-testid": "btn-k8s-kubeconfig" }, "save", t("gui.k8s.kubeconfig"));
-    kube.disabled = !k?.enabled || state !== "ready" || busyOp;
+    const kube = btn({ "data-testid": "btn-k8s-kubeconfig" }, "download", t("gui.k8s.kubeconfig"));
+    // 匯出只是讀機器內的檔案：不看 k3s 是否就緒／啟動中／已關閉，只在作業進行中、尚未安裝或機器停止時停用。
+    kube.disabled = !k?.machine || busyOp || state === "not-installed" || state === "stopped";
     kube.onclick = () => void this.k8sExportKubeconfig();
-    const reset = btn({ "data-testid": "btn-k8s-reset" }, "broom", t("gui.k8s.reset"));
+    const reset = btn({ "data-testid": "btn-k8s-reset" }, "reset", t("gui.k8s.reset"));
     reset.disabled = !k?.enabled || busyOp;
     reset.onclick = () => {
-      void this.confirm(fmt(t("gui.k8s.confirm.reset"), k?.machine ?? ""), undefined, { label: t("gui.k8s.reset"), icon: "broom" }).then((ok) => {
+      void this.confirm(fmt(t("gui.k8s.confirm.reset"), k?.machine ?? ""), undefined, { label: t("gui.k8s.reset"), icon: "reset" }).then((ok) => {
         if (ok) void this.k8sRun(() => api.k8sReset());
       });
     };
@@ -2891,7 +2892,7 @@ export class App {
       fields.push(["api", t("gui.k8s.f.api"), s.endpoint]);
       fields.push(["context", t("gui.k8s.f.context"), s.context]);
       if (s.memory_bytes) fields.push(["memory", t("gui.k8s.f.memory"), humanSize(s.memory_bytes)]);
-      fields.push(["kubeconfig", t("gui.k8s.f.kubeconfig"), k.kubeconfig_path]);
+      fields.push(["kubeconfig", t("gui.k8s.f.kubeconfig"), k.machine_kubeconfig]);
     }
     const grid = el("dl", { class: "k8s-fields", "data-testid": "k8s-fields" });
     for (const [key, label, value] of fields) {

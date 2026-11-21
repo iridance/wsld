@@ -140,6 +140,9 @@ func TestK8sOnStartsInBackgroundThenPersistsWithoutExporting(t *testing.T) {
 	if m, ok := k.cfg(t).K8sMachine(); !ok || m.Distro != "Ubuntu-26.04" {
 		t.Fatal("flag must be persisted after success")
 	}
+	if r.MachineKubeconfig != "/etc/rancher/k3s/k3s.yaml" {
+		t.Fatalf("info card must show the in-machine kubeconfig, got %q", r.MachineKubeconfig)
+	}
 	if _, err := os.Stat(k.kube); err == nil {
 		t.Fatal("starting k8s must not write the Windows kubeconfig")
 	}
@@ -285,8 +288,8 @@ func mustRead(t *testing.T, p string) string {
 
 func TestK8sKubeconfigEndpoint(t *testing.T) {
 	k := newK8sEnv(t)
-	if resp, _ := k.req(t, "POST", "/api/k8s/kubeconfig", ""); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("when off = %d", resp.StatusCode)
+	if resp, _ := k.req(t, "POST", "/api/k8s/kubeconfig", ""); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("never installed = %d (reading k3s.yaml must fail)", resp.StatusCode)
 	}
 	k.enable(t)
 	_ = os.Remove(k.kube)
@@ -296,6 +299,18 @@ func TestK8sKubeconfigEndpoint(t *testing.T) {
 	}
 	if _, err := os.Stat(k.kube); err != nil {
 		t.Fatal("kubeconfig file must be written")
+	}
+	// k3s 關閉後 k3s.yaml 仍在：匯出與狀態無關
+	k.req(t, "POST", "/api/k8s/off", "")
+	if r := k.waitIdle(t); r.Enabled {
+		t.Fatalf("k8s should be off: %+v", r)
+	}
+	_ = os.Remove(k.kube)
+	if resp, b := k.req(t, "POST", "/api/k8s/kubeconfig", ""); resp.StatusCode != 200 {
+		t.Fatalf("export while k3s is off = %d %s", resp.StatusCode, b)
+	}
+	if _, err := os.Stat(k.kube); err != nil {
+		t.Fatal("kubeconfig must be written even when k3s is off")
 	}
 }
 

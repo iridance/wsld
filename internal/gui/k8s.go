@@ -61,6 +61,8 @@ type K8sResponse struct {
 	Status  k8s.Status `json:"status"`
 	// KubeconfigPath：匯出 kubeconfig 的目標檔。
 	KubeconfigPath string `json:"kubeconfig_path"`
+	// MachineKubeconfig：機器內 k3s 產生的 kubeconfig 正本（資訊卡顯示這個，不是 Windows 那份）。
+	MachineKubeconfig string `json:"machine_kubeconfig"`
 }
 
 // ResetK8sState 清除背景作業狀態（測試主機 /__test/reset 用）。
@@ -108,12 +110,15 @@ func (s *Server) handleK8sGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) k8sSnapshot(ctx context.Context) K8sResponse {
+	// 先讀背景作業狀態、再讀設定：作業結束（Op 為空）前一定已存好旗標，
+	// 反過來讀會在作業剛好完成時回出「Op 已空、旗標還是舊的」的錯誤組合。
+	s.k8sMu.Lock()
+	op, opErr, opWarn := s.k8sOp, s.k8sErr, s.k8sWarn
+	s.k8sMu.Unlock()
 	cfg := s.cfg()
 	target, enabled := k8sTarget(cfg)
-	resp := K8sResponse{Machine: target, Enabled: enabled, KubeconfigPath: s.kubeconfigPath()}
-	s.k8sMu.Lock()
-	resp.Op, resp.Error, resp.Warning = s.k8sOp, s.k8sErr, s.k8sWarn
-	s.k8sMu.Unlock()
+	resp := K8sResponse{Machine: target, Enabled: enabled, KubeconfigPath: s.kubeconfigPath(), MachineKubeconfig: k8s.MachineKubeconfigPath}
+	resp.Op, resp.Error, resp.Warning = op, opErr, opWarn
 	if target == "" {
 		return resp
 	}
@@ -303,16 +308,19 @@ func (s *Server) handleK8sKubeconfig(w http.ResponseWriter, r *http.Request) {
 	if s.k8sUnavailable(w) {
 		return
 	}
-	owner, ok := s.cfg().K8sMachine()
-	if !ok {
-		writeErr(w, http.StatusConflict, "conflict", errors.New("k8s is not enabled on any machine"))
+	// 匯出只是讀機器內的 k3s.yaml，與 k3s 目前是否啟動／就緒無關：k8s 關閉時改用主要機器，
+	// 檔案不存在（沒裝過）才由讀取失敗回錯誤。
+	target, _ := k8sTarget(s.cfg())
+	mgr := s.k8sMgr(target)
+	if target == "" || mgr == nil {
+		writeErr(w, http.StatusConflict, "conflict", errors.New("no machine to export a kubeconfig from"))
 		return
 	}
-	if err := s.exportKubeconfig(r.Context(), s.k8sMgr(owner.Distro), owner.Distro); err != nil {
+	if err := s.exportKubeconfig(r.Context(), mgr, target); err != nil {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"path": s.kubeconfigPath(), "context": k8s.ContextName(owner.Distro)})
+	writeJSON(w, http.StatusOK, map[string]string{"path": s.kubeconfigPath(), "context": k8s.ContextName(target)})
 }
 
 // k8sOwner 解析資源類請求要操作的 machine；k8s 未開啟回 409。

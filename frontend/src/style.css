@@ -646,7 +646,7 @@ button.usage-btn[aria-expanded="true"] .ico { transform: rotate(180deg); }
 h2.machine-name { margin: 0 4px 0 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .machine-meta { font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px; }
 .machine-meta .state { font-weight: 600; }
-.machine-foot { display: flex; align-items: center; gap: 2px; padding-top: 10px; border-top: 1px solid var(--border); }
+.machine-foot { display: flex; align-items: center; gap: 2px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
 .machine-foot > button:not(.icon) { margin-right: 6px; }
 
 /* ---- 引擎未啟動 ------------------------------------------------------------ */
