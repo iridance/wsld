@@ -850,3 +850,4 @@ button.arch-node:hover:not(:disabled) { border-color: var(--accent); }
 
 .k8s-ns-toggle { margin: 0 14px 14px; padding: 6px 12px; background: none; border: 1px dashed var(--border, currentColor); border-radius: 6px; color: inherit; opacity: .7; cursor: pointer; font: inherit; }
 .k8s-ns-toggle:hover { opacity: 1; }
+.k8s-ns-card .ns-others { display: block; margin-top: 4px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

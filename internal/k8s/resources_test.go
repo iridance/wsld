@@ -264,7 +264,12 @@ const extrasJSON = `{"items":[
  {"kind":"ConfigMap","metadata":{"name":"api-env","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},"data":{"A":"1","B":"2"},"binaryData":{"C":"x"}},
  {"kind":"ConfigMap","metadata":{"name":"kube-root-ca.crt","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},"data":{"ca.crt":"x"}},
  {"kind":"PersistentVolumeClaim","metadata":{"name":"data","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},
-  "spec":{"storageClassName":"local-path"},"status":{"phase":"Bound","capacity":{"storage":"20Gi"}}}
+  "spec":{"storageClassName":"local-path"},"status":{"phase":"Bound","capacity":{"storage":"20Gi"}}},
+ {"kind":"Lease","metadata":{"name":"framework","namespace":"kube-node-lease","creationTimestamp":"2026-11-21T06:00:00Z"}},
+ {"kind":"Role","metadata":{"name":"system:controller:bootstrap-signer","namespace":"kube-public","creationTimestamp":"2026-11-21T06:00:00Z"}},
+ {"kind":"ServiceAccount","metadata":{"name":"default","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"}},
+ {"kind":"ServiceAccount","metadata":{"name":"deployer","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"}},
+ {"kind":"Secret","metadata":{"name":"tls","namespace":"shop","creationTimestamp":"2026-11-21T06:00:00Z"},"data":{"tls.key":"c2VjcmV0"}}
 ]}`
 
 func TestParseExtras(t *testing.T) {
@@ -290,11 +295,20 @@ func TestParseExtras(t *testing.T) {
 	if len(x.PVCs) != 1 || x.PVCs[0].Status != "Bound" || x.PVCs[0].Size != "20Gi" || x.PVCs[0].StorageClass != "local-path" {
 		t.Fatalf("pvcs = %+v", x.PVCs)
 	}
+	// Other：如實列出沒有專屬分頁的資源；每個 namespace 自動產生的 default ServiceAccount 略過
+	var got []string
+	for _, o := range x.Others {
+		got = append(got, o.Kind+" "+o.Namespace+"/"+o.Name)
+	}
+	want := "Lease kube-node-lease/framework,Role kube-public/system:controller:bootstrap-signer,ServiceAccount shop/deployer,Secret shop/tls"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("others = %v", got)
+	}
 }
 
 func TestListExtrasAndDeploymentDetail(t *testing.T) {
 	f := newFake()
-	f.on(d+" k3s kubectl get statefulsets,ingresses,configmaps,persistentvolumeclaims -n shop -o json", resp{out: extrasJSON})
+	f.on(d+" k3s kubectl get statefulsets,ingresses,configmaps,persistentvolumeclaims,"+otherResources+" -n shop -o json", resp{out: extrasJSON})
 	x, err := newMgr(f).ListExtras(context.Background(), "shop")
 	if err != nil || len(x.PVCs) != 1 {
 		t.Fatalf("%+v %v", x, err)

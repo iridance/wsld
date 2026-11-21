@@ -6,7 +6,7 @@ const t0 = "2026-11-21T06:00:00Z";
 const pod = (name: string, ns: string, labels: Record<string, string>, status = "Running", ready = "1/1", extra: Partial<K8sPod> = {}): K8sPod => ({ name, namespace: ns, status, ready, restarts: 0, labels, created_at: t0, ...extra });
 const dep = (name: string, ns: string, selector: Record<string, string>, ready = "1/1"): K8sDeployment => ({ name, namespace: ns, ready, replicas: 1, up_to_date: 1, available: 1, selector, created_at: t0 });
 const svc = (name: string, ns: string, selector?: Record<string, string>): K8sService => ({ name, namespace: ns, type: "ClusterIP", cluster_ip: "10.0.0.1", ports: [], selector, created_at: t0 });
-const res = (r: Partial<K8sResources>): K8sResources => ({ pods: [], deployments: [], services: [], statefulsets: [], ingresses: [], configmaps: [], pvcs: [], ...r });
+const res = (r: Partial<K8sResources>): K8sResources => ({ pods: [], deployments: [], services: [], statefulsets: [], ingresses: [], configmaps: [], pvcs: [], others: [], ...r });
 
 test("summary counts only the namespace; workloads = deployments + statefulsets", () => {
   const s = summarizeNamespace(
@@ -22,6 +22,13 @@ test("summary counts only the namespace; workloads = deployments + statefulsets"
     }),
   );
   expect(s).toMatchObject({ pods: 2, podsReady: 1, workloads: 2, services: 1, ingresses: 1, configMaps: 1, pvcs: 1, health: "warn" });
+});
+
+test("a namespace with only Lease/Role resources is not empty and counts them by kind", () => {
+  const o = (kind: string, name: string) => ({ kind, name, namespace: "kube-public", created_at: t0 });
+  const s = summarizeNamespace("kube-public", res({ others: [o("Role", "a"), o("RoleBinding", "a"), o("Role", "b"), { ...o("Lease", "x"), namespace: "other" }] }));
+  expect(s.others).toEqual([{ kind: "Role", count: 2 }, { kind: "RoleBinding", count: 1 }]);
+  expect(s.health).toBe("ok");
 });
 
 test("health: failing pod → error, all ready → ok, nothing → empty", () => {

@@ -54,12 +54,25 @@ type PVC struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// Other 是 GUI 沒有專屬分頁的資源（DaemonSet／Job／CronJob／Lease／ServiceAccount／Role／RoleBinding／Secret）；
+// 只取種類與名稱，讓 namespace 卡片如實顯示裡面有什麼（例如 kube-node-lease 的 Lease、kube-public 的 Role）。
+type Other struct {
+	Kind      string    `json:"kind"`
+	Name      string    `json:"name"`
+	Namespace string    `json:"namespace"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// otherResources 是 Other 涵蓋的種類（kubectl 資源名）。
+const otherResources = "daemonsets,jobs,cronjobs,leases,serviceaccounts,secrets,roles,rolebindings"
+
 // Extras 是架構圖與 Config／Storage 分頁額外需要的資源種類（一次 kubectl 取得）。
 type Extras struct {
 	StatefulSets []StatefulSet `json:"statefulsets"`
 	Ingresses    []Ingress     `json:"ingresses"`
 	ConfigMaps   []ConfigMap   `json:"configmaps"`
 	PVCs         []PVC         `json:"pvcs"`
+	Others       []Other       `json:"others"`
 }
 
 // ParseExtras 解析 `kubectl get statefulsets,ingresses,configmaps,persistentvolumeclaims -o json`。
@@ -114,7 +127,7 @@ func ParseExtras(js string) (Extras, error) {
 	if err := json.Unmarshal([]byte(js), &v); err != nil {
 		return Extras{}, err
 	}
-	x := Extras{StatefulSets: []StatefulSet{}, Ingresses: []Ingress{}, ConfigMaps: []ConfigMap{}, PVCs: []PVC{}}
+	x := Extras{StatefulSets: []StatefulSet{}, Ingresses: []Ingress{}, ConfigMaps: []ConfigMap{}, PVCs: []PVC{}, Others: []Other{}}
 	for _, it := range v.Items {
 		m := it.Metadata
 		switch it.Kind {
@@ -145,6 +158,13 @@ func ParseExtras(js string) (Extras, error) {
 				continue
 			}
 			x.ConfigMaps = append(x.ConfigMaps, ConfigMap{Name: m.Name, Namespace: m.Namespace, Keys: len(it.Data) + len(it.BinaryData), CreatedAt: m.CreationTimestamp})
+		case "DaemonSet", "Job", "CronJob", "Lease", "ServiceAccount", "Secret", "Role", "RoleBinding":
+			// 每個 namespace 自動產生的 default ServiceAccount 不是使用者的資源，略過（與 kube-root-ca.crt 同理）。
+			// Secret 的內容不解析，只取名稱。
+			if it.Kind == "ServiceAccount" && m.Name == "default" {
+				continue
+			}
+			x.Others = append(x.Others, Other{Kind: it.Kind, Name: m.Name, Namespace: m.Namespace, CreatedAt: m.CreationTimestamp})
 		case "PersistentVolumeClaim":
 			x.PVCs = append(x.PVCs, PVC{Name: m.Name, Namespace: m.Namespace, Status: it.Status.Phase, Size: it.Status.Capacity.Storage, StorageClass: it.Spec.StorageClassName, CreatedAt: m.CreationTimestamp})
 		}
@@ -152,13 +172,13 @@ func ParseExtras(js string) (Extras, error) {
 	return x, nil
 }
 
-// ListExtras 列出 StatefulSet／Ingress／ConfigMap／PVC；ns 為空 = 所有 namespace。
+// ListExtras 列出 StatefulSet／Ingress／ConfigMap／PVC 與 Other 各種類；ns 為空 = 所有 namespace。
 func (m *Manager) ListExtras(ctx context.Context, ns string) (Extras, error) {
 	scope, err := nsArgs(ns)
 	if err != nil {
 		return Extras{}, err
 	}
-	args := append([]string{"k3s", "kubectl", "get", "statefulsets,ingresses,configmaps,persistentvolumeclaims"}, scope...)
+	args := append([]string{"k3s", "kubectl", "get", "statefulsets,ingresses,configmaps,persistentvolumeclaims," + otherResources}, scope...)
 	out, err := m.root(ctx, nil, append(args, "-o", "json")...)
 	if err != nil {
 		return Extras{}, err

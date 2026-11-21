@@ -40,8 +40,8 @@ type InfoDrawer =
 
 /** 側欄視圖。 */
 export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "kubernetes" | "settings";
-type K8sTab = "architecture" | "pods" | "workloads" | "services" | "config" | "storage";
-const K8S_TABS: K8sTab[] = ["architecture", "pods", "workloads", "services", "config", "storage"];
+type K8sTab = "architecture" | "pods" | "workloads" | "services" | "config" | "storage" | "others";
+const K8S_TABS: K8sTab[] = ["architecture", "pods", "workloads", "services", "config", "storage", "others"];
 type CtFilter = "all" | "running" | "stopped";
 type ImgKind = "inuse" | "unused" | "dangling" | "unknown";
 type ImgFilter = "all" | "inuse" | "unused" | "dangling";
@@ -2966,7 +2966,7 @@ export class App {
   /** 全部 namespace 的資源（卡片、架構圖、各分頁共用）。 */
   private k8sRes(): K8sResources {
     const x = this.st.k8sExtras;
-    return { pods: this.st.k8sPods, deployments: this.st.k8sDeployments, services: this.st.k8sServices, statefulsets: x.statefulsets, ingresses: x.ingresses, configmaps: x.configmaps, pvcs: x.pvcs };
+    return { pods: this.st.k8sPods, deployments: this.st.k8sDeployments, services: this.st.k8sServices, statefulsets: x.statefulsets, ingresses: x.ingresses, configmaps: x.configmaps, pvcs: x.pvcs, others: x.others };
   }
 
   /** Namespace flow card 格：每個 namespace 一張卡，內容是 Ingress → Service → Workload → Pods 的數量流程。 */
@@ -3023,6 +3023,7 @@ export class App {
       ),
       ...(sum.nodePorts.length ? [el("span", { class: "ns-exposed", "data-testid": "k8s-ns-exposed", text: `NodePort ${sum.nodePorts.join(", ")}`, title: t("gui.k8s.exposed") })] : []),
       el("span", { class: "ns-foot muted", "data-testid": "k8s-ns-foot", text: fmt(t("gui.k8s.ns.foot"), String(sum.configMaps), String(sum.pvcs)) }),
+      ...(sum.others.length ? [el("span", { class: "ns-others muted", "data-testid": "k8s-ns-others", text: sum.others.map((o) => `${o.kind} ${o.count}`).join(" · "), title: sum.others.map((o) => `${o.kind} ${o.count}`).join("\n") })] : []),
     );
     card.onclick = () => this.k8sSelectNs(ns);
     return card;
@@ -3305,6 +3306,25 @@ export class App {
     return wrap;
   }
 
+  /** Other 分頁：沒有專屬分頁的資源（Lease、Role、Secret…）如實列出種類與名稱，只讀。 */
+  private k8sOthersTab(ns: string): HTMLElement {
+    const wrap = el("div", { class: "k8s-resources" });
+    const items = this.st.k8sExtras.others.filter((c) => c.namespace === ns);
+    if (items.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_others")), wrap;
+    const { table: tbl, tbody } = this.k8sTable("others", K8S_OTHER_COLS);
+    for (const o of [...items].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))) {
+      tbody.append(
+        el("tr", { "data-testid": "other-row", "data-name": o.name, "data-kind": o.kind },
+          el("td", { class: "name-cell" }, el("span", { class: "ct-name", "data-testid": "other-name", text: o.name, title: o.name })),
+          el("td", {}, el("span", { class: "kind-chip cm", "data-testid": "other-kind", text: o.kind })),
+          this.k8sCell("other-age", ageText(o.created_at), "muted"),
+        ),
+      );
+    }
+    wrap.append(tbl);
+    return wrap;
+  }
+
   // ---- 右側面板 ------------------------------------------------------------------------
 
   /** 右側面板（寬度 50%）：選到 namespace 時顯示「Architecture／Pods／Workloads／Services／Config／Storage」；點 Deployment 進入詳情。 */
@@ -3356,7 +3376,7 @@ export class App {
     );
     const content = el("div", { class: "k8s-side-body", "data-testid": "k8s-side-body" });
     const tab = this.st.k8sTab;
-    content.append(tab === "architecture" ? this.k8sArchitecture(ns) : tab === "pods" ? this.k8sPodsTab(ns) : tab === "workloads" ? this.k8sWorkloadsTab(ns) : tab === "services" ? this.k8sServicesTab(ns) : tab === "config" ? this.k8sConfigTab(ns) : this.k8sStorageTab(ns));
+    content.append(tab === "architecture" ? this.k8sArchitecture(ns) : tab === "pods" ? this.k8sPodsTab(ns) : tab === "workloads" ? this.k8sWorkloadsTab(ns) : tab === "services" ? this.k8sServicesTab(ns) : tab === "config" ? this.k8sConfigTab(ns) : tab === "storage" ? this.k8sStorageTab(ns) : this.k8sOthersTab(ns));
     side.replaceChildren(head, el("div", { class: "k8s-side-tabs" }, tabs), content);
     if (tab === "architecture") this.layoutArchitecture(content);
   }
@@ -4146,6 +4166,12 @@ const K8S_CONFIG_COLS: Col[] = [
   { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
 ];
 
+const K8S_OTHER_COLS: Col[] = [
+  { key: "name", label: "gui.col.name", def: 280, min: 120, resizable: true },
+  { key: "type", label: "gui.col.type", def: 130, min: 80, resizable: true },
+  { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
+];
+
 const K8S_STORAGE_COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 200, min: 120, resizable: true },
   { key: "status", label: "gui.col.state", def: 100, min: 80, resizable: true },
@@ -4156,7 +4182,7 @@ const K8S_STORAGE_COLS: Col[] = [
 ];
 
 function emptyK8sExtras(): K8sExtras {
-  return { statefulsets: [], ingresses: [], configmaps: [], pvcs: [] };
+  return { statefulsets: [], ingresses: [], configmaps: [], pvcs: [], others: [] };
 }
 
 /** 舊版存的分頁名（deployments）與無效值一律收斂到有效分頁。 */

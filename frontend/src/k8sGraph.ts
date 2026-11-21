@@ -1,4 +1,4 @@
-import type { K8sConfigMap, K8sDeployment, K8sIngress, K8sPod, K8sPVC, K8sService, K8sStatefulSet } from "./api";
+import type { K8sConfigMap, K8sDeployment, K8sIngress, K8sOther, K8sPod, K8sPVC, K8sService, K8sStatefulSet } from "./api";
 
 /** 架構圖與 namespace 卡片所需的資源（全部 namespace 的清單，依 namespace 過濾）。 */
 export interface K8sResources {
@@ -9,6 +9,7 @@ export interface K8sResources {
   ingresses: K8sIngress[];
   configmaps: K8sConfigMap[];
   pvcs: K8sPVC[];
+  others: K8sOther[];
 }
 
 export type NsHealth = "ok" | "warn" | "error" | "empty";
@@ -23,6 +24,8 @@ export interface NsSummary {
   podsReady: number;
   configMaps: number;
   pvcs: number;
+  /** 沒有專屬分頁的資源，依種類計數（Lease、Role…），讓卡片如實顯示 namespace 裡有什麼 */
+  others: { kind: string; count: number }[];
   /** 對外的 NodePort（TCP，去重、由小到大）；本地常不經 Ingress、直接用 NodePort 進入 */
   nodePorts: number[];
   health: NsHealth;
@@ -46,6 +49,12 @@ export function nodePortsOf(s: K8sService): number[] {
   return s.ports.filter((p) => p.node_port && (p.protocol === "" || p.protocol === "TCP")).map((p) => p.node_port as number);
 }
 
+function otherCounts(xs: K8sOther[]): { kind: string; count: number }[] {
+  const m = new Map<string, number>();
+  for (const x of xs) m.set(x.kind, (m.get(x.kind) ?? 0) + 1);
+  return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => a.kind.localeCompare(b.kind));
+}
+
 export function summarizeNamespace(ns: string, r: K8sResources): NsSummary {
   const pods = inNs(r.pods, ns);
   const podsReady = pods.filter(podReady).length;
@@ -58,12 +67,13 @@ export function summarizeNamespace(ns: string, r: K8sResources): NsSummary {
     podsReady,
     configMaps: inNs(r.configmaps, ns).length,
     pvcs: inNs(r.pvcs, ns).length,
+    others: otherCounts(inNs(r.others, ns)),
     nodePorts: [...new Set(inNs(r.services, ns).flatMap(nodePortsOf))].sort((a, b) => a - b),
     health: "ok",
   };
   if (pods.some(podFailing)) s.health = "error";
   else if (podsReady < pods.length) s.health = "warn";
-  else if (pods.length + s.services + s.workloads + s.ingresses + s.configMaps + s.pvcs === 0) s.health = "empty";
+  else if (pods.length + s.services + s.workloads + s.ingresses + s.configMaps + s.pvcs + s.others.length === 0) s.health = "empty";
   return s;
 }
 

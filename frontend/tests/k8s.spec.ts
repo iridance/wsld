@@ -291,24 +291,34 @@ test("top nav never scrolls: all seven tabs stay reachable at common window widt
 
 // ---- namespace flow cards、右側面板與架構圖 -----------------------------------------
 
-test("empty namespaces are folded behind a toggle; default and the open namespace stay", async ({ page }) => {
+test("namespace cards show what is really inside, and only truly empty namespaces fold behind a toggle", async ({ page }) => {
   await goK8s(page);
   await startCluster(page);
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(2);
-  await expect(page.getByTestId("k8s-ns-card-kube-public")).toHaveCount(0);
+  // kube-node-lease／kube-public 沒有 Pod／Service，但有 Lease／Role／RoleBinding：如實列出，不算空
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
+  await expect(page.getByTestId("k8s-ns-card-kube-node-lease").getByTestId("k8s-ns-others")).toHaveText("Lease 1");
+  await expect(page.getByTestId("k8s-ns-card-kube-public").getByTestId("k8s-ns-others")).toHaveText("Role 1 · RoleBinding 1");
+  await expect(page.getByTestId("k8s-ns-card-kube-public")).not.toHaveAttribute("data-health", "empty");
+  // 什麼都沒有的 namespace 才收起
+  await expect(page.getByTestId("k8s-ns-card-scratch")).toHaveCount(0);
   const toggle = page.getByTestId("k8s-ns-toggle");
-  await expect(toggle).toContainText("2");
+  await expect(toggle).toContainText("1");
+  await toggle.click();
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(5);
+  await expect(page.getByTestId("k8s-ns-card-scratch")).toHaveAttribute("data-health", "empty");
   await toggle.click();
   await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
-  await expect(page.getByTestId("k8s-ns-card-kube-public")).toHaveAttribute("data-health", "empty");
-  await toggle.click();
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(2);
+  // Other 分頁列出實際的資源
+  await page.getByTestId("k8s-ns-card-kube-public").click();
+  await page.getByTestId("k8s-tabs-others").click();
+  await expect(page.getByTestId("other-row")).toHaveCount(2);
+  await expect(page.getByTestId("other-row").first().getByTestId("other-kind")).toHaveText("Role");
 });
 
 test("namespaces are shown as flow cards: Service → Deployment → Pods counts per namespace", async ({ page }) => {
   await goK8s(page);
   await startCluster(page);
-  await expect(page.locator(".k8s-ns-card")).toHaveCount(2);
+  await expect(page.locator(".k8s-ns-card")).toHaveCount(4);
   const def = page.getByTestId("k8s-ns-card-default");
   await expect(def.getByTestId("k8s-ns-name")).toHaveText("default");
   await expect(def.getByTestId("k8s-ns-node-services")).toHaveText("2");

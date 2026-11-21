@@ -29,6 +29,7 @@ type FakeK8sCluster struct {
 	ingresses  []k8s.Ingress
 	configmaps []k8s.ConfigMap
 	pvcs       []k8s.PVC
+	others     []k8s.Other
 	namespaces []string
 	Calls      []string // 動作紀錄：start:<d> stop:<d> reset:<d> delete:pod/ns/name …
 }
@@ -42,7 +43,7 @@ func NewFakeK8sCluster() *FakeK8sCluster {
 
 func (c *FakeK8sCluster) seed() {
 	t0 := time.Now().Add(-2 * time.Hour)
-	c.namespaces = []string{"default", "kube-system", "kube-public", "kube-node-lease"}
+	c.namespaces = []string{"default", "kube-system", "kube-public", "kube-node-lease", "scratch"}
 	c.pods = []k8s.Pod{
 		{Name: "coredns-577d995dff-74qgr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.10", Labels: map[string]string{"k8s-app": "kube-dns"}, CreatedAt: t0},
 		{Name: "local-path-provisioner-56c6584955-w6bbr", Namespace: "kube-system", Status: "Running", Ready: "1/1", Node: "framework", IP: "10.42.0.11", CreatedAt: t0},
@@ -55,6 +56,11 @@ func (c *FakeK8sCluster) seed() {
 	}
 	c.sts, c.ingresses = nil, []k8s.Ingress{{Name: "poc-web", Namespace: "default", Rules: []k8s.IngressRule{{Host: "poc.local", Path: "/", Service: "poc-web", Port: "8080"}}, CreatedAt: t0}}
 	c.configmaps = []k8s.ConfigMap{{Name: "poc-web-env", Namespace: "default", Keys: 2, CreatedAt: t0}}
+	c.others = []k8s.Other{
+		{Kind: "Lease", Name: "framework", Namespace: "kube-node-lease", CreatedAt: t0},
+		{Kind: "Role", Name: "system:controller:bootstrap-signer", Namespace: "kube-public", CreatedAt: t0},
+		{Kind: "RoleBinding", Name: "system:controller:bootstrap-signer", Namespace: "kube-public", CreatedAt: t0},
+	}
 	c.pvcs = []k8s.PVC{{Name: "poc-data", Namespace: "default", Status: "Bound", Size: "1Gi", StorageClass: "local-path", CreatedAt: t0}}
 	c.services = []k8s.Service{
 		{Name: "kubernetes", Namespace: "default", Type: "ClusterIP", ClusterIP: "10.43.0.1", Ports: []k8s.ServicePort{{Name: "https", Port: 443, Protocol: "TCP"}}, CreatedAt: t0},
@@ -210,7 +216,7 @@ func (f *FakeK8s) Reset(ctx context.Context) error {
 	}
 	f.c.pods = keep
 	f.c.ingresses, f.c.configmaps, f.c.pvcs, f.c.sts = nil, nil, nil, nil
-	f.c.namespaces = []string{"default", "kube-system", "kube-public", "kube-node-lease"}
+	f.c.namespaces = []string{"default", "kube-system", "kube-public", "kube-node-lease", "scratch"}
 	f.c.running = f.distro
 	f.c.mu.Unlock()
 	return nil
@@ -316,7 +322,7 @@ func (f *FakeK8s) ListExtras(_ context.Context, ns string) (k8s.Extras, error) {
 	if err := f.requireRunning(); err != nil {
 		return k8s.Extras{}, err
 	}
-	x := k8s.Extras{StatefulSets: []k8s.StatefulSet{}, Ingresses: []k8s.Ingress{}, ConfigMaps: []k8s.ConfigMap{}, PVCs: []k8s.PVC{}}
+	x := k8s.Extras{StatefulSets: []k8s.StatefulSet{}, Ingresses: []k8s.Ingress{}, ConfigMaps: []k8s.ConfigMap{}, PVCs: []k8s.PVC{}, Others: []k8s.Other{}}
 	for _, v := range f.c.sts {
 		if ns == "" || v.Namespace == ns {
 			x.StatefulSets = append(x.StatefulSets, v)
@@ -335,6 +341,11 @@ func (f *FakeK8s) ListExtras(_ context.Context, ns string) (k8s.Extras, error) {
 	for _, v := range f.c.pvcs {
 		if ns == "" || v.Namespace == ns {
 			x.PVCs = append(x.PVCs, v)
+		}
+	}
+	for _, v := range f.c.others {
+		if ns == "" || v.Namespace == ns {
+			x.Others = append(x.Others, v)
 		}
 	}
 	return x, nil

@@ -315,11 +315,20 @@ export interface K8sPVC {
   created_at: string;
 }
 
+/** GUI 沒有專屬分頁的資源（DaemonSet／Job／CronJob／Lease／ServiceAccount／Secret／Role／RoleBinding）。 */
+export interface K8sOther {
+  kind: string;
+  name: string;
+  namespace: string;
+  created_at: string;
+}
+
 export interface K8sExtras {
   statefulsets: K8sStatefulSet[];
   ingresses: K8sIngress[];
   configmaps: K8sConfigMap[];
   pvcs: K8sPVC[];
+  others: K8sOther[];
 }
 
 export interface K8sRevision {
