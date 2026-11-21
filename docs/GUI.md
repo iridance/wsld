@@ -47,7 +47,7 @@
 - **磁碟用量鈕**（`usage-btn`）：Containers／Images／Volumes／Machines 頁標題摘要旁一顆 28px 高的鈕：迷你分段長條（`usage-bar`）＋該頁總量（`usage-total`）＋下拉箭頭，固定一列、不隨項目數變高，不另佔列表上方的高度。點開（`aria-expanded`）浮出明細 `usage-pop`：每項一行（`usage-part`：色塊、名稱、大小、占比），名稱過長截斷並有 title；Esc 收起且焦點回到鈕上，點外面也收起；列表週期刷新與換頁時明細維持／收起。每頁只列自己那一類的每一項：容器頁＝每個 compose 專案（整組加總）與每個未分組容器的可寫層；映像頁＝每個映像；Volume 頁＝每個 volume（未統計者不列）；Machines＝每台機器的 ext4.vhdx。最大的 5 項各一段，其餘併為「其他（N）」；5 項依名稱排序後依序取 `--series-1..5`（dataviz 參考調色盤前 5 槽，light／dark 各一組），長條與明細同一順序，大小些微變動不換色。滑過長條分段有 title（名稱・大小・占比）。視窗 ≤ 1100px 時迷你長條縮為 56px、搜尋欄 220px，≤ 860px 只留總量，避免標題列換行。沒有大小可顯示（引擎未就緒、df 尚未回來）時不顯示。
 - **Images**：分段篩選（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋清除未使用。
 - **容器與 Volume 大小**：Containers 列表有 Size 欄（可寫層；title 顯示含映像的虛擬大小 `SizeRootFs`），compose 群組列顯示該組加總；Volumes 列表有 Size 欄（未統計顯示「–」）。總量在頁標題旁的磁碟用量鈕。大小來自 `GET /api/disk`（Docker `/system/df`）；後端快取 15 秒（`/system/df` 會對 volume 跑 du），刪除／prune／啟停後失效；查詢失敗不影響列表。Networks、Settings 不佔磁碟，不顯示。
-- **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）、角色標籤、目前那台顯示 API 端點；設為主要、**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止主要發行版前會確認（Docker 與容器一併停止）。
+- **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）／**上限**（`machine-disk-limit`，讀 VHDX 標頭的虛擬容量）、角色標籤、目前那台顯示 API 端點；設為主要、**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止主要發行版前會確認（Docker 與容器一併停止）。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
   - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）；不提權。已授權防火牆時 wsld-gui 立即在內網 IP 監聽；`firewall` 為 `missing`／`blocked` 時**不監聽**（避免 Windows 自己跳安全性警訊），並接著開啟防火牆說明對話框。wsld-gui 啟動時不提權。
@@ -88,7 +88,9 @@
 | Kubernetes | 頂部導覽（Machines 旁）：一鍵啟動／停止（背景作業，狀態徽章 Starting…／Ready／Off…，首次含安裝）、重置（確認）、匯出 kubeconfig；叢集資訊卡（版本、node、API、context、記憶體）；另一台持有 k3s 時顯示說明與「移到 …」；namespace 下拉＋分頁 Pods（logs 串流／exec 終端 在底部 panel、刪除）／Deployments（副本數＋套用、rollout restart、刪除）／Services（NodePort 開瀏覽器、刪除；內建 kubernetes 服務不可刪）；分頁選擇記住 | `k8s.spec.ts` |
 | Containers › k3s 群組 | `k8s_*`（含 `io.kubernetes.pod.name` 標籤）的容器摺成預設收合的「Kubernetes (k3s)」群組（無整組 Start／Stop；展開／收合記住） | `k8s.spec.ts` |
 | Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
-| Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts` |
+| Machines Info | `.wslconfig` memory／processors、`wsl.conf`、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）、**磁碟上限**＋調整鈕（對話框：GB；需要關閉 WSL 時列出會被停止的機器、按鈕改為「關閉 WSL 並套用」——目標執行中時一開始就顯示，已停止但 VHD 仍被占用時於第一次套用後顯示；執行中顯示「最小可設約 N GB」（`resize-info`）並擋下更小的值，伺服器回 `too_small` 時也記住最小值；縮小時的備份提醒；wsl 錯誤與「從 WSL 內執行」的拒絕訊息留在對話框；調整期間暫停 Info 輪詢）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts`；上限 `vhd.spec.ts` |
+| Machines › 釋放磁碟空間 | 卡片的縮小箭頭鈕（`btn-machine-compact-<name>`）：磁碟未被占用直接壓縮；執行中先確認（列出會被停止的機器，「關閉 WSL 並釋放空間」），停止但仍被占用則於第一次嘗試後確認；完成通知釋放量與 Windows 上的佔用；調整大小成功後也會一併壓縮並在通知中報告。這兩種結果通知**不自動消失**（作業常要將近一分鐘，使用者可能已切走），按右側 ✕ 關閉；其他通知仍 8 秒後消失 | `vhd.spec.ts` |
+| Add machine › 磁碟上限 | 與自訂名稱同列的 GB 欄（預設 60；留空＝WSL 預設 1 TB；8–16384 以外顯示錯誤且不能安裝） | `vhd.spec.ts` |
 | 磁碟用量 | 四頁的用量鈕（不加高度、點開／Esc／點外面、刷新時維持；明細每項大小與占比、前 5 大＋其他、總計）、容器／Volume Size 欄與副標總計、compose 群組加總、Machines 卡片磁碟與合計、Info 磁碟長條 | `disk.spec.ts` |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
 | Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、防火牆說明對話框（netsh／helper、稍後、等待 UAC、取消 UAC）、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（常駐；區網關閉時開 localhost、點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
@@ -113,7 +115,7 @@
 | `GET /api/volumes`、`DELETE /api/volumes/{name}[?force=1]`、`POST /api/volumes/prune` | volume |
 | `GET /api/networks`、`DELETE /api/networks/{id}`、`POST /api/networks/prune` | 網路（內建 bridge／host／none 不可刪） |
 | `GET /api/disk` | Docker 磁碟用量：`summary`（四類 count／size／reclaimable、total、reclaimable）＋逐容器 `size_rw`／`size_root_fs`、逐 volume `size`／`ref_count`；快取 15 秒 |
-| `GET /api/machines`（含 `disk_bytes`）、…／config（含 `disk_bytes`、執行中 `disk_used_bytes`／`disk_total_bytes`）、…／online、install、**use／start／stop／unmanage／unregister**、用量摘要（0.5） | WSL 發行版與多 distro |
+| `GET /api/machines`（含 `disk_bytes`、`disk_limit_bytes`）、…／config（含 `disk_bytes`、`disk_limit_bytes`、執行中 `disk_used_bytes`／`disk_total_bytes`）、…／online、install（`vhd_size_gb`，0＝WSL 預設）、install/defaults（`vhd_size_gb`／`vhd_min_gb`／`vhd_max_gb`）、**use／start／stop／unmanage／unregister**、`POST …/{name}/compact {"shutdown"}`（流程同 resize，回 `before_bytes`／`after_bytes`）、`POST …/{name}/resize {"size_gb","shutdown"}`（成功後一併壓縮，回 `compacted`／`before_bytes`／`after_bytes`）（VHD 被占用且未同意 → 409 `needs_shutdown`＋`running`；同意 → `wsl --shutdown`、調整、重啟原本執行中的機器，回 `shutdown`／`restarted`；wsld-gui 位於 WSL 內 → 409 `self_in_wsl`）、用量摘要（0.5） | WSL 發行版與多 distro |
 | `GET /api/k8s`、`POST /api/k8s/on[?machine=&switch=1]`／`off`／`reset`（背景作業，202＋目前狀態；輪詢 `GET /api/k8s` 的 `op`／`error`／`warning`）、`POST /api/k8s/kubeconfig`、`POST /api/k8s/open {"port"}`（只接受叢集 Service 實際宣告的 NodePort） | k3s 狀態與操作（未開啟 k8s 時資源類端點回 409；未接後端回 501） |
 | `GET /api/k8s/{namespaces\|pods\|deployments\|services}[?ns=]`、`DELETE /api/k8s/{pods\|deployments\|services}/{ns}/{name}`、`POST /api/k8s/deployments/{ns}/{name}/{restart\|scale}`、`GET /api/k8s/pods/{ns}/{name}/{logs/stream\|exec}`（WebSocket） | k3s 資源；名稱／namespace 驗證為 DNS 標籤，scale 0–100 |
 | `GET|PUT /api/settings`（含 theme）、`GET /api/doctor`、`POST /api/window/{hide|show|quit}` | 設定、診斷、視窗 |
@@ -132,7 +134,7 @@
 
 ```bash
 make build-frontend   # frontend/dist（tsc + vite）
-make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.16.0 → 頂部列 v…）
+make build-gui        # dist/wsld-gui.exe（VERSION←git tag／預設 0.17.0 → 頂部列 v…）
 make build-win        # 上述 + dist/wsld.exe
 ```
 
@@ -164,6 +166,7 @@ Playwright 在 WSL 需要 Chromium 相依套件；`make test-ui` 會透過 `scri
 | `POST /__test/network?name=&driver=` | 新增網路 |
 | `POST /__test/k8s?delay=<ms>&fail=1&installed=<distro>`、`GET /__test/k8s` | 假 k3s 叢集：動作延遲、啟動失敗、預先標記已安裝；回傳目前執行的 distro 與動作紀錄 |
 | `POST /__test/wsl/fail-install[?on=0]`、`GET /__test/wsl/installed` | 讓 FakeWSL 的 `--install` 失敗；查詢已安裝清單 |
+| `POST /__test/wsl/fail-resize[?on=0]`、`GET /__test/wsl/last-install`、`POST /__test/wsl/self-in-wsl[?on=0]`、`POST /__test/wsl/fs-min?distro=&blocks=` | 讓 FakeWSL 的 `--manage --resize` 失敗；回傳最後一次 `--install` 的參數；模擬 wsld-gui 從 WSL 內執行；設定 distro 檔案系統的最小區塊數（預設 2 GiB）（FakeWSL 磁碟上限預設 1 TB；啟動過的機器 VHD 保持掛載直到 `--shutdown`） |
 
 FakeEngine 預設資料：容器 web（running）／db（exited）；映像 nginx:1.27（使用中）／redis:7／一個 dangling；volume pgdata（使用中）／orphan；網路 bridge／host／none／shop_default。FakeWSL 預設：Ubuntu-26.04（Running、預設、systemd）與 docker-desktop（Stopped）。
 

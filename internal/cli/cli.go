@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +65,10 @@ type App struct {
 	KubeconfigPath string
 	// PingInterval 覆寫 lifecycle 重試間隔（測試用；0 = 預設）。
 	PingInterval time.Duration
+	// SelfInWSL：wsld.exe 位於 WSL 檔案系統（\\wsl.localhost\…）；此時拒絕 wsl --shutdown。
+	SelfInWSL bool
+	// DiskSize 回傳 distro 的 vhdx 在 Windows 上的檔案大小（wsl.VHDXSize；nil = 不報告釋放量）。
+	DiskSize func(name string) (int64, error)
 }
 
 type exitErr struct {
@@ -116,6 +121,10 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdUnmanage(ctx, rest)
 	case "unregister":
 		err = a.cmdUnregister(ctx, rest)
+	case "resize-disk":
+		err = a.cmdResizeDisk(ctx, rest)
+	case "compact-disk":
+		err = a.cmdCompactDisk(ctx, rest)
 	case "lan":
 		err = a.cmdLan(ctx, rest)
 	case "k8s":
@@ -222,9 +231,13 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	fs.IntVar(&opts.Port, "port", 0, "starting API port (default 23750)")
 	fs.BoolVar(&opts.NoCompose, "no-compose", false, "skip docker-compose-plugin")
 	fs.BoolVar(&opts.SkipInstall, "skip-install", false, "do not run wsl --install when no Ubuntu exists")
+	fs.IntVar(&opts.VHDSizeGB, "vhd-size", wsl.DefaultVHDSizeGB, "disk limit in GB when installing Ubuntu (0 = WSL default, 1 TB)")
 	pwStdin := fs.Bool("password-stdin", false, "read the password for a newly created Linux user from stdin (first line)")
 	if err := parse(fs, args); err != nil {
 		return err
+	}
+	if opts.VHDSizeGB != 0 && !wsl.ValidVHDSizeGB(opts.VHDSizeGB) {
+		return fail(ExitUsage, errors.New(i18n.T("gui.machines.vhd_invalid", wsl.MinVHDSizeGB, wsl.MaxVHDSizeGB)))
 	}
 	opts.Password = a.newUserPassword(*pwStdin)
 	cfg, err := config.Load(a.ConfigPath)
@@ -724,6 +737,178 @@ func parseUnregisterArgs(args []string) (name, confirm string, err error) {
 		}
 	}
 	return name, confirm, nil
+}
+
+// parseDiskArgs 解析 [--shutdown] 與位置參數（旗標可放前後）。
+func parseDiskArgs(args []string, want int, usage string) (pos []string, shutdown bool, err error) {
+	for _, x := range args {
+		switch {
+		case x == "--shutdown":
+			shutdown = true
+		case strings.HasPrefix(x, "-"):
+			return nil, false, fail(ExitUsage, fmt.Errorf("unknown flag %s", x))
+		default:
+			pos = append(pos, x)
+		}
+	}
+	if len(pos) != want {
+		return nil, false, fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", usage)))
+	}
+	if !wsl.ValidDistroName(pos[0]) {
+		return nil, false, fail(ExitUsage, fmt.Errorf("invalid distro name %q", pos[0]))
+	}
+	return pos, shutdown, nil
+}
+
+// diskOp 以 wsl.WithFreeVHD 執行 op（VHD 未被占用時直接做；否則需 --shutdown：停 docker → 關 WSL → op → 重啟）。
+// needsShutdown 產生未帶 --shutdown 時的說明（參數為會被停止的機器）。
+func (a *App) diskOp(ctx context.Context, name string, shutdown bool, needsShutdown func(running string) string, op func(context.Context) error) error {
+	list, err := wsl.ListDistros(ctx, a.WSL)
+	if err != nil {
+		return fail(ExitNotReady, err)
+	}
+	if _, ok := wsl.FindDistro(list, name); !ok {
+		return fail(ExitNotReady, errors.New(i18n.T("lc.init_distro_missing", name)))
+	}
+	primary := ""
+	if cfg, err := config.Load(a.ConfigPath); err == nil {
+		primary = cfg.Active
+	}
+	_, err = wsl.WithFreeVHD(ctx, a.WSL, name, wsl.FreeVHDOptions{
+		Consent: shutdown, SelfInWSL: a.SelfInWSL, Primary: primary,
+		BeforeShutdown: func(running []string) {
+			fmt.Fprintln(a.Stdout, i18n.T("cli.resize_shutting_down", joinOrDash(running)))
+			for _, x := range running {
+				_ = wsl.StopDocker(ctx, a.WSL, x)
+			}
+		},
+	}, op)
+	var ns *wsl.NeedsShutdownError
+	var re *wsl.RestartError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &ns):
+		return fail(ExitNotReady, errors.New(needsShutdown(joinOrDash(ns.Running))))
+	case errors.Is(err, wsl.ErrSelfInWSL):
+		return fail(ExitUsage, errors.New(i18n.T("cli.resize_self_in_wsl")))
+	case errors.As(err, &re):
+		return fail(ExitError, fmt.Errorf("%s: %w", i18n.T("gui.machines.resize_restart_failed", re.Name), re.Err))
+	}
+	return err
+}
+
+func joinOrDash(xs []string) string {
+	if len(xs) == 0 {
+		return "-"
+	}
+	return strings.Join(xs, ", ")
+}
+
+// diskSize 回傳 vhdx 在 Windows 上的檔案大小（取不到為 -1）。
+func (a *App) diskSize(name string) int64 {
+	if a.DiskSize == nil {
+		return -1
+	}
+	n, err := a.DiskSize(name)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// cmdResizeDisk：wsld resize-disk [--shutdown] <distro> <GB>，調整虛擬磁碟容量上限（wsl --manage --resize），
+// 成功後在同一個空檔壓縮 VHDX（縮小會讓 Windows 上的檔案變大）。
+func (a *App) cmdResizeDisk(ctx context.Context, args []string) error {
+	pos, shutdown, err := parseDiskArgs(args, 2, "<distro> <GB>")
+	if err != nil {
+		return err
+	}
+	name := pos[0]
+	size, err := strconv.Atoi(pos[1])
+	if err != nil || !wsl.ValidVHDSizeGB(size) {
+		return fail(ExitUsage, errors.New(i18n.T("gui.machines.vhd_invalid", wsl.MinVHDSizeGB, wsl.MaxVHDSizeGB)))
+	}
+	// 執行中先估計能縮到多小：放不下就不必關閉 WSL
+	if list, err := wsl.ListDistros(ctx, a.WSL); err == nil {
+		if d, ok := wsl.FindDistro(list, name); ok && strings.EqualFold(d.State, "Running") {
+			if min, err := wsl.MinDiskGB(ctx, a.WSL, d.Name); err == nil && size < min {
+				return fail(ExitError, errors.New(i18n.T("gui.machines.resize_too_small", d.Name, size, min)))
+			}
+		}
+	}
+	before := a.diskSize(name)
+	compacted := false
+	err = a.diskOp(ctx, name, shutdown,
+		func(running string) string { return i18n.T("cli.resize_needs_shutdown", name, running, name, size) },
+		func(ctx context.Context) error {
+			if err := wsl.ResizeDisk(ctx, a.WSL, name, size); err != nil {
+				return err
+			}
+			compacted = wsl.CompactDisk(ctx, a.WSL, name) == nil // best-effort
+			return nil
+		})
+	var ts *wsl.TooSmallError
+	if errors.As(err, &ts) {
+		return fail(ExitError, errors.New(i18n.T("gui.machines.resize_too_small", name, size, ts.MinGB)))
+	}
+	if err != nil {
+		var ee *exitErr
+		if errors.As(err, &ee) {
+			return err
+		}
+		return fail(ExitError, err)
+	}
+	if after := a.diskSize(name); compacted && before >= 0 && after >= 0 && before > after {
+		fmt.Fprintln(a.Stdout, i18n.T("gui.machines.resized_freed", name, strconv.Itoa(size), humanBytes(before-after)))
+	} else {
+		fmt.Fprintln(a.Stdout, i18n.T("gui.machines.resized", name, strconv.Itoa(size)))
+	}
+	return nil
+}
+
+// cmdCompactDisk：wsld compact-disk [--shutdown] <distro>，壓縮 VHDX 把不再使用的空間還給 Windows。
+func (a *App) cmdCompactDisk(ctx context.Context, args []string) error {
+	pos, shutdown, err := parseDiskArgs(args, 1, "<distro>")
+	if err != nil {
+		return err
+	}
+	name := pos[0]
+	before := a.diskSize(name)
+	err = a.diskOp(ctx, name, shutdown,
+		func(running string) string { return i18n.T("cli.compact_needs_shutdown", name, running, name) },
+		func(ctx context.Context) error { return wsl.CompactDisk(ctx, a.WSL, name) })
+	if err != nil {
+		var ee *exitErr
+		if errors.As(err, &ee) {
+			return err
+		}
+		return fail(ExitError, err)
+	}
+	after := a.diskSize(name)
+	switch {
+	case before >= 0 && after >= 0 && before > after:
+		fmt.Fprintln(a.Stdout, i18n.T("gui.machines.compacted", name, humanBytes(before-after), humanBytes(after)))
+	case after >= 0:
+		fmt.Fprintln(a.Stdout, i18n.T("gui.machines.compact_nothing", name, humanBytes(after)))
+	default:
+		fmt.Fprintln(a.Stdout, i18n.T("cli.compact_done", name))
+	}
+	return nil
+}
+
+// humanBytes 與 GUI 的 humanSize 相同（1024 進位、一位小數）。
+func humanBytes(n int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	v, u := float64(n), 0
+	for v >= 1024 && u < len(units)-1 {
+		v /= 1024
+		u++
+	}
+	if u == 0 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f %s", v, units[u])
 }
 
 // DefaultExec 以繼承 stdio 執行外部程式（真實環境用）。

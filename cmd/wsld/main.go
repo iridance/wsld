@@ -47,8 +47,16 @@ func main() {
 		Exec:         cli.DefaultExec,
 		LAN:          &lan.Manager{Host: lan.NewHost()},
 		Version:      version,
+		SelfInWSL:    selfInWSL(),
+		DiskSize:     wsl.VHDXSize,
 	}
 	code := app.Run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)
+}
+
+// selfInWSL：wsld.exe 是否從 WSL 檔案系統執行（此時 wsl --shutdown 會讓它中途結束）。
+func selfInWSL() bool {
+	exe, err := os.Executable()
+	return err == nil && wsl.RunningFromWSL(exe)
 }

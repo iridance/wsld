@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -78,6 +79,7 @@ func main() {
 
 	_ = config.MigrateLegacyAppDir()
 	cfgPath := config.DefaultPath()
+	setupCrashLog(filepath.Dir(cfgPath))
 	cfg, cfgErr := config.Load(cfgPath)
 	if cfgErr != nil {
 		cfg = config.Default()
@@ -109,24 +111,26 @@ func main() {
 
 	app := &guiApp{si: si}
 	srv := &gui.Server{
-		Engine:         engine,
-		Life:           life,
-		Autostart:      auto,
-		Version:        version,
-		Token:          gui.NewToken(),
-		LoadConfig:     func() (config.Config, error) { return config.Load(cfgPath) },
-		SaveConfig:     func(c config.Config) error { return config.Save(cfgPath, c) },
-		WSL:            wsl.ExecRunner{},
-		DistroDisk:     wsl.VHDXSize,
-		Processes:      doctor.WindowsProcesses,
-		OnWindowAction: app.onWindowAction,
-		OnDistroAction: app.onDistroAction,
-		OnOpenURL:      app.onOpenURL,
-		Shell:          gui.HostDistroShell{},
-		OnLangChange:   func(i18n.Lang) { app.relabelTray() },
-		NewEngine:      func(c config.Config) gui.Engine { return dockerClient(c) },
-		NewLifecycle:   func(c config.Config) gui.Lifecycle { return newMgr(c) },
-		InstallProbe:   gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
+		Engine:          engine,
+		Life:            life,
+		Autostart:       auto,
+		Version:         version,
+		Token:           gui.NewToken(),
+		LoadConfig:      func() (config.Config, error) { return config.Load(cfgPath) },
+		SaveConfig:      func(c config.Config) error { return config.Save(cfgPath, c) },
+		WSL:             wsl.ExecRunner{},
+		DistroDisk:      wsl.VHDXSize,
+		DistroDiskLimit: wsl.VHDXLimit,
+		SelfInWSL:       wsl.RunningFromWSL(exe),
+		Processes:       doctor.WindowsProcesses,
+		OnWindowAction:  app.onWindowAction,
+		OnDistroAction:  app.onDistroAction,
+		OnOpenURL:       app.onOpenURL,
+		Shell:           gui.HostDistroShell{},
+		OnLangChange:    func(i18n.Lang) { app.relabelTray() },
+		NewEngine:       func(c config.Config) gui.Engine { return dockerClient(c) },
+		NewLifecycle:    func(c config.Config) gui.Lifecycle { return newMgr(c) },
+		InstallProbe:    gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
 		K8sFor: func(distro string) gui.K8s {
 			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle()}
 		},
@@ -362,4 +366,19 @@ func dockerClient(c config.Config) *dockerapi.Client {
 	}
 	// 空 endpoint（尚未 init）→ 所有請求回「machine not initialized」，UI 顯示未就緒而非舊列表
 	return dockerapi.New(c.APIEndpoint, to)
+}
+
+// setupCrashLog 把致命錯誤（panic、fatal error）的訊息與 stack 寫到 <設定目錄>\crash.log。
+// wsld-gui 以 -H windowsgui 建置、沒有主控台，否則閃退時什麼都不會留下。
+func setupCrashLog(dir string) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "crash.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "\n=== wsld-gui %s started %s (pid %d) ===\n", version, time.Now().Format(time.RFC3339), os.Getpid())
+	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
+	log.SetOutput(f) // log.Fatal 等也記下
 }

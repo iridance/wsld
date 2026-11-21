@@ -220,6 +220,8 @@ type Machine struct {
 	Ready       bool   `json:"ready"`
 	APIEndpoint string `json:"api_endpoint,omitempty"`
 	DiskBytes   int64  `json:"disk_bytes,omitempty"` // 虛擬磁碟（ext4.vhdx）在 Windows 上的大小；取不到則省略
+	// DiskLimitBytes 是虛擬磁碟的容量上限（VHDX 標頭；取不到則省略）
+	DiskLimitBytes int64 `json:"disk_limit_bytes,omitempty"`
 }
 
 // MachinesResponse 是 /api/machines 回應；Available=false 表示此環境沒有 wsl.exe（例如測試主機未注入）。
@@ -245,6 +247,7 @@ type MachineConfig struct {
 	DiskBytes      int64   `json:"disk_bytes,omitempty"`       // ext4.vhdx 檔案大小
 	DiskUsedBytes  int64   `json:"disk_used_bytes,omitempty"`  // 執行中：df / used
 	DiskTotalBytes int64   `json:"disk_total_bytes,omitempty"` // 執行中：df / size
+	DiskLimitBytes int64   `json:"disk_limit_bytes,omitempty"` // 虛擬磁碟容量上限（VHDX 標頭）
 }
 
 // distroDisk 回傳 distro 虛擬磁碟大小；未注入或失敗回 0（欄位省略）。
@@ -253,6 +256,18 @@ func (s *Server) distroDisk(name string) int64 {
 		return 0
 	}
 	n, err := s.DistroDisk(name)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// distroDiskLimit 回傳 distro 虛擬磁碟的容量上限；未注入或失敗回 0（欄位省略）。
+func (s *Server) distroDiskLimit(name string) int64 {
+	if s.DistroDiskLimit == nil {
+		return 0
+	}
+	n, err := s.DistroDiskLimit(name)
 	if err != nil || n < 0 {
 		return 0
 	}
@@ -272,7 +287,7 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg()
 	out := make([]Machine, 0, len(list))
 	for _, d := range list {
-		m := Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, cfg.Active), DiskBytes: s.distroDisk(d.Name)}
+		m := Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, cfg.Active), DiskBytes: s.distroDisk(d.Name), DiskLimitBytes: s.distroDiskLimit(d.Name)}
 		if pm, ok := cfg.FindMachine(d.Name); ok {
 			m.Managed = true
 			m.Ready = pm.Ready()
@@ -299,10 +314,13 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", errors.New("distro not found: "+name))
 		return
 	}
-	out, _, err := wsl.RunIn(r.Context(), s.WSL, d.Name, "root", nil, "cat", "/etc/wsl.conf")
+	// 調整磁碟期間不進 distro 執行命令：wsl -d 會把剛關掉的 WSL 叫醒、重新掛上 VHD
+	quiet := s.diskBusy.Load()
 	conf := ""
-	if err == nil {
-		conf = wsl.DecodeOutput(out)
+	if !quiet {
+		if out, _, err := wsl.RunIn(r.Context(), s.WSL, d.Name, "root", nil, "cat", "/etc/wsl.conf"); err == nil {
+			conf = wsl.DecodeOutput(out)
+		}
 	}
 	mc := MachineConfig{Name: d.Name, WSLConf: conf, Systemd: wslConfSystemd(conf)}
 	if pm, ok := s.cfg().FindMachine(d.Name); ok {
@@ -314,7 +332,8 @@ func (s *Server) handleMachineConfig(w http.ResponseWriter, r *http.Request) {
 	mem, procs := readWSLConfigLimits()
 	mc.Memory, mc.Processors = mem, procs
 	mc.DiskBytes = s.distroDisk(d.Name)
-	if strings.EqualFold(d.State, "Running") {
+	mc.DiskLimitBytes = s.distroDiskLimit(d.Name)
+	if !quiet && strings.EqualFold(d.State, "Running") {
 		cpu, used, total := wsl.SampleDistroUsage(r.Context(), s.WSL, d.Name)
 		mc.CPUPercent = cpu
 		mc.MemoryUsedMB = int64(used)
@@ -381,6 +400,8 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		// Password 只轉交 chpasswd（stdin），不記錄、不寫入設定。
 		User     string `json:"user"`
 		Password string `json:"password"`
+		// VHDSizeGB：虛擬磁碟容量上限（GB）；0／省略 = WSL 預設（1 TB）。
+		VHDSizeGB int `json:"vhd_size_gb"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "usage", err)
@@ -407,13 +428,17 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New(i18n.T("gui.machines.password_invalid")))
 		return
 	}
+	if body.VHDSizeGB != 0 && !wsl.ValidVHDSizeGB(body.VHDSizeGB) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New(i18n.T("gui.machines.vhd_invalid", wsl.MinVHDSizeGB, wsl.MaxVHDSizeGB)))
+		return
+	}
 	done, ok := s.trackInstall(r.Context(), dist, local)
 	if !ok {
 		writeErr(w, http.StatusConflict, "conflict", errors.New("another distro install is in progress"))
 		return
 	}
 	defer done()
-	if err := wsl.Install(r.Context(), s.WSL, dist, local); err != nil {
+	if err := wsl.Install(r.Context(), s.WSL, dist, local, body.VHDSizeGB); err != nil {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
@@ -434,9 +459,14 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleInstallDefaults 提供新增機器對話框的預設值（Linux 使用者名稱依目前 Windows 使用者）。
+// handleInstallDefaults 提供新增機器對話框的預設值（Linux 使用者名稱依目前 Windows 使用者、磁碟上限）。
 func (s *Server) handleInstallDefaults(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"user": wsl.SuggestLinuxUser()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user":        wsl.SuggestLinuxUser(),
+		"vhd_size_gb": wsl.DefaultVHDSizeGB,
+		"vhd_min_gb":  wsl.MinVHDSizeGB,
+		"vhd_max_gb":  wsl.MaxVHDSizeGB,
+	})
 }
 
 func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
@@ -560,6 +590,153 @@ func (s *Server) handleMachineStop(w http.ResponseWriter, r *http.Request) {
 		fl.Engine.SetDown(true) // testhost：主要 distro 停止 → 引擎斷線
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMachineResize 調整 distro 虛擬磁碟的容量上限（wsl --manage --resize），成功後在同一個空檔壓縮 VHDX
+// （縮小會搬動資料，Windows 上的檔案反而變大）。VHD 被 WSL 占用時的流程見 runDiskOp。
+func (s *Server) handleMachineResize(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SizeGB   int  `json:"size_gb"`
+		Shutdown bool `json:"shutdown"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !wsl.ValidVHDSizeGB(body.SizeGB) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New(i18n.T("gui.machines.vhd_invalid", wsl.MinVHDSizeGB, wsl.MaxVHDSizeGB)))
+		return
+	}
+	d, ok := s.findDistro(w, r)
+	if !ok {
+		return
+	}
+	// 執行中可先估計檔案系統能縮到多小：放不下就在關閉 WSL 之前拒絕
+	if strings.EqualFold(d.State, "Running") {
+		if min, err := wsl.MinDiskGB(r.Context(), s.WSL, d.Name); err == nil && body.SizeGB < min {
+			writeTooSmall(w, http.StatusBadRequest, d.Name, body.SizeGB, min)
+			return
+		}
+	}
+	if !s.diskBusy.CompareAndSwap(false, true) {
+		writeErr(w, http.StatusConflict, "conflict", errors.New(i18n.T("gui.machines.disk_busy")))
+		return
+	}
+	defer s.diskBusy.Store(false)
+	before := s.distroDisk(d.Name)
+	compacted := false
+	res, err := s.runDiskOp(r.Context(), body.Shutdown, d.Name, func(ctx context.Context) error {
+		if err := wsl.ResizeDisk(ctx, s.WSL, d.Name, body.SizeGB); err != nil {
+			return err
+		}
+		compacted = wsl.CompactDisk(ctx, s.WSL, d.Name) == nil // best-effort
+		return nil
+	})
+	s.invalidateDisk()
+	if err != nil {
+		s.writeDiskOpErr(w, d.Name, body.SizeGB, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "name": d.Name, "size_gb": body.SizeGB, "shutdown": res.Shutdown, "restarted": res.Restarted,
+		"compacted": compacted, "before_bytes": before, "after_bytes": s.distroDisk(d.Name),
+	})
+}
+
+// handleMachineCompact 壓縮 distro 的 VHDX（wsl --manage --compact），把已不再使用的空間還給 Windows。
+func (s *Server) handleMachineCompact(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Shutdown bool `json:"shutdown"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	d, ok := s.findDistro(w, r)
+	if !ok {
+		return
+	}
+	if !s.diskBusy.CompareAndSwap(false, true) {
+		writeErr(w, http.StatusConflict, "conflict", errors.New(i18n.T("gui.machines.disk_busy")))
+		return
+	}
+	defer s.diskBusy.Store(false)
+	before := s.distroDisk(d.Name)
+	res, err := s.runDiskOp(r.Context(), body.Shutdown, d.Name, func(ctx context.Context) error {
+		return wsl.CompactDisk(ctx, s.WSL, d.Name)
+	})
+	s.invalidateDisk()
+	if err != nil {
+		s.writeDiskOpErr(w, d.Name, 0, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "name": d.Name, "shutdown": res.Shutdown, "restarted": res.Restarted,
+		"before_bytes": before, "after_bytes": s.distroDisk(d.Name),
+	})
+}
+
+// runDiskOp 在 distro 的 VHD 未被 WSL 占用時執行 op（wsl.WithFreeVHD）：
+// 未執行且未被占用就直接做；否則需 consent（使用者同意 wsl --shutdown）：停各機 docker → 關 WSL → op → 重啟原本執行中的機器。
+func (s *Server) runDiskOp(ctx context.Context, consent bool, name string, op func(context.Context) error) (wsl.FreeVHDResult, error) {
+	cfg := s.cfg()
+	fl, _ := s.life().(*FakeLifecycle)
+	return wsl.WithFreeVHD(ctx, s.WSL, name, wsl.FreeVHDOptions{
+		Consent: consent, SelfInWSL: s.SelfInWSL, Primary: cfg.Active,
+		BeforeShutdown: func(running []string) {
+			for _, n := range running {
+				if _, managed := cfg.FindMachine(n); managed {
+					_ = wsl.StopDocker(ctx, s.WSL, n)
+				}
+			}
+			if fl != nil && fl.Engine != nil {
+				fl.Engine.SetDown(true) // testhost：WSL 關閉 → 引擎斷線
+			}
+		},
+		AfterWake: func(n string) {
+			if fl != nil && fl.Engine != nil && strings.EqualFold(n, cfg.Active) {
+				fl.Engine.SetDown(false)
+			}
+		},
+	}, op)
+}
+
+// writeDiskOpErr 把 runDiskOp 的錯誤轉成 API 回應。
+func (s *Server) writeDiskOpErr(w http.ResponseWriter, name string, sizeGB int, err error) {
+	var ns *wsl.NeedsShutdownError
+	var ts *wsl.TooSmallError
+	var re *wsl.RestartError
+	switch {
+	case errors.As(err, &ns):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": i18n.T("gui.machines.disk_needs_shutdown"), "code": "needs_shutdown", "running": ns.Running,
+		})
+	case errors.Is(err, wsl.ErrSelfInWSL):
+		writeErr(w, http.StatusConflict, "self_in_wsl", errors.New(i18n.T("gui.machines.resize_self_in_wsl")))
+	case errors.As(err, &ts):
+		writeTooSmall(w, http.StatusUnprocessableEntity, name, sizeGB, ts.MinGB)
+	case errors.As(err, &re):
+		writeErr(w, http.StatusBadGateway, "error", fmt.Errorf("%s: %w", i18n.T("gui.machines.resize_restart_failed", re.Name), re.Err))
+	default:
+		writeErr(w, http.StatusBadGateway, "error", err)
+	}
+}
+
+// writeTooSmall 回報磁碟上限小於檔案系統所需（附建議最小值 min_gb）。
+func writeTooSmall(w http.ResponseWriter, status int, name string, sizeGB, minGB int) {
+	writeJSON(w, status, map[string]any{
+		"error": i18n.T("gui.machines.resize_too_small", name, sizeGB, minGB), "code": "too_small", "min_gb": minGB,
+	})
+}
+
+// handleMachineResizeInfo 回報調整對話框需要的資訊：執行中時估計能縮到的最小上限（停止中不喚醒，min_gb=0）。
+func (s *Server) handleMachineResizeInfo(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.findDistro(w, r)
+	if !ok {
+		return
+	}
+	running := strings.EqualFold(d.State, "Running")
+	min := 0
+	if running && !s.diskBusy.Load() {
+		if n, err := wsl.MinDiskGB(r.Context(), s.WSL, d.Name); err == nil {
+			min = n
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": d.Name, "running": running, "min_gb": min})
 }
 
 func (s *Server) handleMachineUnmanage(w http.ResponseWriter, r *http.Request) {

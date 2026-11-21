@@ -258,6 +258,9 @@ button.icon:disabled { opacity: .35; }
 .notice { background: var(--ok-soft); border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); }
 .notice::before { background: var(--ok); }
 .banner[hidden], .notice[hidden] { display: none; }
+/* 不自動消失的通知：右上角 ✕ */
+.notice.sticky { padding-right: 44px; }
+.notice .notice-close { position: absolute; top: 5px; right: 6px; width: 28px; height: 28px; }
 
 /* ---- 主內容 -------------------------------------------------------------- */
 main {
@@ -369,6 +372,8 @@ aside.info-drawer[hidden] { display: none; }
 .info-field { display: grid; gap: 2px; }
 .info-field dt { font-size: 12px; color: var(--muted); }
 .info-field dd { margin: 0; font-size: 13px; word-break: break-all; white-space: pre-wrap; }
+.info-field dd.with-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.info-field dd.with-action button.icon { width: 26px; height: 26px; flex: none; }
 .info-body summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 
 .usage-meter { display: grid; gap: 6px; }
@@ -395,6 +400,7 @@ dialog form { display: grid; gap: 12px; }
 dialog label.field, .field { display: grid; gap: 6px; font-size: 13px; }
 .field-label { font-size: 13px; font-weight: 500; color: var(--fg); }
 dialog .add-machine-form { display: grid; gap: 14px; }
+dialog .field-row { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 12px; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
 dialog p { margin: 0 0 16px; max-width: 440px; white-space: pre-line; }
 dialog .confirm-field { margin: 0 0 16px; }
@@ -413,6 +419,13 @@ pre.conf {
 .field-error { color: var(--bad); font-size: 12px; }
 .field-error[hidden] { display: none; }
 .field-hint { color: var(--muted); font-size: 12px; margin-top: -6px; }
+dialog p.field-hint { margin: 0; max-width: 420px; }
+.field-hint.warn { color: var(--warn); }
+dialog .resize-shutdown { max-width: 420px; padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12px; }
+dialog .resize-shutdown p { margin: 0; }
+dialog .resize-shutdown p + p { margin-top: 6px; }
+dialog .resize-shutdown[hidden] { display: none; }
+.field-hint[hidden] { display: none; }
 .install-progress { display: grid; gap: 6px; }
 .install-progress[hidden] { display: none; }
 .install-progress-detail { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }

@@ -178,19 +178,19 @@ func TestListOnlineAndInstall(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Name != "Debian" {
 		t.Fatalf("got %+v %v", got, err)
 	}
-	if err := Install(context.Background(), r, "Debian", ""); err != nil {
+	if err := Install(context.Background(), r, "Debian", "", 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(context.Background(), r, "Debian", "Debian1"); err != nil {
+	if err := Install(context.Background(), r, "Debian", "Debian1", 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(context.Background(), r, "", ""); err == nil {
+	if err := Install(context.Background(), r, "", "", 0); err == nil {
 		t.Fatal("empty distribution must be rejected")
 	}
-	if err := Install(context.Background(), r, "bad name", ""); err == nil {
+	if err := Install(context.Background(), r, "bad name", "", 0); err == nil {
 		t.Fatal("names with spaces must be rejected")
 	}
-	if err := Install(context.Background(), r, "Debian", "bad name"); err == nil {
+	if err := Install(context.Background(), r, "Debian", "bad name", 0); err == nil {
 		t.Fatal("local names with spaces must be rejected")
 	}
 }

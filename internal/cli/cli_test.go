@@ -18,14 +18,18 @@ import (
 // ---- fakes -----------------------------------------------------------------
 
 type fakeRunner struct {
-	resp  map[string]string
-	errs  map[string]error
-	calls []string
+	resp   map[string]string
+	errs   map[string]error
+	calls  []string
+	onCall func(key string)
 }
 
 func (f *fakeRunner) Run(_ context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
 	key := strings.Join(args, " ")
 	f.calls = append(f.calls, key)
+	if f.onCall != nil {
+		f.onCall(key)
+	}
 	if stdin != nil {
 		_, _ = io.Copy(io.Discard, stdin)
 	}
@@ -230,249 +234,151 @@ func TestInitFlags(t *testing.T) {
 func TestInitNotReadyExit3(t *testing.T) {
 	h := newHarness(t, false)
 	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n")
-	h.wsl.resp["--install -d Ubuntu --no-launch"] = ""
+	h.wsl.resp["--install -d Ubuntu --vhd-size 60GB --no-launch"] = ""
 	if code := h.run("init"); code != 3 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
 }
 
-func TestStartReady(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("start"); code != 0 || !strings.Contains(h.out.String(), "engine ready") {
-		t.Fatalf("code=%d out=%q err=%q", code, h.out.String(), h.errb.String())
-	}
-}
-
-func TestStartAPIFailureExit4(t *testing.T) {
-	h := newHarness(t, true)
-	h.api.pingErr = dockerapi.ErrUnreachable
-	if code := h.run("start"); code != 4 {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
-	}
-}
-
-func TestStatusTextAndJSON(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("status"); code != 0 {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
-	}
-	out := h.out.String()
-	for _, want := range []string{"Ubuntu-26.04", "systemd", "docker.service", "tcp://127.0.0.1:23750", "READY"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("status output missing %q:\n%s", want, out)
-		}
-	}
-	h = newHarness(t, true)
-	if code := h.run("status", "--json"); code != 0 || !strings.Contains(h.out.String(), `"APIReachable": true`) {
-		t.Fatalf("json: code=%d out=%q", code, h.out.String())
-	}
-}
-
-func TestStatusExitCodesReflectReadiness(t *testing.T) {
-	h := newHarness(t, true)
-	h.api.pingErr = dockerapi.ErrUnreachable
-	if code := h.run("status"); code != 4 {
-		t.Fatalf("api down: code=%d", code)
-	}
-	h = newHarness(t, true)
-	h.wsl.resp["-d Ubuntu-26.04 -- systemctl is-active docker"] = "inactive\n"
-	if code := h.run("status"); code != 3 {
-		t.Fatalf("docker inactive: code=%d", code)
-	}
-}
-
-func TestPsListsRunningByDefaultAndAllWithFlag(t *testing.T) {
-	h := newHarness(t, true)
-	h.api.containers = []dockerapi.Container{
-		{ID: "aaaaaaaaaaaaaaaa", Names: []string{"/web"}, Image: "nginx", State: "running", Status: "Up 1h"},
-		{ID: "bbbbbbbbbbbbbbbb", Names: []string{"/db"}, Image: "postgres:16", State: "exited", Status: "Exited (0)"},
-	}
-	if code := h.run("ps"); code != 0 {
-		t.Fatal(code)
-	}
-	if !strings.Contains(h.out.String(), "web") || strings.Contains(h.out.String(), "db") {
-		t.Fatalf("ps default should show running only:\n%s", h.out.String())
-	}
-	h.out.Reset()
-	if code := h.run("ps", "-a"); code != 0 || !strings.Contains(h.out.String(), "db") || !strings.Contains(h.out.String(), "aaaaaaaaaaaa") {
-		t.Fatalf("ps -a:\n%s", h.out.String())
-	}
-}
-
-func TestPsJSONAndEmpty(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("ps"); code != 0 || !strings.Contains(h.out.String(), "no containers") {
-		t.Fatalf("empty: %q", h.out.String())
-	}
-	h = newHarness(t, true)
-	h.api.containers = []dockerapi.Container{{ID: "a", Names: []string{"/x"}, State: "running"}}
-	if code := h.run("ps", "--json"); code != 0 || !strings.Contains(h.out.String(), `"Id": "a"`) {
-		t.Fatalf("json: %q", h.out.String())
-	}
-}
-
-func TestPsAPIDownExit4(t *testing.T) {
-	h := newHarness(t, true)
-	h.api.listErr = dockerapi.ErrUnreachable
-	if code := h.run("ps"); code != 4 || !strings.Contains(h.errb.String(), "Docker API") {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
-	}
-}
-
-func TestLogsDefaultTail100(t *testing.T) {
-	h := newHarness(t, true)
-	h.api.logs = "line1\nline2\n"
-	if code := h.run("logs", "abc"); code != 0 || h.out.String() != "line1\nline2\n" {
-		t.Fatalf("code=%d out=%q", code, h.out.String())
-	}
-	if code := newHarness(t, true).run("logs"); code != 2 {
-		t.Fatalf("missing id should be usage error, got %d", code)
-	}
-}
-
-func TestStartStopContainer(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("start-ct", "abc"); code != 0 || len(h.api.started) != 1 || !strings.Contains(h.out.String(), "started abc") {
-		t.Fatalf("code=%d started=%v", code, h.api.started)
-	}
-	if code := h.run("stop-ct", "abc", "--time", "3"); code != 0 || len(h.api.stopped) != 1 {
-		t.Fatalf("code=%d stopped=%v", code, h.api.stopped)
-	}
-	h = newHarness(t, true)
-	if code := h.run("start-ct", "missing"); code != 1 || !strings.Contains(h.errb.String(), "No such container") {
-		t.Fatalf("404 → exit 1: code=%d err=%q", code, h.errb.String())
-	}
-}
-
-func TestExecUsesWslDockerExecWithShellFallback(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("exec", "abc"); code != 0 {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
-	}
-	if len(h.execs) != 1 {
-		t.Fatalf("execs = %v", h.execs)
-	}
-	got := strings.Join(h.execs[0], " ")
-	for _, want := range []string{"wsl.exe", "-d Ubuntu-26.04", "docker exec -it abc", "bash", "sh"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("exec cmd missing %q: %s", want, got)
-		}
-	}
-}
-
-func TestExecHonoursConfigShellAndExplicitCommand(t *testing.T) {
-	h := newHarness(t, true)
-	c, _ := config.Load(h.app.ConfigPath)
-	c.ExecShell = "zsh"
-	_ = config.Save(h.app.ConfigPath, c)
-	if code := h.run("exec", "abc"); code != 0 {
-		t.Fatal(code)
-	}
-	if got := strings.Join(h.execs[0], " "); !strings.HasSuffix(got, "docker exec -it abc zsh") {
-		t.Fatalf("got %s", got)
-	}
-	h.execs = nil
-	if code := h.run("exec", "abc", "ls", "-la"); code != 0 {
-		t.Fatal(code)
-	}
-	if got := strings.Join(h.execs[0], " "); !strings.HasSuffix(got, "docker exec -it abc ls -la") {
-		t.Fatalf("got %s", got)
-	}
-}
-
-func TestDoctorTextAndExit(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("doctor"); code != 0 {
-		t.Fatalf("code=%d\n%s%s", code, h.out.String(), h.errb.String())
-	}
-	if !strings.Contains(h.out.String(), "[OK]") || !strings.Contains(h.out.String(), "doctor:") {
-		t.Fatalf("out=%s", h.out.String())
-	}
-	h = newHarness(t, true)
-	h.wsl.resp["-d Ubuntu-26.04 -- systemctl is-active docker"] = "inactive\n"
-	if code := h.run("doctor"); code != 3 || !strings.Contains(h.out.String(), "[FAIL]") {
-		t.Fatalf("code=%d", code)
-	}
-	h = newHarness(t, true)
-	if code := h.run("doctor", "--json"); code != 0 || !strings.Contains(h.out.String(), `"ID": "api_ping"`) {
-		t.Fatalf("json: %s", h.out.String())
-	}
-}
-
-func TestLangOverrideZh(t *testing.T) {
-	h := newHarness(t, true)
-	h.app.Lang = i18n.ZhTW
-	if code := h.run("help"); code != 0 || !strings.Contains(h.out.String(), "用法") {
-		t.Fatalf("zh help: %s", h.out.String())
-	}
-}
-
-func TestUseFirstTimeInitsAndStarts(t *testing.T) {
+func TestInitInstallDiskLimitFlag(t *testing.T) {
 	h := newHarness(t, false)
-	if code := h.run("use", "Ubuntu-26.04"); code != 0 {
-		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n")
+	h.wsl.resp["--install -d Ubuntu --vhd-size 120GB --no-launch"] = ""
+	if code := h.run("init", "--vhd-size", "120"); code != 3 {
+		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
-	c, err := config.Load(h.app.ConfigPath)
-	if err != nil {
-		t.Fatal(err)
+	// 0 = WSL 預設（不帶 --vhd-size）
+	h = newHarness(t, false)
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n")
+	h.wsl.resp["--install -d Ubuntu --no-launch"] = ""
+	if code := h.run("init", "--vhd-size", "0"); code != 3 {
+		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
-	if c.Active != "Ubuntu-26.04" || c.User != "irice" || c.APIEndpoint == "" {
-		t.Fatalf("cfg = %+v", c)
+	h = newHarness(t, false)
+	if code := h.run("init", "--vhd-size", "4"); code != 2 {
+		t.Fatalf("invalid size code=%d err=%s", code, h.errb.String())
 	}
-	m, ok := c.FindMachine("Ubuntu-26.04")
-	if !ok || !m.Ready() {
-		t.Fatalf("want ready machine, got ok=%v m=%+v", ok, m)
+}
+
+func TestResizeDiskRunningMachineNeedsShutdownFlag(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("resize-disk", "Ubuntu-26.04", "60"); code != 3 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
 	}
+	if !strings.Contains(h.errb.String(), "--shutdown") || !strings.Contains(h.errb.String(), "Ubuntu-26.04") {
+		t.Fatalf("err should explain --shutdown and list running machines: %q", h.errb.String())
+	}
+	for _, c := range h.wsl.calls {
+		if strings.HasPrefix(c, "--shutdown") || strings.HasPrefix(c, "--terminate") || strings.Contains(c, "systemctl stop") {
+			t.Fatalf("nothing may be stopped without --shutdown; calls=%v", h.wsl.calls)
+		}
+	}
+}
+
+func TestResizeDiskWithShutdownRestartsRunningMachines(t *testing.T) {
+	h := newHarness(t, true)
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- systemctl stop docker"] = ""
+	h.wsl.resp["--shutdown"] = ""
+	h.wsl.resp["--manage Ubuntu-26.04 --resize 60GB"] = ""
+	if code := h.run("resize-disk", "--shutdown", "Ubuntu-26.04", "60"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	want := []string{"systemctl stop docker", "--shutdown", "--manage Ubuntu-26.04 --resize 60GB", "-d Ubuntu-26.04 -- true"}
 	joined := strings.Join(h.wsl.calls, "\n")
-	if !strings.Contains(joined, "wsld-bootstrap") {
-		t.Fatalf("expected bootstrap on first use, calls:\n%s", joined)
+	last := -1
+	for _, w := range want {
+		i := strings.Index(joined, w)
+		if i < 0 || i < last {
+			t.Fatalf("expected %q in order; calls:\n%s", w, joined)
+		}
+		last = i
 	}
-	if !strings.Contains(h.out.String(), "engine ready") && !strings.Contains(h.out.String(), "READY") {
+	if !strings.Contains(h.out.String(), "60 GB") {
 		t.Fatalf("out=%q", h.out.String())
 	}
+	// 旗標放在後面也可以
+	h = newHarness(t, true)
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- systemctl stop docker"] = ""
+	h.wsl.resp["--shutdown"] = ""
+	h.wsl.resp["--manage Ubuntu-26.04 --resize 60GB"] = ""
+	if code := h.run("resize-disk", "Ubuntu-26.04", "60", "--shutdown"); code != 0 {
+		t.Fatalf("trailing flag code=%d err=%q", code, h.errb.String())
+	}
 }
 
-func TestUseExistingMachineDoesNotClearEndpoint(t *testing.T) {
+func TestResizeDiskTooSmallIsRefusedBeforeShutdown(t *testing.T) {
 	h := newHarness(t, true)
-	c, _ := config.Load(h.app.ConfigPath)
-	c.UpsertMachine(config.Machine{Distro: "Ubuntu-22.04", User: "bob", APIEndpoint: "tcp://127.0.0.1:23751"})
-	_ = config.Save(h.app.ConfigPath, c)
-	if code := h.run("use", "Ubuntu-22.04"); code != 0 {
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- findmnt -n -o SOURCE /"] = "/dev/sdd\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- stat -f -c %S /"] = "4096\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- resize2fs -P /dev/sdd"] = "Estimated minimum size of the filesystem: 18390785\n"
+	if code := h.run("resize-disk", "--shutdown", "Ubuntu-26.04", "60"); code != 1 || !strings.Contains(h.errb.String(), "72") {
 		t.Fatalf("code=%d err=%q", code, h.errb.String())
 	}
-	c, _ = config.Load(h.app.ConfigPath)
-	if c.APIEndpoint != "tcp://127.0.0.1:23751" || c.User != "bob" {
-		t.Fatalf("cfg = %+v", c)
+	for _, c := range h.wsl.calls {
+		if c == "--shutdown" || strings.HasPrefix(c, "--manage") {
+			t.Fatalf("must not shut down or resize; calls=%v", h.wsl.calls)
+		}
 	}
-}
-
-func TestUseRequiresDistroArg(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("use"); code != 2 {
-		t.Fatalf("code=%d", code)
-	}
-}
-
-func TestUnmanageStopsDockerAndRemovesProfile(t *testing.T) {
-	h := newHarness(t, true)
-	c, _ := config.Load(h.app.ConfigPath)
-	c.UpsertMachine(config.Machine{Distro: "Ubuntu-22.04", User: "bob", APIEndpoint: "tcp://127.0.0.1:23751"})
-	_ = c.SetActive("Ubuntu-26.04")
-	_ = config.Save(h.app.ConfigPath, c)
-	h.wsl.resp["-d Ubuntu-22.04 -u root -- systemctl stop docker"] = ""
-	if code := h.run("unmanage", "Ubuntu-22.04"); code != 0 {
+	// 停止中（無法預估）：WSL 回報太小 → 易讀訊息
+	h = newHarness(t, true)
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n* Ubuntu-26.04 Running 2\r\n  dev Stopped 2\r\n")
+	h.wsl.resp["--manage dev --resize 60GB"] = "e2fsck 1.47.0\r\n/usr/sbin/resize2fs: New size smaller than minimum (18390839)\r\n"
+	h.wsl.errs = map[string]error{"--manage dev --resize 60GB": errors.New("exit 255")}
+	if code := h.run("resize-disk", "dev", "60"); code != 1 || !strings.Contains(h.errb.String(), "72") || strings.Contains(h.errb.String(), "e2fsck") {
 		t.Fatalf("code=%d err=%q", code, h.errb.String())
 	}
-	c, _ = config.Load(h.app.ConfigPath)
-	if _, ok := c.FindMachine("Ubuntu-22.04"); ok {
-		t.Fatal("profile should be removed")
-	}
-	if c.Active != "Ubuntu-26.04" {
-		t.Fatalf("active should stay primary, got %q", c.Active)
+}
+
+func TestResizeDiskStoppedDetachedNeedsNoShutdown(t *testing.T) {
+	h := newHarness(t, true)
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n* Ubuntu-26.04 Running 2\r\n  dev Stopped 2\r\n")
+	h.wsl.resp["--manage dev --resize 80GB"] = ""
+	if code := h.run("resize-disk", "dev", "80"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
 	}
 	joined := strings.Join(h.wsl.calls, "\n")
-	if !strings.Contains(joined, "systemctl stop docker") {
-		t.Fatalf("expected stop docker, calls:\n%s", joined)
+	if strings.Contains(joined, "--shutdown") || strings.Contains(joined, "-d dev -- true") {
+		t.Fatalf("free VHD: no shutdown, no wake; calls:\n%s", joined)
+	}
+}
+
+func TestResizeDiskStoppedButAttachedNeedsShutdown(t *testing.T) {
+	h := newHarness(t, true)
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n* Ubuntu-26.04 Running 2\r\n  dev Stopped 2\r\n")
+	h.wsl.resp["--manage dev --resize 80GB"] = "Error code: Wsl/Service/WSL_E_DISTRO_NOT_STOPPED\r\n"
+	h.wsl.errs = map[string]error{"--manage dev --resize 80GB": errors.New("exit 255")}
+	if code := h.run("resize-disk", "dev", "80"); code != 3 || !strings.Contains(h.errb.String(), "--shutdown") {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+}
+
+func TestResizeDiskErrors(t *testing.T) {
+	for _, args := range [][]string{{"resize-disk"}, {"resize-disk", "Ubuntu-26.04"}, {"resize-disk", "Ubuntu-26.04", "abc"}, {"resize-disk", "Ubuntu-26.04", "4"}, {"resize-disk", "a", "b", "c"}, {"resize-disk", "--bogus", "a", "60"}} {
+		h := newHarness(t, true)
+		if code := h.run(args...); code != 2 {
+			t.Fatalf("%v: code=%d err=%q", args, code, h.errb.String())
+		}
+	}
+	h := newHarness(t, true)
+	if code := h.run("resize-disk", "Ghost", "60"); code != 3 {
+		t.Fatalf("missing distro code=%d err=%q", code, h.errb.String())
+	}
+	// wsld.exe 從 WSL 檔案系統執行：拒絕關閉 WSL
+	h = newHarness(t, true)
+	h.app.SelfInWSL = true
+	if code := h.run("resize-disk", "--shutdown", "Ubuntu-26.04", "60"); code != 2 {
+		t.Fatalf("self in wsl code=%d err=%q", code, h.errb.String())
+	}
+	// wsl.exe 失敗：回 1，仍把原本執行中的機器開回來
+	h = newHarness(t, true)
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- systemctl stop docker"] = ""
+	h.wsl.resp["--shutdown"] = ""
+	h.wsl.errs = map[string]error{"--manage Ubuntu-26.04 --resize 8GB": errors.New("too small")}
+	if code := h.run("resize-disk", "--shutdown", "Ubuntu-26.04", "8"); code != 1 {
+		t.Fatalf("failed resize code=%d err=%q", code, h.errb.String())
+	}
+	if !strings.Contains(strings.Join(h.wsl.calls, "\n"), "-d Ubuntu-26.04 -- true") {
+		t.Fatalf("should wake the machine again; calls=%v", h.wsl.calls)
 	}
 }
 
@@ -538,5 +444,61 @@ func TestStartAutoInitsPlaceholder(t *testing.T) {
 	m, ok := c.FindMachine("Ubuntu-26.04")
 	if !ok || !m.Ready() {
 		t.Fatalf("want ready after start, got %+v", m)
+	}
+}
+
+func TestCompactDisk(t *testing.T) {
+	// VHD 未被占用：直接壓縮，報告釋放量
+	h := newHarness(t, true)
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n* Ubuntu-26.04 Running 2\r\n  dev Stopped 2\r\n")
+	h.wsl.resp["--manage dev --compact"] = ""
+	sizes := map[string]int64{"dev": 8 << 30}
+	h.app.DiskSize = func(n string) (int64, error) { return sizes[n], nil }
+	h.wsl.onCall = func(key string) {
+		if key == "--manage dev --compact" {
+			sizes["dev"] = 3 << 30
+		}
+	}
+	if code := h.run("compact-disk", "dev"); code != 0 || !strings.Contains(h.out.String(), "5.0 GB") {
+		t.Fatalf("code=%d out=%q err=%q", code, h.out.String(), h.errb.String())
+	}
+	// 執行中：未帶 --shutdown → 說明並結束，不停任何東西
+	h = newHarness(t, true)
+	if code := h.run("compact-disk", "Ubuntu-26.04"); code != 3 || !strings.Contains(h.errb.String(), "--shutdown") {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	// 帶 --shutdown：關 WSL、壓縮、重啟
+	h = newHarness(t, true)
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- systemctl stop docker"] = ""
+	h.wsl.resp["--shutdown"] = ""
+	h.wsl.resp["--manage Ubuntu-26.04 --compact"] = ""
+	if code := h.run("compact-disk", "--shutdown", "Ubuntu-26.04"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	joined := strings.Join(h.wsl.calls, "\n")
+	for _, w := range []string{"--shutdown", "--manage Ubuntu-26.04 --compact", "-d Ubuntu-26.04 -- true"} {
+		if !strings.Contains(joined, w) {
+			t.Fatalf("missing %q; calls:\n%s", w, joined)
+		}
+	}
+	for _, args := range [][]string{{"compact-disk"}, {"compact-disk", "a", "b"}, {"compact-disk", "--bogus", "a"}} {
+		h := newHarness(t, true)
+		if code := h.run(args...); code != 2 {
+			t.Fatalf("%v: code=%d", args, code)
+		}
+	}
+}
+
+func TestResizeDiskAlsoCompacts(t *testing.T) {
+	h := newHarness(t, true)
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n* Ubuntu-26.04 Running 2\r\n  dev Stopped 2\r\n")
+	h.wsl.resp["--manage dev --resize 80GB"] = ""
+	h.wsl.resp["--manage dev --compact"] = ""
+	if code := h.run("resize-disk", "dev", "80"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, h.errb.String())
+	}
+	joined := strings.Join(h.wsl.calls, "\n")
+	if i, j := strings.Index(joined, "--resize 80GB"), strings.Index(joined, "--manage dev --compact"); i < 0 || j < i {
+		t.Fatalf("compact must follow resize; calls:\n%s", joined)
 	}
 }

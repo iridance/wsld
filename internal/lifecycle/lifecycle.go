@@ -201,6 +201,8 @@ type InitOptions struct {
 	NoCompose     bool
 	InstallDistro string // 無 Ubuntu 時要安裝的名稱；空→"Ubuntu"
 	SkipInstall   bool
+	// VHDSizeGB：無 Ubuntu 時安裝的虛擬磁碟容量上限（GB）；0 = WSL 預設（1 TB）。
+	VHDSizeGB int
 	// Password 於需要「新建」Linux 使用者時呼叫，回傳其密碼（空 = 不設，帳號維持無密碼）。
 	// nil 則不詢問。既有使用者的密碼一律不動。
 	Password func(user string) (string, error)
@@ -247,7 +249,7 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 				return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_no_ubuntu", name))
 			}
 			m.print(i18n.T("lc.init_installing", name))
-			if _, _, err := m.WSL.Run(ctx, nil, "--install", "-d", name, "--no-launch"); err != nil {
+			if err := wsl.Install(ctx, m.WSL, name, "", opts.VHDSizeGB); err != nil {
 				return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_install_failed", name, err))
 			}
 			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_relaunch", name, name))

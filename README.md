@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.16.0**（tag `v0.16.0`）已交付（本機 Kubernetes：每台 machine 可選開啟單節點 k3s，與 dockerd 共用映像檔；`wsld k8s` 與 GUI 新增的 Kubernetes 頁——一鍵啟停、Pods／Deployments／Services 管理、kubeconfig 合併）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.17.0**（tag `v0.17.0`）已交付（機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2
@@ -54,6 +54,8 @@ wsld start                 # 喚醒 distro、起 dockerd
 wsld use <distro>          # 設為主要；首次會自動 init + start
 wsld unmanage <distro>     # 停 docker 並刪 profile（保留 WSL）
 wsld unregister <d> --confirm <d>
+wsld resize-disk <d> 60     # 調整磁碟上限（GB；需要關閉 WSL 時會說明，確認後加 --shutdown）
+wsld compact-disk <d>       # 把不再使用的磁碟空間還給 Windows（同上，可能需要 --shutdown）
 wsld status                # 0 就緒／3 未就緒／4 API 掛了
 wsld ps [-a] [--json]
 wsld logs <ct> [--tail 100] [--follow]
@@ -100,7 +102,7 @@ wsld-gui.exe --tray    # 只留系統匣
 
 ```bash
 make test        # shellcheck + bats + Pester + go test + Playwright
-make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.16.0；GUI 頂部列 v0.16.0）
+make build-win   # dist/wsld.exe + dist/wsld-gui.exe（VERSION←git exact tag，預設 0.17.0；GUI 頂部列 v0.17.0）
 ```
 
 GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
@@ -109,7 +111,7 @@ GUI／CLI 共用 `internal/*`，功能先寫測試再實作。
 
 | 文件 | 內容 |
 | --- | --- |
-| [SPEC](docs/SPEC.md) | 規格（**0.16.0** 已交付） |
+| [SPEC](docs/SPEC.md) | 規格（**0.17.0** 已交付） |
 | [ROADMAP](docs/ROADMAP.md) | 分期 |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 架構 |
 | [BOOTSTRAP](docs/BOOTSTRAP.md) | 安裝腳本細節 |

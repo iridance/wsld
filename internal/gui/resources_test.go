@@ -525,3 +525,352 @@ func TestMachinesDiskUsage(t *testing.T) {
 		t.Fatalf("disk_bytes should be omitted: %s", b)
 	}
 }
+
+func TestMachineInstallWithDiskLimit(t *testing.T) {
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.DistroDiskLimit = w.VHDXLimit
+
+	resp, b := e.req(t, http.MethodGet, "/api/machines/install/defaults", "")
+	var def struct {
+		VHDSizeGB int `json:"vhd_size_gb"`
+		MinGB     int `json:"vhd_min_gb"`
+		MaxGB     int `json:"vhd_max_gb"`
+	}
+	_ = json.Unmarshal(b, &def)
+	if resp.StatusCode != 200 || def.VHDSizeGB != wsl.DefaultVHDSizeGB || def.MinGB != wsl.MinVHDSizeGB || def.MaxGB != wsl.MaxVHDSizeGB {
+		t.Fatalf("defaults = %d %s", resp.StatusCode, b)
+	}
+
+	resp, b = e.req(t, http.MethodPost, "/api/machines/install", `{"distribution":"Debian","name":"small","vhd_size_gb":60}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("install = %d %s", resp.StatusCode, b)
+	}
+	if got := w.LastInstallArgs(); !strings.Contains(got, "--vhd-size 60GB") {
+		t.Fatalf("install args = %q", got)
+	}
+	// 0／省略 = WSL 預設（不帶 --vhd-size）
+	resp, b = e.req(t, http.MethodPost, "/api/machines/install", `{"distribution":"Debian","name":"big"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("install default = %d %s", resp.StatusCode, b)
+	}
+	if got := w.LastInstallArgs(); strings.Contains(got, "--vhd-size") {
+		t.Fatalf("install args = %q", got)
+	}
+	limits := map[string]int64{}
+	_, b = e.req(t, http.MethodGet, "/api/machines", "")
+	var m MachinesResponse
+	_ = json.Unmarshal(b, &m)
+	for _, row := range m.Machines {
+		limits[row.Name] = row.DiskLimitBytes
+	}
+	if limits["small"] != 60<<30 || limits["big"] != 1<<40 {
+		t.Fatalf("limits = %v", limits)
+	}
+	n := len(w.Installed())
+	for _, bad := range []string{`{"name":"x1","vhd_size_gb":4}`, `{"name":"x2","vhd_size_gb":99999}`, `{"name":"x3","vhd_size_gb":-1}`} {
+		if resp, _ := e.req(t, http.MethodPost, "/api/machines/install", bad); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s = %d", bad, resp.StatusCode)
+		}
+	}
+	if len(w.Installed()) != n {
+		t.Fatal("invalid size must be rejected before installing")
+	}
+}
+
+func TestMachineDiskResize(t *testing.T) {
+	defer wsl.BypassSampleSleepForTest()()
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.DistroDiskLimit = w.VHDXLimit
+	machine := func(name string) Machine {
+		t.Helper()
+		_, b := e.req(t, http.MethodGet, "/api/machines", "")
+		var mr MachinesResponse
+		_ = json.Unmarshal(b, &mr)
+		for _, m := range mr.Machines {
+			if m.Name == name {
+				return m
+			}
+		}
+		t.Fatalf("machine %q not listed: %s", name, b)
+		return Machine{}
+	}
+	type resizeResp struct {
+		SizeGB    int      `json:"size_gb"`
+		Shutdown  bool     `json:"shutdown"`
+		Restarted []string `json:"restarted"`
+		Code      string   `json:"code"`
+		Error     string   `json:"error"`
+		Running   []string `json:"running"`
+	}
+	resize := func(name, body string) (int, resizeResp) {
+		t.Helper()
+		resp, b := e.req(t, http.MethodPost, "/api/machines/"+name+"/resize", body)
+		var out resizeResp
+		_ = json.Unmarshal(b, &out)
+		return resp.StatusCode, out
+	}
+
+	// 從未啟動過的機器（VHD 未掛載）：直接調整，不關 WSL
+	code, out := resize("docker-desktop", `{"size_gb":60}`)
+	if code != 200 || out.Shutdown || len(out.Restarted) != 0 {
+		t.Fatalf("resize detached = %d %+v", code, out)
+	}
+	if m := machine("docker-desktop"); m.DiskLimitBytes != 60<<30 || m.State != "Stopped" {
+		t.Fatalf("after resize detached = %+v", m)
+	}
+	if w.Shutdowns() != 0 {
+		t.Fatal("must not shut WSL down when the VHD is free")
+	}
+
+	// 執行中的主要機器：未同意關閉 WSL → 409，列出會被停止的機器，什麼都不動
+	code, out = resize("Ubuntu-26.04", `{"size_gb":80}`)
+	if code != http.StatusConflict || out.Code != "needs_shutdown" || len(out.Running) != 1 || out.Running[0] != "Ubuntu-26.04" {
+		t.Fatalf("resize running without consent = %d %+v", code, out)
+	}
+	if w.Shutdowns() != 0 || machine("Ubuntu-26.04").State != "Running" {
+		t.Fatal("nothing may be stopped before consent")
+	}
+
+	// 同意：wsl --shutdown → 調整 → 原本執行中的機器開回來（主要機器的引擎也回來）
+	code, out = resize("Ubuntu-26.04", `{"size_gb":80,"shutdown":true}`)
+	if code != 200 || !out.Shutdown || len(out.Restarted) != 1 || out.Restarted[0] != "Ubuntu-26.04" {
+		t.Fatalf("resize with shutdown = %d %+v", code, out)
+	}
+	if got := w.ResizeCalls(); got[len(got)-1] != "Ubuntu-26.04 80GB stopped detached" {
+		t.Fatalf("resize must run after WSL released the VHD: %v", got)
+	}
+	if m := machine("Ubuntu-26.04"); m.DiskLimitBytes != 80<<30 || m.State != "Running" {
+		t.Fatalf("after resize = %+v", m)
+	}
+	if w.Shutdowns() != 1 || e.engine.Down {
+		t.Fatalf("shutdowns=%d engineDown=%v", w.Shutdowns(), e.engine.Down)
+	}
+
+	// 已停止但 VHD 仍掛著（啟動過再 terminate）：直接調整失敗 → 409 needs_shutdown
+	if resp, _ := e.req(t, http.MethodPost, "/api/machines/docker-desktop/start", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatal("start docker-desktop")
+	}
+	if resp, _ := e.req(t, http.MethodPost, "/api/machines/docker-desktop/stop", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatal("stop docker-desktop")
+	}
+	code, out = resize("docker-desktop", `{"size_gb":70}`)
+	if code != http.StatusConflict || out.Code != "needs_shutdown" || len(out.Running) != 1 || out.Running[0] != "Ubuntu-26.04" {
+		t.Fatalf("attached stopped = %d %+v", code, out)
+	}
+	code, out = resize("docker-desktop", `{"size_gb":70,"shutdown":true}`)
+	if code != 200 || len(out.Restarted) != 1 || out.Restarted[0] != "Ubuntu-26.04" {
+		t.Fatalf("attached stopped with shutdown = %d %+v", code, out)
+	}
+	if m := machine("docker-desktop"); m.DiskLimitBytes != 70<<30 || m.State != "Stopped" {
+		t.Fatalf("stopped machine must stay stopped: %+v", m)
+	}
+
+	// wsl.exe 失敗（例如縮太小）：回 502 並把原本執行中的機器開回來
+	w.FailResize = true
+	code, out = resize("Ubuntu-26.04", `{"size_gb":8,"shutdown":true}`)
+	if code != http.StatusBadGateway || !strings.Contains(out.Error, "too small") {
+		t.Fatalf("failed resize = %d %+v", code, out)
+	}
+	if m := machine("Ubuntu-26.04"); m.State != "Running" || m.DiskLimitBytes != 80<<30 {
+		t.Fatalf("after failed resize = %+v", m)
+	}
+	w.FailResize = false
+
+	// wsld-gui 從 WSL 檔案系統執行：拒絕關閉 WSL（會失去自己的執行檔）
+	e.s.SelfInWSL = true
+	n := w.Shutdowns()
+	code, out = resize("Ubuntu-26.04", `{"size_gb":90,"shutdown":true}`)
+	if code != http.StatusConflict || out.Code != "self_in_wsl" || w.Shutdowns() != n {
+		t.Fatalf("self in wsl = %d %+v", code, out)
+	}
+	e.s.SelfInWSL = false
+
+	for _, tc := range []struct {
+		path, body string
+		code       int
+	}{
+		{"/api/machines/Ubuntu-26.04/resize", `{"size_gb":4}`, http.StatusBadRequest},
+		{"/api/machines/Ubuntu-26.04/resize", `{}`, http.StatusBadRequest},
+		{"/api/machines/nope/resize", `{"size_gb":60}`, http.StatusNotFound},
+		{"/api/machines/bad%20name/resize", `{"size_gb":60}`, http.StatusBadRequest},
+	} {
+		if resp, b := e.req(t, http.MethodPost, tc.path, tc.body); resp.StatusCode != tc.code {
+			t.Fatalf("%s %s = %d %s", tc.path, tc.body, resp.StatusCode, b)
+		}
+	}
+}
+
+func TestMachineConfigDoesNotWakeDuringResize(t *testing.T) {
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.diskBusy.Store(true)
+	defer e.s.diskBusy.Store(false)
+	_, b := e.req(t, http.MethodGet, "/api/machines/docker-desktop/config", "")
+	var cfg MachineConfig
+	_ = json.Unmarshal(b, &cfg)
+	if cfg.Name != "docker-desktop" {
+		t.Fatalf("config = %s", b)
+	}
+	if w.Ran("-d docker-desktop") {
+		t.Fatal("config must not run commands inside a distro while a resize is in progress")
+	}
+}
+
+func TestMachineDiskResizeTooSmall(t *testing.T) {
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.DistroDiskLimit = w.VHDXLimit
+	w.SetFSMinBlocks("Ubuntu-26.04", 18390839) // ≈ 70.2 GiB → 建議最小 72 GB
+	w.SetFSMinBlocks("docker-desktop", 18390839)
+
+	// 執行中：resize-info 回報最小值
+	resp, b := e.req(t, http.MethodGet, "/api/machines/Ubuntu-26.04/resize-info", "")
+	var info struct {
+		Running bool `json:"running"`
+		MinGB   int  `json:"min_gb"`
+	}
+	_ = json.Unmarshal(b, &info)
+	if resp.StatusCode != 200 || !info.Running || info.MinGB != 72 {
+		t.Fatalf("resize-info running = %d %s", resp.StatusCode, b)
+	}
+	// 停止中：不進 distro 估計（不喚醒），min_gb = 0
+	resp, b = e.req(t, http.MethodGet, "/api/machines/docker-desktop/resize-info", "")
+	info.MinGB, info.Running = -1, true
+	_ = json.Unmarshal(b, &info)
+	if resp.StatusCode != 200 || info.Running || info.MinGB != 0 || w.Ran("-d docker-desktop") {
+		t.Fatalf("resize-info stopped = %d %s", resp.StatusCode, b)
+	}
+
+	var out struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+		MinGB int    `json:"min_gb"`
+	}
+	// 執行中且小於最小值：在關閉 WSL 之前就拒絕
+	resp, b = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/resize", `{"size_gb":60,"shutdown":true}`)
+	_ = json.Unmarshal(b, &out)
+	if resp.StatusCode != http.StatusBadRequest || out.Code != "too_small" || out.MinGB != 72 || !strings.Contains(out.Error, "72") {
+		t.Fatalf("too small running = %d %s", resp.StatusCode, b)
+	}
+	if w.Shutdowns() != 0 || len(w.ResizeCalls()) != 0 {
+		t.Fatal("a doomed resize must not shut WSL down or call wsl --manage")
+	}
+	// 停止中無法預估：交給 WSL，失敗時回易讀訊息
+	resp, b = e.req(t, http.MethodPost, "/api/machines/docker-desktop/resize", `{"size_gb":60}`)
+	out = struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+		MinGB int    `json:"min_gb"`
+	}{}
+	_ = json.Unmarshal(b, &out)
+	if resp.StatusCode != http.StatusUnprocessableEntity || out.Code != "too_small" || out.MinGB != 72 || strings.Contains(out.Error, "e2fsck") {
+		t.Fatalf("too small stopped = %d %s", resp.StatusCode, b)
+	}
+	// 夠大就成功
+	resp, b = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/resize", `{"size_gb":72,"shutdown":true}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("resize to minimum = %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestMachineDiskCompact(t *testing.T) {
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.DistroDisk = w.VHDXSize
+	type compactResp struct {
+		Shutdown    bool     `json:"shutdown"`
+		Restarted   []string `json:"restarted"`
+		BeforeBytes int64    `json:"before_bytes"`
+		AfterBytes  int64    `json:"after_bytes"`
+		Code        string   `json:"code"`
+		Running     []string `json:"running"`
+	}
+	compact := func(name, body string) (int, compactResp) {
+		t.Helper()
+		resp, b := e.req(t, http.MethodPost, "/api/machines/"+name+"/compact", body)
+		var out compactResp
+		_ = json.Unmarshal(b, &out)
+		return resp.StatusCode, out
+	}
+
+	// VHD 未被占用：直接壓縮，回報前後大小
+	code, out := compact("docker-desktop", `{}`)
+	if code != 200 || out.Shutdown || out.BeforeBytes != 1_200_000_000 || out.AfterBytes != 1_000_000_000 {
+		t.Fatalf("compact detached = %d %+v", code, out)
+	}
+	if w.Shutdowns() != 0 {
+		t.Fatal("must not shut WSL down when the VHD is free")
+	}
+
+	// 執行中：未同意 → 409 列出會被停止的機器；同意 → 關 WSL、壓縮、重啟
+	code, out = compact("Ubuntu-26.04", `{}`)
+	if code != http.StatusConflict || out.Code != "needs_shutdown" || len(out.Running) != 1 {
+		t.Fatalf("compact running without consent = %d %+v", code, out)
+	}
+	if got := w.CompactCalls(); len(got) != 1 {
+		t.Fatalf("no compact may run before consent: %v", got)
+	}
+	code, out = compact("Ubuntu-26.04", `{"shutdown":true}`)
+	if code != 200 || !out.Shutdown || len(out.Restarted) != 1 || out.BeforeBytes != 8_500_000_000 || out.AfterBytes != 4_250_000_000 {
+		t.Fatalf("compact with shutdown = %d %+v", code, out)
+	}
+	if w.Shutdowns() != 1 || e.engine.Down {
+		t.Fatalf("shutdowns=%d down=%v", w.Shutdowns(), e.engine.Down)
+	}
+
+	// wsld-gui 在 WSL 內：拒絕關機
+	e.s.SelfInWSL = true
+	code, out = compact("Ubuntu-26.04", `{"shutdown":true}`)
+	if code != http.StatusConflict || out.Code != "self_in_wsl" || w.Shutdowns() != 1 {
+		t.Fatalf("self in wsl = %d %+v", code, out)
+	}
+	e.s.SelfInWSL = false
+
+	// 磁碟作業進行中：第二個請求 409
+	e.s.diskBusy.Store(true)
+	if code, _ := compact("docker-desktop", `{}`); code != http.StatusConflict {
+		t.Fatalf("concurrent = %d", code)
+	}
+	e.s.diskBusy.Store(false)
+
+	if code, _ := compact("nope", `{}`); code != http.StatusNotFound {
+		t.Fatalf("unknown = %d", code)
+	}
+}
+
+func TestMachineDiskResizeAlsoCompacts(t *testing.T) {
+	e := newEnv(t, "")
+	w := NewFakeWSL()
+	e.s.WSL = w
+	e.s.DistroDisk = w.VHDXSize
+	e.s.DistroDiskLimit = w.VHDXLimit
+	resp, b := e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/resize", `{"size_gb":60,"shutdown":true}`)
+	var out struct {
+		Compacted   bool  `json:"compacted"`
+		BeforeBytes int64 `json:"before_bytes"`
+		AfterBytes  int64 `json:"after_bytes"`
+	}
+	_ = json.Unmarshal(b, &out)
+	if resp.StatusCode != 200 || !out.Compacted || out.BeforeBytes != 8_500_000_000 || out.AfterBytes != 4_250_000_000 {
+		t.Fatalf("resize = %d %s", resp.StatusCode, b)
+	}
+	// 壓縮在同一次關機中、重啟之前執行
+	if got := w.CompactCalls(); len(got) != 1 || got[0] != "Ubuntu-26.04 detached" || w.Shutdowns() != 1 {
+		t.Fatalf("compacts=%v shutdowns=%d", got, w.Shutdowns())
+	}
+	// 調整失敗就不壓縮
+	w.FailResize = true
+	if resp, _ := e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/resize", `{"size_gb":50,"shutdown":true}`); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("failed resize = %d", resp.StatusCode)
+	}
+	if got := w.CompactCalls(); len(got) != 1 {
+		t.Fatalf("no compact after a failed resize: %v", got)
+	}
+}

@@ -289,9 +289,10 @@ func ListOnline(ctx context.Context, r Runner) ([]OnlineDistro, error) {
 	return ParseOnline(DecodeOutput(out)), nil
 }
 
-// Install 執行 `wsl --install -d <distribution> [--name <name>] --no-launch`。
-// distribution 為線上目錄名稱；name 為本機自訂名稱（空則與 distribution 相同）。
-func Install(ctx context.Context, r Runner, distribution, name string) error {
+// Install 執行 `wsl --install -d <distribution> [--name <name>] [--vhd-size <n>GB] --no-launch`。
+// distribution 為線上目錄名稱；name 為本機自訂名稱（空則與 distribution 相同）；
+// vhdSizeGB 為虛擬磁碟容量上限（0 = WSL 預設 1 TB）。
+func Install(ctx context.Context, r Runner, distribution, name string, vhdSizeGB int) error {
 	if !ValidDistroName(distribution) {
 		return fmt.Errorf("invalid distribution %q", distribution)
 	}
@@ -301,9 +302,15 @@ func Install(ctx context.Context, r Runner, distribution, name string) error {
 	if !ValidDistroName(name) {
 		return fmt.Errorf("invalid distro name %q", name)
 	}
+	if vhdSizeGB != 0 && !ValidVHDSizeGB(vhdSizeGB) {
+		return fmt.Errorf("invalid disk size %d GB (allowed %d–%d)", vhdSizeGB, MinVHDSizeGB, MaxVHDSizeGB)
+	}
 	args := []string{"--install", "-d", distribution}
 	if name != distribution {
 		args = append(args, "--name", name)
+	}
+	if vhdSizeGB != 0 {
+		args = append(args, "--vhd-size", vhdSizeArg(vhdSizeGB))
 	}
 	args = append(args, "--no-launch")
 	_, stderr, err := r.Run(ctx, nil, args...)

@@ -100,17 +100,18 @@ func main() {
 
 	srv := &gui.Server{
 		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
-		DistroDisk:     fwsl.VHDXSize,
-		DiskCacheTTL:   -1, // /__test/reset 等直接改 fake 狀態，不能吃到快取
-		LAN:            lanMgr,
-		Forwarder:      forwarder,
-		Shell:          gui.FakeDistroShell{},
-		K8sFor:         func(d string) gui.K8s { return k8sCluster.For(d) },
-		K8sStream:      &gui.FakeCommandStream{},
-		KubeconfigPath: filepath.Join(os.TempDir(), "wsld-testhost-kube", "config"),
-		LoadConfig:     func() (config.Config, error) { return config.Load(*cfgPath) },
-		SaveConfig:     func(c config.Config) error { return config.Save(*cfgPath, c) },
-		Assets:         spaHandler(*dist),
+		DistroDisk:      fwsl.VHDXSize,
+		DistroDiskLimit: fwsl.VHDXLimit,
+		DiskCacheTTL:    -1, // /__test/reset 等直接改 fake 狀態，不能吃到快取
+		LAN:             lanMgr,
+		Forwarder:       forwarder,
+		Shell:           gui.FakeDistroShell{},
+		K8sFor:          func(d string) gui.K8s { return k8sCluster.For(d) },
+		K8sStream:       &gui.FakeCommandStream{},
+		KubeconfigPath:  filepath.Join(os.TempDir(), "wsld-testhost-kube", "config"),
+		LoadConfig:      func() (config.Config, error) { return config.Load(*cfgPath) },
+		SaveConfig:      func(c config.Config) error { return config.Save(*cfgPath, c) },
+		Assets:          spaHandler(*dist),
 		OnWindowAction: func(a string) {
 			winMu.Lock()
 			windowActions = append(windowActions, a)
@@ -201,6 +202,23 @@ func main() {
 	mux.HandleFunc("POST /__test/wsl/fail-install", func(w http.ResponseWriter, r *http.Request) {
 		fwsl.FailInstall = r.URL.Query().Get("on") != "0"
 		ok(w)
+	})
+	mux.HandleFunc("POST /__test/wsl/fail-resize", func(w http.ResponseWriter, r *http.Request) {
+		fwsl.FailResize = r.URL.Query().Get("on") != "0"
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/wsl/fs-min", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.ParseInt(r.URL.Query().Get("blocks"), 10, 64)
+		fwsl.SetFSMinBlocks(r.URL.Query().Get("distro"), n)
+		ok(w)
+	})
+	mux.HandleFunc("POST /__test/wsl/self-in-wsl", func(w http.ResponseWriter, r *http.Request) {
+		srv.SelfInWSL = r.URL.Query().Get("on") != "0"
+		ok(w)
+	})
+	mux.HandleFunc("GET /__test/wsl/last-install", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"args": fwsl.LastInstallArgs()})
 	})
 	mux.HandleFunc("GET /__test/wsl/installed", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -298,6 +316,7 @@ func main() {
 		resetLAN()
 		engine.Reset()
 		fwsl.Reset()
+		srv.SelfInWSL = false
 		life.Broken = false
 		life.ResetStarts()
 		k8sCluster.Reset()

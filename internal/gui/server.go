@@ -93,6 +93,10 @@ type Server struct {
 	Forwarder *lan.Forwarder
 	// DistroDisk 回傳 distro 虛擬磁碟（ext4.vhdx）大小（Windows：wsl.VHDXSize；nil＝不顯示）。
 	DistroDisk func(name string) (int64, error)
+	// DistroDiskLimit 回傳 distro 虛擬磁碟的容量上限（Windows：wsl.VHDXLimit；nil＝不顯示）。
+	DistroDiskLimit func(name string) (int64, error)
+	// SelfInWSL：wsld-gui 的執行檔位於 WSL 檔案系統（\\wsl.localhost\…）；此時拒絕 wsl --shutdown。
+	SelfInWSL bool
 	// K8sFor 取得指定 distro 的 k3s 管理器（nil → /api/k8s 回 501）。
 	K8sFor func(distro string) K8s
 	// K8sStream 開啟 kubectl logs／exec 串流（nil → 501）。
@@ -101,6 +105,8 @@ type Server struct {
 	KubeconfigPath string
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
+
+	diskBusy atomic.Bool // 調整／壓縮磁碟中：/config 不在 distro 內執行命令（避免把 WSL 叫醒）
 
 	startMu   sync.Mutex
 	starting  bool
@@ -174,6 +180,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/machines/{name}/stop", s.handleMachineStop)
 	mux.HandleFunc("POST /api/machines/{name}/unmanage", s.handleMachineUnmanage)
 	mux.HandleFunc("POST /api/machines/{name}/unregister", s.handleMachineUnregister)
+	mux.HandleFunc("POST /api/machines/{name}/resize", s.handleMachineResize)
+	mux.HandleFunc("GET /api/machines/{name}/resize-info", s.handleMachineResizeInfo)
+	mux.HandleFunc("POST /api/machines/{name}/compact", s.handleMachineCompact)
 	mux.HandleFunc("GET /api/machines/{name}/exec", s.handleMachineExec)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)

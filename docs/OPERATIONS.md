@@ -145,6 +145,38 @@ GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看�
   - CLI `wsld init`（以及 `start`／`use` 觸發的初始化）遇到只有 root 的發行版、需要新建帳號時，會以隱藏輸入詢問密碼（輸入兩次確認，留空略過）；非互動環境可用 `wsld init --distro <name> --password-stdin`，從 stdin 第一行讀取。既有帳號的密碼一律不更動。
 - 「啟動引擎」或「設為主要」失敗時，banner 保留失敗原因直到引擎就緒，不會被輪詢的「無法連線 Docker API」蓋掉。
 
+## 機器的磁碟上限
+
+WSL 的虛擬磁碟（ext4.vhdx）是動態成長的：檔案大小跟著實際用量走，上限只是「最多能長到多大」。WSL 預設上限 1 TB；wsld 0.17 起新增機器預設 **60 GB**。
+
+- **新增機器**：對話框「磁碟上限（GB）」，留空＝WSL 預設。CLI：`wsld init --vhd-size 60`（只在沒有 Ubuntu、需要安裝時有作用；`0`＝WSL 預設）。
+- **既有機器**：GUI 的 Info →「磁碟上限」旁的筆形鈕；CLI：
+
+```powershell
+wsld resize-disk Ubuntu-26.04 60              # VHD 沒被占用時直接調整
+wsld resize-disk --shutdown Ubuntu-26.04 60   # 需要關閉 WSL 時，確認後加 --shutdown
+```
+
+  WSL 只有在該機器的虛擬磁碟沒掛在 WSL VM 上時才能調整。實測 `wsl --terminate` **不會**卸下（停止後仍回 `WSL_E_DISTRO_NOT_STOPPED`），要 `wsl --shutdown`，也就是**所有機器都會停止**。所以：從未啟動過（或 WSL 已關）的機器直接調整；其他情況 GUI 會列出會被停止的機器、按「關閉 WSL 並套用」才進行，CLI 則要 `--shutdown`。流程是停各機 docker → `wsl --shutdown` → 調整 → 把原本執行中的機器開回來（不論調整成敗）。WSL 內的終端、編輯器連線等也會中斷。
+- wsld-gui／wsld.exe 若是從 WSL 檔案系統（`\\wsl.localhost\…`）執行，關閉 WSL 會讓它們中途結束，因此會拒絕並提示改從 Windows 資料夾執行。
+- wsld-gui 閃退時，錯誤與 stack 會寫到 `%APPDATA%\wsld\crash.log`。
+- **縮小有下限，而且不只是已用空間**：檔案系統的固定開銷（例如 inode 表）是依「當初格式化的大小」配置的。1 TB 格式化的發行版即使只用了 30 GB，`resize2fs` 的最小值也約 70 GiB（實測：inode 表就占 16 GiB）。執行中的機器在對話框會顯示「最小可設約 N GB」並擋下更小的值，在關閉 WSL 之前就拒絕；停止中的機器無法預估，WSL 回報太小時會顯示同樣的易讀訊息。CLI 同樣會先檢查。縮小前請先備份：`wsl --export <distro> backup.tar`。
+- **從 1 TB 縮到很小可能要分兩次**：最小值是依「目前」的配置估計的，縮小後配置變緊湊，最小值也會下降。實測 Ubuntu-26.04（約 30 GB 資料）：1 TB 時最小約 71 GB → 先縮到 72 GB → 重新估計只剩約 56 GB → 再縮到 60 GB 成功。每次都需要關閉 WSL。
+- **縮小後 Windows 上的 vhdx 檔可能反而變大**：resize2fs 搬動資料，舊位置不會自動還給 Windows（實測 32 GB → 52.7 GB）。因此 wsld 調整成功後會在同一次關機中接著壓縮（`wsl --manage <d> --compact`），不必再停一次機器。
+
+## 釋放磁碟空間（還給 Windows）
+
+vhdx 是動態成長的：刪掉 Linux 裡的檔案後，Windows 上的檔案不會自動變小。機器卡片的「釋放磁碟空間」鈕（縮小箭頭圖示）或 CLI：
+
+```powershell
+wsld compact-disk Ubuntu-k3s-poc              # 磁碟沒被 WSL 占用時直接壓縮
+wsld compact-disk --shutdown Ubuntu-26.04     # 需要關閉 WSL 時，確認後加 --shutdown
+```
+
+與調整大小相同：壓縮需要 VHD 沒掛在 WSL VM 上。執行中（或停止但仍被占用）的機器要 `wsl --shutdown`，GUI 會列出會被停止的機器並確認，完成後把原本執行中的機器開回來；從 `\\wsl.localhost\…` 執行 wsld 時會拒絕。完成後顯示釋放了多少、Windows 上現在佔用多少。實測 k3s-poc：4.71 GB → 3.71 GB（2 秒）。
+- **要比下限更小**：只能匯出再匯入成新的、較小的磁碟，例如 `wsl --export <d> d.tar` → `wsl --unregister <d>` → 在 `%UserProfile%\.wslconfig` 的 `[wsl2]` 設 `defaultVhdSize=60GB` 後 `wsl --import <d> <目錄> d.tar`（此流程未在本機實測；unregister 會刪除原磁碟，務必先確認 tar 完整）。
+- 等同的 WSL 指令：新增 `wsl --install -d Ubuntu --vhd-size 60GB`；調整 `wsl --manage <distro> --resize 60GB`；全域預設可在 `%UserProfile%\.wslconfig` 的 `[wsl2]` 加 `defaultVhdSize=60GB`（影響之後所有新建的發行版）。
+
 ## 已知限制
 
 - **平台**：Windows 11 x64 + WSL2；未測 Windows 10、arm64（arm64 見 Roadmap Extra）。

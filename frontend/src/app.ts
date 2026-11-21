@@ -3,6 +3,8 @@ import {
   ApiError,
   type Container,
   type DiskInfo,
+  type InstallDefaults,
+  type MachineConfig,
   type Image,
   type InstallProgress,
   type K8sDeployment,
@@ -76,6 +78,8 @@ interface State {
   /** 最近一次「啟動引擎／設為主要」失敗的原因；引擎就緒前輪詢不覆蓋，避免真正原因被「無法連線 API」蓋掉 */
   bringUpError?: string;
   notice?: string;
+  /** 通知不自動消失（長時間作業的結果，使用者可能已切走）；需按 ✕ 關閉 */
+  noticeSticky?: boolean;
   starting: boolean;
   /** 正在切換的 target distro 名稱；有值時 header 顯示 Loading／Switching */
   switching?: string;
@@ -590,14 +594,23 @@ export class App {
     await this.refreshKeeping(err);
   }
 
-  private notify(msg: string): void {
+  /** sticky：不自動消失、顯示 ✕（調整大小／釋放空間這類要等上一分鐘的結果）；否則 8 秒後消失。 */
+  private notify(msg: string, opts: { sticky?: boolean } = {}): void {
     this.st.notice = msg;
+    this.st.noticeSticky = !!opts.sticky;
     this.renderNotice();
     if (this.noticeTimer) window.clearTimeout(this.noticeTimer);
-    this.noticeTimer = window.setTimeout(() => {
-      this.st.notice = undefined;
-      this.renderNotice();
-    }, 8000);
+    this.noticeTimer = undefined;
+    if (opts.sticky) return;
+    this.noticeTimer = window.setTimeout(() => this.dismissNotice(), 8000);
+  }
+
+  private dismissNotice(): void {
+    if (this.noticeTimer) window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = undefined;
+    this.st.notice = undefined;
+    this.st.noticeSticky = false;
+    this.renderNotice();
   }
 
   private openLogs(c: Container): void {
@@ -765,6 +778,7 @@ export class App {
       this.buildConfirmDialog(),
       this.buildFirewallDialog(),
       this.buildAddMachineDialog(),
+      this.buildResizeDialog(),
     );
     this.renderNav();
     this.renderView();
@@ -1036,7 +1050,16 @@ export class App {
   private renderNotice(): void {
     const n = this.root.querySelector<HTMLElement>('[data-testid="notice"]')!;
     n.hidden = !this.st.notice;
-    n.textContent = this.st.notice ?? "";
+    const sticky = !!this.st.notice && !!this.st.noticeSticky;
+    n.classList.toggle("sticky", sticky);
+    const text = el("span", { "data-testid": "notice-text", text: this.st.notice ?? "" });
+    if (!sticky) {
+      n.replaceChildren(text);
+      return;
+    }
+    const close = iconBtn({ "data-testid": "notice-close", class: "notice-close" }, "close", t("gui.close"));
+    close.onclick = () => this.dismissNotice();
+    n.replaceChildren(text, close);
   }
 
   /** 頂部分頁：資源（容器／映像／volume／網路）｜系統（Machines）；Settings 齒輪在右側（renderHeader）。
@@ -1652,6 +1675,7 @@ export class App {
             ? [usageMeter(t("gui.machines.disk_fs"), formatDisk(d.disk_used_bytes ?? 0, d.disk_total_bytes ?? 0), memPct(d.disk_used_bytes ?? 0, d.disk_total_bytes ?? 0), "info-disk-bar")]
             : []),
           infoField(t("gui.machines.disk_hint"), (d.disk_bytes ?? 0) > 0 ? humanSize(d.disk_bytes ?? 0) : "—", "info-disk"),
+          this.diskLimitField(info.name, d),
           el("div", { class: `tag ${d.systemd ? "ok" : ""}`, "data-testid": "machine-config-systemd", text: d.systemd ? t("gui.machines.systemd_on") : t("gui.machines.systemd_off") }),
           el("pre", { class: "conf", "data-testid": "machine-config-conf", text: d.wsl_conf || t("gui.machines.no_conf") }),
         );
@@ -1903,7 +1927,9 @@ export class App {
       const switching = this.st.switching === d.name;
       const starting = (this.st.starting && d.active) || this.st.busy.has(`power-on:${d.name}`);
       const stopping = this.st.busy.has(`power-off:${d.name}`);
-      const pending = removing ? "removing" : switching ? "switching" : starting ? "starting" : stopping ? "stopping" : undefined;
+      const resizing = this.st.busy.has(`resize:${d.name}`);
+      const compacting = this.st.busy.has(`compact:${d.name}`);
+      const pending = removing ? "removing" : switching ? "switching" : starting ? "starting" : stopping ? "stopping" : resizing ? "resizing" : compacting ? "compacting" : undefined;
       const locked = !!pending || removingAny || !!this.st.switching || this.st.starting;
       const tools: HTMLElement[] = [];
       const cfg = iconBtn({ "data-testid": `btn-machine-config-${d.name}` }, "info", t("gui.machines.info"));
@@ -1915,6 +1941,9 @@ export class App {
       const term = iconBtn({ "data-testid": `btn-machine-term-${d.name}` }, "terminal", t("gui.machines.terminal"));
       term.disabled = locked;
       term.onclick = () => this.openMachineTerminal(d.name);
+      const compact = iconBtn({ "data-testid": `btn-machine-compact-${d.name}` }, "shrink", t("gui.machines.compact"));
+      compact.disabled = locked || [...this.st.busy].some((k) => k.startsWith("compact:") || k.startsWith("resize:"));
+      compact.onclick = () => void this.compactMachine(d.name, d.state.toLowerCase() === "running");
       const rm = iconBtn({ "data-testid": `btn-machine-remove-${d.name}`, class: "danger" }, "trash", t("gui.machines.remove"));
       rm.disabled = locked;
       rm.onclick = () =>
@@ -1936,7 +1965,7 @@ export class App {
         : iconBtn({ "data-testid": `btn-machine-start-${d.name}` }, "play", t("gui.machines.start"));
       power.disabled = locked;
       power.onclick = () => void this.machinePower(d.name, running ? "off" : "on", d.active);
-      tools.push(power, cfg, folder, term, rm);
+      tools.push(power, cfg, folder, term, compact, rm);
 
       const footKids: HTMLElement[] = [];
       if (!d.active) {
@@ -1961,7 +1990,11 @@ export class App {
               ? t("gui.status.starting")
               : pending === "stopping"
                 ? t("gui.ct.stopping")
-                : d.state;
+                : pending === "resizing"
+                  ? t("gui.machines.resizing")
+                  : pending === "compacting"
+                    ? t("gui.machines.compacting")
+                    : d.state;
       const attrs: Record<string, string> = {
         class: `machine-card${d.active ? " active" : ""}`,
         "data-testid": "machine-row",
@@ -1977,7 +2010,10 @@ export class App {
       ];
       if ((d.disk_bytes ?? 0) > 0) {
         meta.push(el("span", { class: "muted", title: t("gui.machines.disk_hint") }, ` · ${t("gui.machines.disk")} `,
-          el("span", { "data-testid": "machine-disk", "data-size": String(d.disk_bytes), text: humanSize(d.disk_bytes ?? 0) })));
+          el("span", { "data-testid": "machine-disk", "data-size": String(d.disk_bytes), text: humanSize(d.disk_bytes ?? 0) }),
+          ...((d.disk_limit_bytes ?? 0) > 0
+            ? [" / ", el("span", { "data-testid": "machine-disk-limit", title: t("gui.machines.disk_limit"), text: humanSize(d.disk_limit_bytes ?? 0) })]
+            : [])));
       }
       if (d.active && (d.api_endpoint || this.st.meta.api_endpoint)) {
         meta.push(el("span", { class: "muted mono", "data-testid": "machine-endpoint", text: ` · ${d.api_endpoint || this.st.meta.api_endpoint}` }));
@@ -2158,6 +2194,16 @@ export class App {
     }) as HTMLInputElement;
     const pw = el("input", { type: "password", "data-testid": "add-machine-password", autocomplete: "new-password" }) as HTMLInputElement;
     const pw2 = el("input", { type: "password", "data-testid": "add-machine-password2", autocomplete: "new-password" }) as HTMLInputElement;
+    const vhd = el("input", {
+      type: "text",
+      inputmode: "numeric",
+      class: "mono",
+      "data-testid": "add-machine-vhd-size",
+      autocomplete: "off",
+      spellcheck: "false",
+    }) as HTMLInputElement;
+    const vhdErr = el("div", { class: "field-error", "data-testid": "add-machine-vhd-error", hidden: "" });
+    const vhdHint = el("div", { class: "field-hint", "data-testid": "add-machine-vhd-hint", text: t("gui.machines.vhd_size_hint") });
     const userErr = el("div", { class: "field-error", "data-testid": "add-machine-user-error", hidden: "", text: t("gui.machines.user_invalid") });
     const pwErr = el("div", { class: "field-error", "data-testid": "add-machine-password-error", hidden: "" });
     const err = el("div", { class: "field-error", "data-testid": "add-machine-error", hidden: "" });
@@ -2174,7 +2220,13 @@ export class App {
       if (pw2.value !== "" && pw.value !== pw2.value) return t("gui.machines.password_mismatch");
       return "";
     };
+    // 空 = WSL 預設（0）；否則須為範圍內整數，與後端 wsl.ValidVHDSizeGB 一致
+    const vhdGB = (): number | undefined => parseVHDSize(vhd.value, this.vhdRange);
     const syncInstallEnabled = () => {
+      const vBad = vhdGB() === undefined;
+      vhd.setAttribute("aria-invalid", String(vBad));
+      vhdErr.textContent = fmt(t("gui.machines.vhd_invalid"), String(this.vhdRange[0]), String(this.vhdRange[1]));
+      vhdErr.hidden = !vBad;
       const uBad = user.value.trim() !== "" && !userOk();
       user.setAttribute("aria-invalid", String(uBad));
       userErr.hidden = !uBad;
@@ -2188,8 +2240,10 @@ export class App {
         !userOk() ||
         p !== "" ||
         pw.value !== pw2.value ||
+        vBad ||
         this.st.busy.has("install");
     };
+    vhd.oninput = () => syncInstallEnabled();
     name.oninput = () => syncInstallEnabled();
     user.oninput = () => syncInstallEnabled();
     pw.oninput = () => syncInstallEnabled();
@@ -2206,7 +2260,13 @@ export class App {
       { method: "dialog", class: "add-machine-form" },
       // 下拉不能包在 <label> 裡（點清單項目會被轉成再點一次按鈕）
       el("div", { class: "field" }, el("span", { class: "field-label", id: "add-machine-select-label", text: t("gui.machines.select") }), sel.el),
-      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.name") }), textField(name)),
+      // 自訂名稱與磁碟上限同一列，不增加對話框高度（安裝中仍需放得下進度區塊）
+      el("div", { class: "field-row" },
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.name") }), textField(name)),
+        el("label", { class: "field vhd" }, el("span", { class: "field-label", text: t("gui.machines.vhd_size") }), textField(vhd)),
+      ),
+      vhdErr,
+      vhdHint,
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.linux_user") }), textField(user), userErr),
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.password") }), textField(pw)),
       el(
@@ -2227,13 +2287,15 @@ export class App {
       const dist = sel.value.trim();
       const nm = name.value.trim();
       const usr = user.value.trim();
-      if (!dist || !nm || !userOk() || pwProblem() !== "" || pw.value !== pw2.value || this.st.busy.has("install")) return;
-      const fields = [name, user, pw, pw2];
+      const size = vhdGB();
+      if (!dist || !nm || !userOk() || pwProblem() !== "" || pw.value !== pw2.value || size === undefined || this.st.busy.has("install")) return;
+      const fields = [name, user, pw, pw2, vhd];
       install.disabled = true;
       cancel.disabled = true;
       sel.setDisabled(true);
       for (const f of fields) f.disabled = true;
       hint.hidden = true;
+      vhdHint.hidden = true;
       actions.hidden = true;
       err.hidden = true;
       this.st.busy.add("install");
@@ -2253,7 +2315,7 @@ export class App {
       void poll();
       const timer = window.setInterval(poll, 1000);
       try {
-        const res = await api.installMachine(dist, nm, usr, pw.value);
+        const res = await api.installMachine(dist, nm, usr, pw.value, size);
         // 密碼不留在 DOM：成功即清掉
         pw.value = "";
         pw2.value = "";
@@ -2276,6 +2338,7 @@ export class App {
         sel.setDisabled(false);
         for (const f of fields) f.disabled = false;
         hint.hidden = false;
+        vhdHint.hidden = false;
         actions.hidden = false;
         syncInstallEnabled();
         this.renderViewBody();
@@ -2291,6 +2354,7 @@ export class App {
     const name = d.querySelector<HTMLInputElement>('[data-testid="add-machine-name"]')!;
     const user = d.querySelector<HTMLInputElement>('[data-testid="add-machine-user"]')!;
     const pws = d.querySelectorAll<HTMLInputElement>('[data-testid="add-machine-password"], [data-testid="add-machine-password2"]');
+    const vhd = d.querySelector<HTMLInputElement>('[data-testid="add-machine-vhd-size"]')!;
     const err = d.querySelector<HTMLElement>('[data-testid="add-machine-error"]')!;
     const install = d.querySelector<HTMLButtonElement>('[data-testid="add-machine-install"]')!;
     const cancel = d.querySelector<HTMLButtonElement>('[data-testid="add-machine-cancel"]')!;
@@ -2307,6 +2371,10 @@ export class App {
       p.disabled = true;
       p.setAttribute("aria-invalid", "false");
     }
+    vhd.value = String(DEFAULT_VHD_GB);
+    vhd.disabled = true;
+    vhd.setAttribute("aria-invalid", "false");
+    d.querySelector<HTMLElement>('[data-testid="add-machine-vhd-error"]')!.hidden = true;
     cancel.disabled = false;
     sel.setOptions([], "", t("gui.machines.loading"));
     sel.setDisabled(true);
@@ -2315,9 +2383,11 @@ export class App {
     try {
       const [online, defaults] = await Promise.all([
         api.machinesOnline(),
-        api.installDefaults().catch(() => ({ user: "" })),
+        api.installDefaults().catch((): InstallDefaults => ({ user: "" })),
       ]);
       user.value = defaults.user || "";
+      if (defaults.vhd_min_gb && defaults.vhd_max_gb) this.vhdRange = [defaults.vhd_min_gb, defaults.vhd_max_gb];
+      vhd.value = defaults.vhd_size_gb ? String(defaults.vhd_size_gb) : "";
       sel.setOptions(
         online.map((o) => [o.name, o.friendly && o.friendly !== o.name ? `${o.friendly} (${o.name})` : o.name] as const),
         "",
@@ -2326,12 +2396,246 @@ export class App {
       sel.setDisabled(false);
       name.disabled = false;
       user.disabled = false;
+      vhd.disabled = false;
       for (const p of pws) p.disabled = false;
       install.disabled = true;
     } catch (e) {
       sel.setOptions([], "", t("gui.machines.select_placeholder"));
       err.textContent = e instanceof ApiError ? e.message : String(e);
       err.hidden = false;
+    }
+  }
+
+  /** 釋放磁碟空間（wsl --manage --compact）。執行中（或後端回 needs_shutdown）時，先確認關閉 WSL 並列出會被停止的機器。 */
+  private async compactMachine(name: string, running: boolean): Promise<void> {
+    const runningNow = () => (this.st.machines?.machines ?? []).filter((m) => m.state.toLowerCase() === "running").map((m) => m.name);
+    const confirmShutdown = (willStop: string[]) =>
+      this.confirm(
+        `${fmt(t("gui.machines.compact_prompt"), name)}\n\n${t("gui.machines.disk_needs_shutdown")}\n${
+          willStop.length > 0 ? fmt(t("gui.machines.resize_will_stop"), willStop.join("、")) : t("gui.machines.resize_none_running")
+        }`,
+        undefined,
+        { label: t("gui.machines.compact_shutdown_apply"), icon: "shrink", danger: true },
+      );
+    let consent = false;
+    if (running) {
+      if (!(await confirmShutdown(runningNow()))) return;
+      consent = true;
+    }
+    const key = `compact:${name}`;
+    let err: string | undefined;
+    for (;;) {
+      this.st.busy.add(key);
+      // Info 輪詢會在 distro 內執行命令，把剛關掉的 WSL 叫醒：作業期間暫停
+      this.stopMachineUsagePoll();
+      this.renderViewBody();
+      try {
+        const res = await api.compactMachine(name, consent);
+        const freed = res.before_bytes - res.after_bytes;
+        this.notify(
+          freed > 0
+            ? fmt(t("gui.machines.compacted"), name, humanSize(freed), humanSize(res.after_bytes))
+            : fmt(t("gui.machines.compact_nothing"), name, humanSize(res.after_bytes)),
+          { sticky: true },
+        );
+        break;
+      } catch (e) {
+        this.st.busy.delete(key);
+        if (e instanceof ApiError && e.code === "needs_shutdown" && !consent) {
+          const list = Array.isArray(e.detail.running) ? e.detail.running.map(String) : runningNow();
+          if (await confirmShutdown(list)) {
+            consent = true;
+            continue;
+          }
+          break;
+        }
+        err = e instanceof ApiError ? e.message : String(e);
+        break;
+      } finally {
+        this.st.busy.delete(key);
+      }
+    }
+    await this.refreshKeeping(err);
+    if (this.st.info?.kind === "machine") await this.openMachineInfo(this.st.info.name);
+  }
+
+  // ---- 磁碟上限 ---------------------------------------------------------------
+
+  /** 磁碟上限允許範圍（GB）；由 /api/machines/install/defaults 更新 */
+  private vhdRange: [number, number] = [VHD_MIN_GB, VHD_MAX_GB];
+  /** needShutdown：需經 wsl --shutdown 才能調整（目標執行中，或後端回 needs_shutdown）；willStop：會被停止的機器 */
+  private resizeTarget?: { name: string; currentGB: number; running: boolean; needShutdown: boolean; willStop: string[]; minGB: number };
+  private resizeSync?: () => void;
+
+  /** Info 的「磁碟上限」欄：容量＋調整鈕。 */
+  private diskLimitField(name: string, d: MachineConfig): HTMLElement {
+    const limit = d.disk_limit_bytes ?? 0;
+    const m = this.st.machines?.machines.find((x) => x.name === name);
+    const edit = iconBtn({ "data-testid": "btn-machine-resize" }, "edit", t("gui.machines.resize"));
+    edit.disabled = this.st.busy.has(`resize:${name}`);
+    edit.onclick = () => this.openResize(name, limit, (m?.state ?? "").toLowerCase() === "running");
+    return el("div", { class: "info-field" },
+      el("dt", { text: t("gui.machines.disk_limit"), title: t("gui.machines.disk_limit_hint") }),
+      el("dd", { class: "with-action" },
+        el("span", { "data-testid": "info-disk-limit", text: limit > 0 ? humanSize(limit) : "—" }),
+        edit,
+      ),
+    );
+  }
+
+  private buildResizeDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "resize-dialog" }) as HTMLDialogElement;
+    const title = el("h2", { "data-testid": "resize-title" });
+    const size = el("input", {
+      type: "text",
+      inputmode: "numeric",
+      class: "mono",
+      "data-testid": "resize-size",
+      autocomplete: "off",
+      spellcheck: "false",
+    }) as HTMLInputElement;
+    const err = el("div", { class: "field-error", "data-testid": "resize-error", hidden: "" });
+    const running = el("p", { class: "field-hint", "data-testid": "resize-running", text: t("gui.machines.resize_running") });
+    const willStop = el("strong", { "data-testid": "resize-will-stop" });
+    const shutdownBox = el("div", { class: "resize-shutdown", "data-testid": "resize-shutdown", role: "note" },
+      el("p", { text: t("gui.machines.resize_needs_shutdown") }),
+      el("p", {}, willStop),
+    );
+    const shrink = el("p", { class: "field-hint warn", "data-testid": "resize-shrink", text: t("gui.machines.resize_shrink") });
+    const minHint = el("div", { class: "field-hint", "data-testid": "resize-min", hidden: "" });
+    const apply = btn({ class: "primary", type: "submit", "data-testid": "resize-apply" }, "save", t("gui.machines.resize_apply"));
+    const cancel = btn({ type: "button", "data-testid": "resize-cancel" }, "close", t("gui.cancel"));
+    const busy = () => !!this.resizeTarget && this.st.busy.has(`resize:${this.resizeTarget.name}`);
+    const applyLabel = () =>
+      busy() ? t("gui.machines.resizing") : this.resizeTarget?.needShutdown ? t("gui.machines.resize_shutdown_apply") : t("gui.machines.resize_apply");
+    const sync = () => {
+      const tg = this.resizeTarget;
+      const n = parseVHDSize(size.value, this.vhdRange);
+      const invalid = size.value.trim() === "" || n === undefined;
+      // 小於檔案系統所需：關閉 WSL 之前就擋下
+      const tooSmall = !invalid && !!tg && tg.minGB > 0 && (n ?? 0) < tg.minGB;
+      const bad = invalid || tooSmall;
+      size.setAttribute("aria-invalid", String(bad));
+      if (invalid) {
+        err.textContent = fmt(t("gui.machines.vhd_invalid"), String(this.vhdRange[0]), String(this.vhdRange[1]));
+        err.hidden = false;
+      } else if (tooSmall && tg) {
+        err.textContent = fmt(t("gui.machines.resize_too_small"), tg.name, String(n), String(tg.minGB));
+        err.hidden = false;
+      } else if (err.dataset.kind !== "server") {
+        err.hidden = true;
+      }
+      minHint.hidden = !tg || tg.minGB <= 0;
+      if (tg && tg.minGB > 0) minHint.textContent = fmt(t("gui.machines.resize_min_hint"), String(tg.minGB));
+      running.hidden = !tg?.running;
+      shutdownBox.hidden = !tg?.needShutdown;
+      willStop.textContent = tg && tg.willStop.length > 0
+        ? fmt(t("gui.machines.resize_will_stop"), tg.willStop.join("、"))
+        : t("gui.machines.resize_none_running");
+      shrink.hidden = bad || !tg || tg.currentGB <= 0 || (n ?? 0) >= tg.currentGB;
+      apply.disabled = bad || busy() || (!!tg && n === tg.currentGB);
+      apply.classList.toggle("danger", !!tg?.needShutdown);
+      apply.querySelector(".label")!.textContent = applyLabel();
+    };
+    size.oninput = () => {
+      delete err.dataset.kind;
+      sync();
+    };
+    cancel.onclick = () => {
+      if (!busy()) d.close();
+    };
+    d.addEventListener("cancel", (ev) => {
+      if (busy()) ev.preventDefault();
+    });
+    const form = el("form", { method: "dialog", class: "add-machine-form" },
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.machines.vhd_size") }), textField(size), err),
+      minHint,
+      running,
+      shutdownBox,
+      shrink,
+      el("div", { class: "row" }, cancel, apply),
+    );
+    form.noValidate = true;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const tg = this.resizeTarget;
+      const n = parseVHDSize(size.value, this.vhdRange);
+      if (!tg || !n || busy()) return;
+      const key = `resize:${tg.name}`;
+      this.st.busy.add(key);
+      // Info 輪詢會在 distro 內執行命令，把剛關掉的 WSL 叫醒：調整期間暫停
+      this.stopMachineUsagePoll();
+      size.disabled = true;
+      cancel.disabled = true;
+      err.hidden = true;
+      delete err.dataset.kind;
+      sync();
+      this.renderViewBody();
+      try {
+        const res = await api.resizeMachine(tg.name, n, tg.needShutdown);
+        this.st.busy.delete(key);
+        d.close();
+        const freed = (res.before_bytes ?? 0) - (res.after_bytes ?? 0);
+        this.notify(
+          res.compacted && freed > 0
+            ? fmt(t("gui.machines.resized_freed"), tg.name, String(n), humanSize(freed))
+            : fmt(t("gui.machines.resized"), tg.name, String(n)),
+          { sticky: true },
+        );
+      } catch (e) {
+        this.st.busy.delete(key);
+        if (e instanceof ApiError && e.code === "too_small" && typeof e.detail.min_gb === "number") tg.minGB = e.detail.min_gb;
+        if (e instanceof ApiError && e.code === "needs_shutdown") {
+          // 第二步：讓使用者看過會被停止的機器後，再按一次「關閉 WSL 並套用」
+          tg.needShutdown = true;
+          const list = e.detail.running;
+          if (Array.isArray(list)) tg.willStop = list.map(String);
+        } else {
+          err.textContent = e instanceof ApiError ? e.message : String(e);
+          err.dataset.kind = "server";
+          err.hidden = false;
+        }
+      } finally {
+        this.st.busy.delete(key);
+        size.disabled = false;
+        cancel.disabled = false;
+        sync();
+        await this.refresh();
+        if (this.st.info?.kind === "machine" && this.st.info.name === tg.name) await this.openMachineInfo(tg.name);
+        this.renderViewBody();
+      }
+    };
+    this.resizeSync = sync;
+    d.append(el("div", { class: "dialog-head" }, title), form);
+    return d;
+  }
+
+  private openResize(name: string, limitBytes: number, running: boolean): void {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="resize-dialog"]')!;
+    const currentGB = limitBytes > 0 ? Math.round(limitBytes / 2 ** 30) : 0;
+    const willStop = (this.st.machines?.machines ?? []).filter((m) => m.state.toLowerCase() === "running").map((m) => m.name);
+    this.resizeTarget = { name, currentGB, running, needShutdown: running, willStop, minGB: 0 };
+    d.querySelector('[data-testid="resize-title"]')!.textContent = `${t("gui.machines.resize")} · ${name}`;
+    const size = d.querySelector<HTMLInputElement>('[data-testid="resize-size"]')!;
+    size.value = currentGB > 0 ? String(currentGB) : "";
+    const err = d.querySelector<HTMLElement>('[data-testid="resize-error"]')!;
+    delete err.dataset.kind;
+    err.hidden = true;
+    this.resizeSync?.();
+    if (size.value === "") err.hidden = true; // 尚未輸入時不先顯示錯誤
+    d.showModal();
+    size.focus();
+    size.select();
+    // 執行中：向後端要檔案系統能縮到的最小值（resize2fs -P，約 1 秒）
+    if (running) {
+      const tg = this.resizeTarget;
+      void api.resizeInfo(name).then((info) => {
+        if (this.resizeTarget !== tg || !tg) return;
+        tg.minGB = info.min_gb || 0;
+        this.resizeSync?.();
+      }).catch(() => {
+        /* 估不出來就交給 WSL 判斷 */
+      });
     }
   }
 
@@ -3427,6 +3731,20 @@ function ports(c: Container): string {
 // ---- 格式化 -----------------------------------------------------------------
 
 /** 依序以 args 取代 %s／%d（與 Go 端 i18n.T 的訊息格式相容）。 */
+/** 與後端 wsl.MinVHDSizeGB／MaxVHDSizeGB／DefaultVHDSizeGB 一致（defaults API 取不到時使用） */
+const VHD_MIN_GB = 8;
+const VHD_MAX_GB = 16384;
+const DEFAULT_VHD_GB = 60;
+
+/** 磁碟上限輸入：空 → 0（WSL 預設）；範圍內整數 → 該值；其他 → undefined（無效）。 */
+function parseVHDSize(raw: string, [min, max]: [number, number]): number | undefined {
+  const v = raw.trim();
+  if (v === "") return 0;
+  if (!/^\d+$/.test(v)) return undefined;
+  const n = Number(v);
+  return n >= min && n <= max ? n : undefined;
+}
+
 function fmt(s: string, ...args: string[]): string {
   let i = 0;
   return s.replace(/%[sd]/g, () => args[i++] ?? "");

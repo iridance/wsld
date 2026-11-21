@@ -1,7 +1,7 @@
 # wsld 產品規格（SPEC）
 
-版本：0.16.0（git tag `v0.16.0`）  
-狀態：**0.16.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
+版本：0.17.0（git tag `v0.17.0`）  
+狀態：**0.17.0 已交付**（Phase 0–4 基底 2026-09-06；Phase 5 多 distro＋GUI 補完見 Roadmap）
 最後更新：2026-11-20
 
 ## 1. 問題與目標
@@ -120,7 +120,8 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 
 ### 4.4 Distro
 
-- 偵測已安裝 Ubuntu 系列並沿用；否則 `wsl --install` 官方 Ubuntu
+- 偵測已安裝 Ubuntu 系列並沿用；否則 `wsl --install` 官方 Ubuntu（`--vhd-size`：`init --vhd-size <GB>`，預設 60，0＝WSL 預設 1 TB）
+- 虛擬磁碟上限（0.17）：允許 8–16384 GB；新增機器以 `wsl --install --vhd-size <n>GB` 指定，既有機器以 `wsl --manage <d> --resize <n>GB` 調整（成功後接著 `--compact`），亦可單獨以 `--compact` 釋放空間；兩者共用 `wsl.WithFreeVHD`。VHD 須未掛在 WSL VM 上；實測 `--terminate` 不會卸下，回 `WSL_E_DISTRO_NOT_STOPPED`（訊息在 stdout），要 `wsl --shutdown`。故目標未執行時先直接試，仍被占用（或目標執行中）則需使用者同意（GUI 409 `needs_shutdown` 附 `running`；CLI `--shutdown`）：停各機 docker → `--shutdown`（被輪詢叫醒時重試，最多 3 次）→ 調整 → 原本執行中的機器 `wsl -d <d> -- true` 開回來（不論成敗）。調整期間 `/config` 不進 distro 執行命令。執行檔位於 `\\wsl.localhost\…`／`\\wsl$\…` 時拒絕關閉 WSL。目標執行中時先以 `findmnt`＋`stat -f -c %S`＋`resize2fs -P` 估計最小上限（區塊數×區塊大小，進位後加 1 GB），小於它就在關閉 WSL 前拒絕（GUI 400 `too_small`＋`min_gb`；`GET …/resize-info` 供對話框顯示）；WSL 回 `New size smaller than minimum (N)` 時換算成同樣的易讀訊息（422 `too_small`）。上限讀 vhdx（Lxss 登錄檔 `BasePath`＋`VhdFileName`）標頭的 Virtual Disk Size metadata，執行中也讀得到、不喚醒 distro
 - `wsl.conf`：`systemd=true`
 - `loginctl enable-linger`：啟用（doctor 會查）
 - **0.5**：可管理多個 distro profile，同一時間一個 active（見 Roadmap Phase 5）
@@ -219,6 +220,8 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | `use` | 切換主要 machine（與 GUI「設為主要」同寫 config） |
 | `unmanage` | 停該 distro docker 後刪 profile（保留 WSL） |
 | `unregister` | `wsl --unregister`（需 `--confirm <name>`）＋刪 profile |
+| `compact-disk [--shutdown] <distro>` | 壓縮 VHDX（`wsl --manage --compact`），把不再使用的空間還給 Windows；被占用時同 `resize-disk` 需 `--shutdown`；報告釋放量 |
+| `resize-disk [--shutdown] <distro> <GB>` | 調整虛擬磁碟上限（`wsl --manage --resize`，成功後在同一個空檔 `--compact`）；VHD 被 WSL 占用時需 `--shutdown`（所有機器停止，完成後再啟動），未帶則退出碼 3 並列出會被停止的機器；縮小時資料須放得下 |
 | `status` | WSL／docker／API 狀態（對準 active） |
 | `ps` | 容器列表 |
 | `logs <id>` | 預設尾部 100 行；`--follow` 可選 |
@@ -248,7 +251,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | Images | 列表、移除、清除未使用；使用中不強制刪 |
 | Volumes | 列表、移除、清除未使用；使用中不強制刪 |
 | Networks | 列表；個別 Remove（內建不可刪）；清除未使用（prune） |
-| Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要）；新增機器（下載進度：進度條、已下載／總量、速度、經過時間） |
+| Machines | 列表＋設為主要／folder／terminal（底部 panel、user home）／取消管理／unregister／右側 Info（`.wslconfig` memory／processors、wsl.conf、tcp endpoint、CPU／Mem 摘要、磁碟上限＋調整）；新增機器（磁碟上限，預設 60 GB；下載進度：進度條、已下載／總量、速度、經過時間） |
 | Settings | 側欄視圖：refresh、exec_shell、tray_autostart、Theme（Light／Dark／System）；**網路 › 區網存取**（§4.5，即時套用；顯示狀態；未授權防火牆時先顯示說明對話框；偵測到 mirrored 時「還原 NAT」）。Containers 各服務列常駐地球按鈕，以系統瀏覽器開啟區網位址（區網存取關閉或無轉發時開 `http://localhost:<埠>`；多埠跳選單），Info 以文字列出 |
 | Kubernetes | 頂部導覽（Machines 旁）：一鍵啟動／停止（背景作業＋輪詢，首次含安裝）、重置、匯出 kubeconfig、叢集資訊卡（狀態、版本、node、API、context、記憶體）、另一台持有時一鍵移動；namespace 下拉＋ Pods（logs 串流、exec 終端、刪除）／Deployments（scale、rollout restart、刪除）／Services（NodePort 開瀏覽器、刪除）；Containers 頁把 `k8s_*` 容器摺成預設收合的群組（§4.6） |
 | Logs | 預設 100 行；Live 預設關 |

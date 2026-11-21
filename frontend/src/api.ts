@@ -97,6 +97,7 @@ export interface Machine {
   ready?: boolean;
   api_endpoint?: string;
   disk_bytes?: number; // ext4.vhdx 在 Windows 上的大小；取不到則省略
+  disk_limit_bytes?: number; // 虛擬磁碟容量上限（VHDX 標頭）；取不到則省略
 }
 
 export interface MachinesResponse {
@@ -120,6 +121,14 @@ export interface MachineConfig {
   disk_bytes?: number;
   disk_used_bytes?: number; // 執行中：df /
   disk_total_bytes?: number;
+  disk_limit_bytes?: number; // 虛擬磁碟容量上限
+}
+
+export interface InstallDefaults {
+  user: string;
+  vhd_size_gb?: number; // 新增機器預設磁碟上限（GB）
+  vhd_min_gb?: number;
+  vhd_max_gb?: number;
 }
 
 export interface OnlineDistro {
@@ -277,6 +286,8 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    /** 錯誤回應的完整 JSON（例如 resize 的 needs_shutdown 附帶 running） */
+    public detail: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -312,14 +323,16 @@ async function call<T>(method: string, path: string, body?: unknown, asText = fa
   if (!resp.ok) {
     let msg = resp.statusText;
     let code = "error";
+    let detail: Record<string, unknown> = {};
     try {
       const j = await resp.json();
       msg = j.error ?? msg;
       code = j.code ?? code;
+      if (j && typeof j === "object") detail = j;
     } catch {
       /* ignore */
     }
-    throw new ApiError(resp.status, code, msg);
+    throw new ApiError(resp.status, code, msg, detail);
   }
   if (asText) return (await resp.text()) as unknown as T;
   if (resp.status === 204) return undefined as unknown as T;
@@ -358,12 +371,30 @@ export const api = {
   machineConfig: (name: string) => call<MachineConfig>("GET", `/api/machines/${encodeURIComponent(name)}/config`),
   machinesOnline: () => call<OnlineDistro[]>("GET", "/api/machines/online"),
   installProgress: () => call<InstallProgress>("GET", "/api/machines/install/progress"),
-  installDefaults: () => call<{ user: string }>("GET", "/api/machines/install/defaults"),
-  installMachine: (distribution: string, name: string, user: string, password: string) =>
+  installDefaults: () => call<InstallDefaults>("GET", "/api/machines/install/defaults"),
+  /** vhdSizeGB：磁碟上限（GB）；0 = WSL 預設 */
+  installMachine: (distribution: string, name: string, user: string, password: string, vhdSizeGB = 0) =>
     call<{ ok: boolean; name: string; distribution: string; user: string; password_set: boolean }>(
       "POST",
       "/api/machines/install",
-      { distribution, name, user, password },
+      { distribution, name, user, password, vhd_size_gb: vhdSizeGB },
+    ),
+  /** 壓縮 VHDX，把不再使用的空間還給 Windows；shutdown 同 resizeMachine */
+  compactMachine: (name: string, shutdown = false) =>
+    call<{ ok: boolean; name: string; shutdown: boolean; restarted: string[]; before_bytes: number; after_bytes: number }>(
+      "POST",
+      `/api/machines/${encodeURIComponent(name)}/compact`,
+      { shutdown },
+    ),
+  /** 執行中時估計檔案系統能縮到的最小上限（停止中不喚醒，min_gb = 0） */
+  resizeInfo: (name: string) =>
+    call<{ name: string; running: boolean; min_gb: number }>("GET", `/api/machines/${encodeURIComponent(name)}/resize-info`),
+  /** shutdown：同意以 wsl --shutdown 釋放 VHD（所有機器會停止，完成後原本執行中的再啟動） */
+  resizeMachine: (name: string, sizeGB: number, shutdown = false) =>
+    call<{ ok: boolean; name: string; size_gb: number; shutdown: boolean; restarted: string[]; compacted?: boolean; before_bytes?: number; after_bytes?: number }>(
+      "POST",
+      `/api/machines/${encodeURIComponent(name)}/resize`,
+      { size_gb: sizeGB, shutdown },
     ),
   useMachine: (name: string) => call<{ active: string; ready: boolean }>("POST", `/api/machines/${encodeURIComponent(name)}/use`),
   startMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/start`),
