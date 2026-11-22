@@ -73,6 +73,7 @@ func newMgr(f *fakeRunner) *Manager {
 		Bundle:        []byte("#!/bin/bash\necho bundle\n"),
 		ReadyAttempts: 3,
 		Sleep:         func(time.Duration) {},
+		PortBusy:      func(int) bool { return false },
 	}
 }
 
@@ -133,7 +134,7 @@ func TestStatusReadyCollectsDetails(t *testing.T) {
 	if st.MemoryBytes != 439762944 {
 		t.Fatalf("MemoryBytes = %d", st.MemoryBytes)
 	}
-	if st.Endpoint != "https://127.0.0.1:6443" || st.Context != "wsld-Ubuntu-26.04" {
+	if st.Endpoint != "https://127.0.0.1:26443" || st.Context != "wsld-Ubuntu-26.04" {
 		t.Fatalf("endpoint/context: %+v", st)
 	}
 	if st.IPMismatch {
@@ -241,18 +242,18 @@ func TestStatusQueryFailuresAreUnknown(t *testing.T) {
 
 func TestInstallPipesBundleThenRunsInstall(t *testing.T) {
 	f := newFake()
-	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install", resp{out: "ok\n"})
+	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install 26443", resp{out: "ok\n"})
 	if err := newMgr(f).Install(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.stdin[d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install"]; !strings.Contains(got, "echo bundle") {
+	if got := f.stdin[d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install 26443"]; !strings.Contains(got, "echo bundle") {
 		t.Fatalf("bundle not piped: %q", got)
 	}
 }
 
 func TestInstallFailureSurfaces(t *testing.T) {
 	f := newFake()
-	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install", resp{err: errors.New("exit 3")})
+	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install 26443", resp{err: errors.New("exit 3")})
 	if err := newMgr(f).Install(context.Background()); err == nil {
 		t.Fatal("expected error")
 	}
@@ -262,7 +263,7 @@ func TestStartInstallsWhenMissingThenStartsAndWaits(t *testing.T) {
 	f := newFake()
 	f.running()
 	f.on(d+" test -x /usr/local/bin/k3s", resp{err: errors.New("exit 1")})
-	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install", resp{})
+	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install 26443", resp{})
 	f.on(d+" systemctl is-active docker", resp{out: "active\n"})
 	f.on(d+" systemctl reset-failed k3s", resp{})
 	f.on(d+" systemctl start k3s", resp{})
@@ -271,7 +272,7 @@ func TestStartInstallsWhenMissingThenStartsAndWaits(t *testing.T) {
 	if err := newMgr(f).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !(f.idx("wsld-k3s.sh install") < f.idx("systemctl start k3s")) {
+	if !(f.idx("wsld-k3s.sh install 26443") < f.idx("systemctl start k3s")) {
 		t.Fatalf("install must precede start: %v", f.calls)
 	}
 }
@@ -431,5 +432,32 @@ func TestManagerMemoryReadsProcMeminfo(t *testing.T) {
 	total, avail, err := newMgr(f).Memory(context.Background())
 	if err != nil || total != 2048*1024 || avail != 1024*1024 {
 		t.Fatalf("%d %d %v", total, avail, err)
+	}
+}
+
+func TestPickAPIPortSkipsBusyPorts(t *testing.T) {
+	m := &Manager{PortBusy: func(p int) bool { return p == DefaultAPIPort || p == DefaultAPIPort+1 }}
+	if got := m.pickAPIPort(); got != DefaultAPIPort+2 {
+		t.Fatalf("pickAPIPort = %d", got)
+	}
+	m = &Manager{APIPort: 30000, PortBusy: func(int) bool { return false }}
+	if got := m.pickAPIPort(); got != 30000 {
+		t.Fatalf("custom port = %d", got)
+	}
+	m = &Manager{APIPort: 80} // 小於 1024 視為未設定
+	if got := m.apiPort(); got != DefaultAPIPort {
+		t.Fatalf("privileged port should fall back, got %d", got)
+	}
+}
+
+func TestInstallPassesPickedPort(t *testing.T) {
+	f := newFake()
+	m := newMgr(f)
+	m.APIPort = 30001
+	m.PortBusy = func(p int) bool { return p == 30001 }
+	d := "-d Ubuntu-26.04 -u root --"
+	f.on(d+" bash -c cat > /tmp/wsld-k3s.sh && bash /tmp/wsld-k3s.sh install 30002", resp{})
+	if err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

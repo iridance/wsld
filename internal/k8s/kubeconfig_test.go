@@ -271,3 +271,14 @@ func TestHasExportedContext(t *testing.T) {
 		t.Fatal("unparsable file must be false")
 	}
 }
+
+func TestMergeKeepsServerPortFromK3sYAML(t *testing.T) {
+	src := strings.ReplaceAll(k3sYAML, "https://127.0.0.1:6443", "https://172.20.3.68:26443")
+	out, err := MergeKubeconfig(nil, []byte(src), "Ubuntu-26.04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := parseKC(t, out); k.Clusters[0].Cluster.Server != "https://127.0.0.1:26443" {
+		t.Fatalf("server = %q", k.Clusters[0].Cluster.Server)
+	}
+}

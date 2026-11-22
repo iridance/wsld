@@ -343,18 +343,18 @@ func TestK8sLowMemoryWarns(t *testing.T) {
 	}
 }
 
-func TestK8sPort6443BusyWhileNotReadyWarns(t *testing.T) {
+func TestK8sAPIPortBusyWhileNotReadyWarns(t *testing.T) {
 	r := k8sHealthy()
 	r[dk+"systemctl is-active k3s"] = kv{out: "inactive\n", err: errors.New("exit 3")}
 	d := k8sDeps(r)
 	d.Dial = func(_ context.Context, addr string) error {
-		if addr == "127.0.0.1:6443" {
+		if addr == "127.0.0.1:26443" {
 			return nil
 		}
 		return errors.New("refused")
 	}
 	rep := Run(context.Background(), d)
-	if x := find(rep, "k8s_ports"); x.Level != Warn || !strings.Contains(x.Detail, "6443") {
+	if x := find(rep, "k8s_ports"); x.Level != Warn || !strings.Contains(x.Detail, "26443") {
 		t.Fatalf("k8s_ports = %+v", x)
 	}
 }

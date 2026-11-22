@@ -13,8 +13,8 @@ import (
 
 const k8sSubcommands = "on|off|status|reset|kubeconfig|uninstall"
 
-func (a *App) k8sManager(distro string) *k8s.Manager {
-	return &k8s.Manager{WSL: a.WSL, Distro: distro, Bundle: a.K3sBundle, Output: a.Stdout}
+func (a *App) k8sManager(cfg config.Config, distro string) *k8s.Manager {
+	return &k8s.Manager{WSL: a.WSL, Distro: distro, Bundle: a.K3sBundle, Output: a.Stdout, APIPort: cfg.K8sAPIPort}
 }
 
 func (a *App) kubeconfigPath() string {
@@ -87,7 +87,7 @@ func (a *App) k8sOn(ctx context.Context, cfg config.Config, machine string) erro
 	if err := cfg.SetK8s(target.Distro, true); err != nil {
 		return fail(ExitError, err)
 	}
-	mgr := a.k8sManager(target.Distro)
+	mgr := a.k8sManager(cfg, target.Distro)
 	if err := mgr.Start(ctx); err != nil {
 		return fail(ExitError, err)
 	}
@@ -137,7 +137,7 @@ func (a *App) k8sOff(ctx context.Context, cfg config.Config) error {
 		fmt.Fprintln(a.Stdout, i18n.T("cli.k8s.already_off"))
 		return nil
 	}
-	if err := a.k8sManager(m.Distro).Stop(ctx); err != nil {
+	if err := a.k8sManager(cfg, m.Distro).Stop(ctx); err != nil {
 		return fail(ExitError, err)
 	}
 	if err := cfg.SetK8s(m.Distro, false); err != nil {
@@ -159,7 +159,7 @@ func (a *App) k8sStatus(ctx context.Context, cfg config.Config, asJSON bool) err
 		fmt.Fprintln(a.Stdout, i18n.T("cli.k8s.all_off"))
 		return nil
 	}
-	st := a.k8sManager(m.Distro).Status(ctx)
+	st := a.k8sManager(cfg, m.Distro).Status(ctx)
 	if asJSON {
 		return a.writeJSON(st)
 	}
@@ -189,7 +189,7 @@ func (a *App) k8sReset(ctx context.Context, cfg config.Config, yes bool) error {
 	if !yes && !a.confirm(i18n.T("cli.k8s.reset_prompt", m.Distro)) {
 		return fail(ExitError, errors.New(i18n.T("cli.k8s.cancelled")))
 	}
-	mgr := a.k8sManager(m.Distro)
+	mgr := a.k8sManager(cfg, m.Distro)
 	if err := mgr.Reset(ctx); err != nil {
 		return fail(ExitError, err)
 	}
@@ -206,7 +206,7 @@ func (a *App) k8sKubeconfig(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	return a.k8sExport(ctx, a.k8sManager(m.Distro), m.Distro)
+	return a.k8sExport(ctx, a.k8sManager(cfg, m.Distro), m.Distro)
 }
 
 func (a *App) k8sUninstall(ctx context.Context, cfg config.Config, machine string, yes bool) error {
@@ -217,7 +217,7 @@ func (a *App) k8sUninstall(ctx context.Context, cfg config.Config, machine strin
 	if !yes && !a.confirm(i18n.T("cli.k8s.uninstall_prompt", m.Distro)) {
 		return fail(ExitError, errors.New(i18n.T("cli.k8s.cancelled")))
 	}
-	mgr := a.k8sManager(m.Distro)
+	mgr := a.k8sManager(cfg, m.Distro)
 	if err := mgr.Uninstall(ctx); err != nil {
 		return fail(ExitError, err)
 	}
@@ -241,7 +241,7 @@ func (a *App) resumeK8s(ctx context.Context, cfg config.Config) {
 		return
 	}
 	fmt.Fprintln(a.Stdout, i18n.T("cli.k8s.resuming", m.Distro))
-	if err := a.k8sManager(m.Distro).Start(ctx); err != nil {
+	if err := a.k8sManager(cfg, m.Distro).Start(ctx); err != nil {
 		fmt.Fprintln(a.Stderr, i18n.T("cli.k8s.resume_failed", err))
 	}
 }

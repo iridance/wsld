@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,9 +62,47 @@ type Manager struct {
 	Bundle []byte    // scripts.K3sBundle()
 	Output io.Writer // 安裝輸出；nil 則丟棄
 
+	APIPort  int                 // 新安裝 k3s 的 API 埠偏好；0 = DefaultAPIPort。已安裝的 k3s 不會改埠
+	PortBusy func(port int) bool // Windows 端該埠是否已被占用（預設以 127.0.0.1 撥號探測）
+
 	ReadyAttempts int           // 預設 120
 	ReadyInterval time.Duration // 預設 1s
 	Sleep         func(time.Duration)
+}
+
+// apiPort 回傳偏好的 API 埠。
+func (m *Manager) apiPort() int { return APIPort(m.APIPort) }
+
+// APIPort 把設定值正規化：1024–65535 以外（含 0）視為未設定，回 DefaultAPIPort。
+func APIPort(configured int) int {
+	if configured >= 1024 && configured <= 65535 {
+		return configured
+	}
+	return DefaultAPIPort
+}
+
+// pickAPIPort 從偏好埠起找第一個 Windows 端沒人占用的埠（最多往後試 20 個）。
+func (m *Manager) pickAPIPort() int {
+	busy := m.PortBusy
+	if busy == nil {
+		busy = portBusy
+	}
+	base := m.apiPort()
+	for p := base; p < base+20 && p <= 65535; p++ {
+		if !busy(p) {
+			return p
+		}
+	}
+	return base
+}
+
+func portBusy(port int) bool {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 func (m *Manager) sleep(d time.Duration) {
@@ -107,7 +146,7 @@ func (m *Manager) print(s string) {
 
 // Status 盡力收集狀態。distro 未執行時不喚醒它（GUI 會輪詢）。
 func (m *Manager) Status(ctx context.Context) Status {
-	st := Status{Distro: m.Distro, State: StateStopped, Endpoint: APIServer, Context: ContextName(m.Distro)}
+	st := Status{Distro: m.Distro, State: StateStopped, Endpoint: APIServer(m.apiPort()), Context: ContextName(m.Distro)}
 	list, err := wsl.ListDistros(ctx, m.WSL)
 	if err != nil {
 		st.State = StateUnknown
@@ -257,7 +296,7 @@ func (m *Manager) runScript(ctx context.Context, mode string) error {
 
 // Install 安裝 k3s（unit 預設不啟用；冪等）。
 func (m *Manager) Install(ctx context.Context) error {
-	if err := m.runScript(ctx, "install"); err != nil {
+	if err := m.runScript(ctx, "install "+strconv.Itoa(m.pickAPIPort())); err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("k8s.install_failed", m.Distro), err)
 	}
 	return nil

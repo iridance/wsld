@@ -57,6 +57,8 @@ type Config struct {
 	Theme              string    `toml:"theme,omitempty"` // light | dark | system；"" = system
 	// LANAccess：wsld-gui 在內網 IP 上轉發容器 published 埠（Settings › Network）。
 	LANAccess bool `toml:"lan_access,omitempty"`
+	// K8sAPIPort：新安裝 k3s 的 API server 埠（0 = 預設 26443，避開常被占用的 6443）。已安裝的 k3s 不受影響。
+	K8sAPIPort int `toml:"k8s_api_port,omitempty"`
 
 	// 自 active machine 衍生，不寫入檔案（供 lifecycle／doctor 沿用欄位存取）。
 	Distro      string `toml:"-"`
@@ -75,6 +77,7 @@ type fileShape struct {
 	Lang               string    `toml:"lang"`
 	Theme              string    `toml:"theme"`
 	LANAccess          bool      `toml:"lan_access"`
+	K8sAPIPort         int       `toml:"k8s_api_port"`
 	// Legacy flat keys
 	Distro      string `toml:"distro"`
 	User        string `toml:"user"`
@@ -137,6 +140,7 @@ func Load(path string) (Config, error) {
 	c.Lang = raw.Lang
 	c.Theme = raw.Theme
 	c.LANAccess = raw.LANAccess
+	c.K8sAPIPort = raw.K8sAPIPort
 	if raw.RefreshIntervalSec != 0 {
 		c.RefreshIntervalSec = raw.RefreshIntervalSec
 	}
@@ -173,6 +177,7 @@ type saveShape struct {
 	Lang               string    `toml:"lang,omitempty"`
 	Theme              string    `toml:"theme,omitempty"`
 	LANAccess          bool      `toml:"lan_access,omitempty"`
+	K8sAPIPort         int       `toml:"k8s_api_port,omitempty"`
 }
 
 // Save 驗證後寫入新格式（會建立目錄）。
@@ -194,6 +199,7 @@ func Save(path string, c Config) error {
 		Lang:               c.Lang,
 		Theme:              c.Theme,
 		LANAccess:          c.LANAccess,
+		K8sAPIPort:         c.K8sAPIPort,
 	}
 	data, err := toml.Marshal(out)
 	if err != nil {
@@ -402,6 +408,9 @@ func (c Config) validateGlobals() error {
 	}
 	if c.APITimeoutSec <= 0 {
 		return errors.New("api_timeout_sec must be > 0")
+	}
+	if c.K8sAPIPort != 0 && (c.K8sAPIPort < 1024 || c.K8sAPIPort > 65535) {
+		return fmt.Errorf("k8s_api_port must be between 1024 and 65535, got %d", c.K8sAPIPort)
 	}
 	switch c.ThemeOrDefault() {
 	case "light", "dark", "system":

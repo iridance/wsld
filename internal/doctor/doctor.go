@@ -436,7 +436,8 @@ func (c *checker) checkK8s(ctx context.Context) {
 	if !ok {
 		return
 	}
-	mgr := &k8s.Manager{WSL: c.d.WSL, Distro: m.Distro}
+	mgr := &k8s.Manager{WSL: c.d.WSL, Distro: m.Distro, APIPort: c.d.Cfg.K8sAPIPort}
+	apiAddr := fmt.Sprintf("127.0.0.1:%d", k8s.APIPort(c.d.Cfg.K8sAPIPort))
 	st := mgr.Status(ctx)
 	title := i18n.T("doctor.k8s.title")
 	switch st.State {
@@ -486,12 +487,12 @@ func (c *checker) checkK8s(ctx context.Context) {
 		}
 	}
 
-	// 埠：6443 被別人佔用（k3s 未就緒時）會讓 k3s 起不來；80／443 會與 LoadBalancer Service 衝突
+	// 埠：API 埠（預設 26443）被別人佔用（k3s 未就緒時）會讓 k3s 起不來；80／443 會與 LoadBalancer Service 衝突
 	dial := c.dial()
 	var busy []string
-	if !st.Ready && dial(ctx, "127.0.0.1:6443") == nil {
+	if !st.Ready && dial(ctx, apiAddr) == nil {
 		c.add(Result{ID: "k8s_ports", Title: i18n.T("doctor.k8s_ports.title"), Level: Warn,
-			Detail: i18n.T("doctor.k8s_ports.api_busy"), Hint: i18n.T("doctor.k8s_ports.api_busy_hint")})
+			Detail: i18n.T("doctor.k8s_ports.api_busy", apiAddr), Hint: i18n.T("doctor.k8s_ports.api_busy_hint")})
 		return
 	}
 	for _, p := range []string{"80", "443"} {

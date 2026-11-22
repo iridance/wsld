@@ -6,14 +6,23 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
 
-// APIServer 是匯出 kubeconfig 的 server 位址：Windows 端經 WSL localhost 轉發連到 k3s。
-const APIServer = "https://127.0.0.1:6443"
+// DefaultAPIPort 是新安裝 k3s 的 API server 埠。刻意避開 6443（Docker Desktop／minikube／kind
+// 等常用的預設埠），與 docker 的 23750 一樣走「非預設埠」。
+const DefaultAPIPort = 26443
+
+// legacyAPIPort 是 k3s 自己的預設埠：舊安裝（沒帶 --https-listen-port）仍在這個埠。
+const legacyAPIPort = 6443
+
+// APIServer 回傳匯出 kubeconfig 的 server 位址：Windows 端經 WSL localhost 轉發連到 k3s。
+func APIServer(port int) string { return fmt.Sprintf("https://127.0.0.1:%d", port) }
 
 // ContextName 回傳此 distro 在合併後 kubeconfig 中的 context／cluster／user 名稱。
 func ContextName(distro string) string { return "wsld-" + distro }
@@ -21,7 +30,7 @@ func ContextName(distro string) string { return "wsld-" + distro }
 // MergeKubeconfig 把 k3s 產生的 kubeconfig（k3sYAML）以 wsld-<distro> 名稱合併進 existing：
 //   - 保留 existing 的其他 cluster／context／user、註解與 current-context（existing 沒有時才採用本 context）
 //   - 同名項目（重複匯出）取代為新內容，不重複
-//   - server 一律改為 127.0.0.1:6443
+//   - server 的 host 一律改為 127.0.0.1，埠沿用 k3s.yaml 裡的實際值（新安裝為自訂埠，舊安裝為 6443）
 //
 // existing 為空表示尚無檔案；existing 無法解析時回錯誤，呼叫端不應覆寫使用者的檔案。
 func MergeKubeconfig(existing, k3sYAML []byte, distro string) ([]byte, error) {
@@ -38,7 +47,7 @@ func MergeKubeconfig(existing, k3sYAML []byte, distro string) ([]byte, error) {
 	}
 	setEntryName(cluster, name)
 	setEntryName(user, name)
-	setClusterServer(cluster, APIServer)
+	setClusterServer(cluster, APIServer(serverPort(cluster)))
 	ctx := contextEntry(name)
 
 	var root *yaml.Node
@@ -123,6 +132,27 @@ func setClusterServer(entry *yaml.Node, server string) {
 	if c := mapValue(entry, "cluster"); c != nil && c.Kind == yaml.MappingNode {
 		setMapScalar(c, "server", server)
 	}
+}
+
+// serverPort 讀出 cluster 的 server 埠；讀不到或不合法時回 k3s 預設埠。
+func serverPort(entry *yaml.Node) int {
+	c := mapValue(entry, "cluster")
+	if c == nil {
+		return legacyAPIPort
+	}
+	v := mapValue(c, "server")
+	if v == nil {
+		return legacyAPIPort
+	}
+	u, err := url.Parse(v.Value)
+	if err != nil {
+		return legacyAPIPort
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil || p < 1 || p > 65535 {
+		return legacyAPIPort
+	}
+	return p
 }
 
 func contextEntry(name string) *yaml.Node {

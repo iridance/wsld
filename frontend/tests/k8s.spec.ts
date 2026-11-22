@@ -57,7 +57,7 @@ test("one-click start shows progress, then Ready with cluster info", async ({ pa
   await expect(page.getByTestId("k8s-f-machine")).toHaveText("Ubuntu-26.04");
   await expect(page.getByTestId("k8s-f-version")).toHaveText("v1.37.2+k3s1");
   await expect(page.getByTestId("k8s-f-node")).toContainText("framework");
-  await expect(page.getByTestId("k8s-f-api")).toHaveText("https://127.0.0.1:6443");
+  await expect(page.getByTestId("k8s-f-api")).toHaveText("https://127.0.0.1:26443");
   await expect(page.getByTestId("k8s-f-context")).toHaveText("wsld-Ubuntu-26.04");
   // 資訊卡不顯示 kubeconfig 路徑
   await expect(page.getByTestId("k8s-f-kubeconfig")).toHaveCount(0);

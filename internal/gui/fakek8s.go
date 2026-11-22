@@ -158,7 +158,7 @@ func (f *FakeK8s) sleep() {
 func (f *FakeK8s) Status(context.Context) k8s.Status {
 	f.c.mu.Lock()
 	defer f.c.mu.Unlock()
-	st := k8s.Status{Distro: f.distro, State: k8s.StateNotInstalled, Endpoint: k8s.APIServer, Context: k8s.ContextName(f.distro)}
+	st := k8s.Status{Distro: f.distro, State: k8s.StateNotInstalled, Endpoint: k8s.APIServer(k8s.DefaultAPIPort), Context: k8s.ContextName(f.distro)}
 	if !f.c.installed[f.distro] {
 		return st
 	}
@@ -237,7 +237,7 @@ func (f *FakeK8s) Kubeconfig(context.Context) ([]byte, error) {
 clusters:
 - cluster:
     certificate-authority-data: Q0E=
-    server: https://127.0.0.1:6443
+    server: https://127.0.0.1:26443
   name: default
 contexts:
 - context:

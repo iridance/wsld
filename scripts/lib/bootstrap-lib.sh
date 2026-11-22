@@ -349,9 +349,14 @@ wsld_ensure_wsl_conf_systemd() {
 # kubeconfig 對一般使用者可讀（WSL 內免 sudo 即可 kubectl）。
 # 可帶一個 node 名稱參數：node 以 WSL machine（distro）命名，而不是 k3s 預設的 hostname
 # （WSL2 的 hostname 預設沿用 Windows 電腦名稱，每台 machine 都一樣，無法分辨）。
+# 第二個參數為 API server 埠：避開 6443（Docker Desktop／minikube／kind 都用它）；
+# 只接受 1024–65535 的整數，其餘忽略（沿用 k3s 預設 6443）。
 wsld_k3s_install_exec() {
-  local node="${1:-}" exec_args='--docker --disable traefik --write-kubeconfig-mode 644'
+  local node="${1:-}" port="${2:-}" exec_args='--docker --disable traefik --write-kubeconfig-mode 644'
   if [ -n "$node" ]; then exec_args="$exec_args --node-name $node"; fi
+  if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ]; then
+    exec_args="$exec_args --https-listen-port $port"
+  fi
   printf '%s\n' "$exec_args"
 }
 

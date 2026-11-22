@@ -93,13 +93,13 @@ wsld k8s status      # 或 wsld k8s status --json
 
 GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看叢集資訊、Pods／Deployments／Services，並對 Pod 看 logs／開終端／刪除，對 Deployment 調整副本數或 rollout restart。
 
-- **只有一台 machine 能開**：所有 WSL2 distro 共用同一個網路（6443、pod／service 網段、node 名稱＝Windows 主機名）。第二台 `wsld k8s on` 會被拒絕並指出目前開啟者；GUI 的「移到 …」會先停掉原本那台再啟動新的（兩邊是各自獨立的叢集，工作負載不會搬移）。
+- **只有一台 machine 能開**：所有 WSL2 distro 共用同一個網路（API 埠、pod／service 網段、node 名稱＝Windows 主機名）。第二台 `wsld k8s on` 會被拒絕並指出目前開啟者；GUI 的「移到 …」會先停掉原本那台再啟動新的（兩邊是各自獨立的叢集，工作負載不會搬移）。
 - **kubeconfig 以機器內為準，匯出到 Windows 是手動的**：`/etc/rancher/k3s/k3s.yaml` 是正本，啟動 k8s 不會寫 Windows 的檔案（與 docker 一樣，只轉出 loopback 埠）。要在 Windows 使用時按 GUI 的「匯出 kubeconfig」或執行 `wsld k8s kubeconfig`：以 context `wsld-<distro>` 合併進現有檔案，保留其他 context、註解與 current-context（原本沒有 current-context 才採用 wsld 的）。第一次修改前會備份為 `~\.kube\config.wsld-bak`；現有檔案無法解析時一律不動。
 - **重開機／`wsl --shutdown` 之後**：`wsld start`（或 GUI 啟動引擎）會一併啟動 k3s。k3s 必須在 docker 之後啟動（wsld 已在 `k3s.service` 加 drop-in）；若手動改過 unit，開機後 node 一直 NotReady 通常就是這個原因，`systemctl restart k3s` 可恢復。
-- **node IP**：實測 WSL 重啟後 eth0 位址未變；若日後變了，`wsld doctor` 與 `wsld k8s status` 會警告，執行 `wsld k8s off && wsld k8s on` 即可。Windows 側一律連 `127.0.0.1:6443`，不受影響。
-- **停止**：`wsld k8s off` 會跑 `k3s-killall.sh`，連同 pod 容器一起停掉並釋放記憶體與 6443（`--docker` 時 pod 是 dockerd 的容器，單停 service 不會停它們）。Containers 頁把這些 `k8s_*` 容器摺成一個預設收合的群組；請交給 k3s 管理，不要手動刪。
+- **node IP**：實測 WSL 重啟後 eth0 位址未變；若日後變了，`wsld doctor` 與 `wsld k8s status` 會警告，執行 `wsld k8s off && wsld k8s on` 即可。Windows 側一律連 `127.0.0.1:<API 埠>`，不受影響。
+- **停止**：`wsld k8s off` 會跑 `k3s-killall.sh`，連同 pod 容器一起停掉並釋放記憶體與 API 埠（`--docker` 時 pod 是 dockerd 的容器，單停 service 不會停它們）。Containers 頁把這些 `k8s_*` 容器摺成一個預設收合的群組；請交給 k3s 管理，不要手動刪。
 - **重置**：`wsld k8s reset`（需確認或 `--yes`）清除所有 pod／volume／secret，回到乾淨叢集；若先前匯出過 kubeconfig，會一併更新 Windows 那份（憑證已更新），從未匯出過則不動。**移除**：`wsld k8s uninstall`（執行 `k3s-uninstall.sh`）。
-- **與 Docker Desktop 的 Kubernetes 並存**：Docker Desktop 的 k8s 同樣使用 6443；兩者不要同時開（`wsld doctor` 會提示 6443 被占用）。
+- **與 Docker Desktop 的 Kubernetes 並存**：Docker Desktop 的 k8s 預設用 6443；wsld 新安裝的 k3s 改用 26443（`config.toml` 的 `k8s_api_port` 可改，裝時若被占用會自動往後找），因此通常不衝突。舊版安裝的 k3s 仍在 6443，需 `wsld k8s uninstall` 後重裝才會換埠。
 - **埠**：Traefik 已停用，不會搶 80／443。NodePort 服務可在 Windows 以 `http://localhost:<nodePort>` 開啟（Services 分頁的地球鈕）；不轉發到區網。
 - 疑難：`wsl -d <distro> -u root -- journalctl -u k3s -n 50`；`wsld doctor` 會檢查 k3s 就緒、記憶體、node IP 與埠。
 

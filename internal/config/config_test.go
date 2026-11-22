@@ -544,3 +544,20 @@ func TestEnsureActivePreservesK8sFlag(t *testing.T) {
 		t.Fatal("EnsureActive (used by Init) dropped the k8s flag")
 	}
 }
+
+func TestK8sAPIPortRoundTripAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.K8sAPIPort = 30443
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.K8sAPIPort != 30443 {
+		t.Fatalf("load = %d, %v", got.K8sAPIPort, err)
+	}
+	c.K8sAPIPort = 80
+	if err := c.Validate(); err == nil {
+		t.Fatal("port 80 should be rejected")
+	}
+}

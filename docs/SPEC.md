@@ -168,12 +168,12 @@ wsld/
 
 ### 4.6 本機 Kubernetes（k3s）
 
-- 目標：每台 machine 可**選擇開啟**單節點 k3s（預設關），與該 distro 的 dockerd 共用映像檔——`docker build` 完 `imagePullPolicy: Never` 即可部署，不必架 registry；Windows 側 `kubectl` 經 `127.0.0.1:6443` 連線。
+- 目標：每台 machine 可**選擇開啟**單節點 k3s（預設關），與該 distro 的 dockerd 共用映像檔——`docker build` 完 `imagePullPolicy: Never` 即可部署，不必架 registry；Windows 側 `kubectl` 經 `127.0.0.1:26443` 連線（新安裝預設 26443，可由 config `k8s_api_port` 改；避開常被其他 Kubernetes 占用的 6443）。
 - 做法：
   - 安裝：`03-k3s.sh install`（內嵌 `scripts.K3sBundle()`）以 `--docker --disable traefik --write-kubeconfig-mode 644` 裝 k3s（k3s 內建 cri-dockerd，node 的 runtime 為 `docker://…`）。k3s.service 加 drop-in `After=docker.service`／`Requires=docker.service`：開機時 k3s 若早於 dockerd，agent 不會啟動 kubelet（node 永遠 NotReady）。unit 預設 disable，啟停由 wsld 管（`systemctl start k3s`）。
-  - 單一叢集：所有 WSL2 distro 共用同一個 VM 網路命名空間（6443、flannel CIDR、kube-proxy 規則、node 名稱＝Windows 主機名），所以 config 中**同一時間只能有一台 machine `k8s = true`**；第二台被拒絕並指出目前開啟者（GUI 可一鍵移動）。
+  - 單一叢集：所有 WSL2 distro 共用同一個 VM 網路命名空間（API 埠、flannel CIDR、kube-proxy 規則、node 名稱＝Windows 主機名），所以 config 中**同一時間只能有一台 machine `k8s = true`**；第二台被拒絕並指出目前開啟者（GUI 可一鍵移動）。
   - 停止：`k3s-killall.sh`（`--docker` 時 pod 容器不會隨 service 停止）。重置：停止後清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 再啟動。移除：`k3s-uninstall.sh`。
-  - kubeconfig：機器內 k3s.yaml 為正本；啟動不自動匯出，使用者手動匯出時才把它以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔）；server 固定 `https://127.0.0.1:6443`（憑證 SAN 含 127.0.0.1）。
+  - kubeconfig：機器內 k3s.yaml 為正本；啟動不自動匯出，使用者手動匯出時才把它以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔）；server 為 `https://127.0.0.1:<port>`，埠取自 k3s.yaml 的實際值（新安裝 26443；已安裝的舊 k3s 仍為 6443，需重建才會換；憑證 SAN 含 127.0.0.1）。
   - 資源管理經 `wsl.exe … k3s kubectl …`（root）；不引入 client-go。使用者輸入進引數前驗證為 DNS 標籤，避免被當成旗標。
   - 重開機：`wsld start`／GUI 啟動引擎時，若 primary 為 `k8s = true` 則一併啟動 k3s。實測 `wsl --shutdown` 後 node IP 未變、k3s 自動恢復；k3s 每次啟動重新偵測 node IP，Windows 側一律走 127.0.0.1，故不預先綁固定位址，改由 doctor 偵測 node IP 與目前 eth0 不一致。
 - 資源：單節點待機約 0.6 GB（k3s）＋dockerd；doctor 於可用記憶體不足時警告。
@@ -273,7 +273,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 - Docker Desktop 是否在跑（建議勿雙引擎混用）
 - API 埠占用／config 中的 endpoint 說明
 - 提醒：repo 應放在 WSL `$HOME`，非 `C:\`
-- k3s（僅有 machine `k8s = true` 時）：就緒／未就緒／失敗、node IP 漂移、記憶體、6443 被占用、80／443 提示；一律只警告，不影響退出碼
+- k3s（僅有 machine `k8s = true` 時）：就緒／未就緒／失敗、node IP 漂移、記憶體、API 埠被占用、80／443 提示；一律只警告，不影響退出碼
 - 區網存取：開啟時列出（Info）；偵測到 0.9.0 遺留的 mirrored 模式時 Warn（提示 `wsld lan restore-nat`）；不影響退出碼
 
 ### 5.7 測試

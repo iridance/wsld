@@ -414,6 +414,15 @@ SCRIPT
   [[ "$output" == *"--write-kubeconfig-mode 644"* ]]
 }
 
+@test "k3s_install_exec adds --https-listen-port only for a valid port" {
+  run wsld_k3s_install_exec debian 26443
+  [[ "$output" == *"--https-listen-port 26443"* ]]
+  for bad in "" abc 80 70000 "26443;rm"; do
+    run wsld_k3s_install_exec debian "$bad"
+    [[ "$output" != *"https-listen-port"* ]]
+  done
+}
+
 @test "k3s_install_exec adds --node-name only when given one" {
   run wsld_k3s_install_exec debian
   [ "$status" -eq 0 ]

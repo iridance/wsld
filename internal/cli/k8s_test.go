@@ -160,7 +160,7 @@ func TestK8sStatusTextAndJSON(t *testing.T) {
 	if code := h.run("k8s", "status"); code != ExitOK {
 		t.Fatalf("code %d %s", code, h.errb)
 	}
-	for _, want := range []string{"ready", "v1.37.2+k3s1", "framework", "https://127.0.0.1:6443"} {
+	for _, want := range []string{"ready", "v1.37.2+k3s1", "framework", "https://127.0.0.1:26443"} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Fatalf("status missing %q:\n%s", want, h.out)
 		}

@@ -133,7 +133,11 @@ func main() {
 		NewLifecycle:    func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:    gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
 		K8sFor: func(distro string) gui.K8s {
-			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle()}
+			port := 0
+			if c, err := config.Load(cfgPath); err == nil {
+				port = c.K8sAPIPort
+			}
+			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle(), APIPort: port}
 		},
 		K8sStream: gui.HostCommandStream{},
 		LAN:       &lan.Manager{Host: lan.NewHost(), Exe: exe},

@@ -264,7 +264,7 @@ func TestK8sResetRestoresCleanClusterAndRequiresEnabled(t *testing.T) {
 	if resp, b := k.req(t, "POST", "/api/k8s/kubeconfig", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("export = %d %s", resp.StatusCode, b)
 	}
-	if err := os.WriteFile(k.kube, []byte(strings.Replace(mustRead(t, k.kube), k8s.APIServer, "https://stale.invalid:1", 1)), 0o600); err != nil {
+	if err := os.WriteFile(k.kube, []byte(strings.Replace(mustRead(t, k.kube), k8s.APIServer(k8s.DefaultAPIPort), "https://stale.invalid:1", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	k.req(t, "POST", "/api/k8s/reset", "")

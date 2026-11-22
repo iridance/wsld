@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # wsld：在 WSL2 distro 內安裝／移除單節點 k3s（--docker，與該 distro 的 dockerd 共用映像檔）。
 #
-# 用法：03-k3s.sh install | uninstall
+# 用法：03-k3s.sh install [api-port] | uninstall
+# api-port 只在全新安裝時生效（已安裝的 k3s 維持原埠，需重建才會換）。
 # 需以 root 執行（wsld 以 `wsl -d <distro> -u root -- bash -s` 餵入）。冪等。
 # install 不啟動也不開機自啟 k3s；啟停由 `wsld k8s on|off` 管理（systemctl）。
 
@@ -25,7 +26,7 @@ install_k3s() {
     log "k3s 已安裝"
   else
     command -v curl >/dev/null 2>&1 || die "需要 curl" 3
-    install_exec="$(wsld_k3s_install_exec "$(wsld_k3s_node_name)")"
+    install_exec="$(wsld_k3s_install_exec "$(wsld_k3s_node_name)" "${2:-}")"
     log "下載並安裝 k3s（$install_exec）"
     # 先下載再執行：不可寫成 `curl … | sh - </dev/null`（</dev/null 會蓋掉管線，sh 讀到空腳本、curl 以 23 結束）
     tmp="$(mktemp)"
