@@ -239,14 +239,22 @@ export interface K8sDeployRequest {
   image: string;
   name: string;
   namespace?: string;
+  /** 容器埠；expose 不是 none 時必填 */
   port?: number;
+  expose?: "none" | "nodeport" | "loadbalancer";
+  /** expose = loadbalancer 時想用的 localhost 埠（預設同容器埠） */
+  host_port?: number;
   replicas?: number;
 }
 
 export interface K8sDeployResult {
   namespace: string;
   name: string;
+  expose: "none" | "nodeport" | "loadbalancer";
   node_port?: number;
+  /** loadbalancer 實際使用的 localhost 埠；被占用而順延時 port_changed = true */
+  host_port?: number;
+  port_changed?: boolean;
 }
 
 export interface K8sInfo {

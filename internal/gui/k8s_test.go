@@ -699,3 +699,37 @@ func TestK8sApply(t *testing.T) {
 		t.Fatalf("oversized = %d", resp.StatusCode)
 	}
 }
+
+func TestK8sDeployExposeModes(t *testing.T) {
+	k := newK8sEnv(t)
+	k.enable(t)
+	deploy := func(body string) k8s.DeployResult {
+		t.Helper()
+		resp, b := k.req(t, "POST", "/api/k8s/deploy", body)
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s → %d %s", body, resp.StatusCode, b)
+		}
+		var r k8s.DeployResult
+		_ = json.Unmarshal(b, &r)
+		return r
+	}
+	a := deploy(`{"image":"a:1","name":"a","port":3000,"expose":"loadbalancer","host_port":8080}`)
+	if a.Expose != "loadbalancer" || a.HostPort != 8080 || a.PortChanged || a.NodePort != 0 {
+		t.Fatalf("a = %+v", a)
+	}
+	b := deploy(`{"image":"b:1","name":"b","port":3000,"expose":"loadbalancer","host_port":8080}`)
+	if b.HostPort != 8081 || !b.PortChanged {
+		t.Fatalf("second app on the same port should move: %+v", b)
+	}
+	if c := deploy(`{"image":"c:1","name":"c","port":3000,"expose":"nodeport"}`); c.NodePort == 0 || c.HostPort != 0 {
+		t.Fatalf("c = %+v", c)
+	}
+	if n := deploy(`{"image":"n:1","name":"n","expose":"none"}`); n.Expose != "none" || n.NodePort != 0 {
+		t.Fatalf("n = %+v", n)
+	}
+	for _, bad := range []string{`{"image":"a","name":"x","expose":"loadbalancer"}`, `{"image":"a","name":"x","expose":"bogus","port":80}`} {
+		if resp, _ := k.req(t, "POST", "/api/k8s/deploy", bad); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s should be 400, got %d", bad, resp.StatusCode)
+		}
+	}
+}

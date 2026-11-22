@@ -546,9 +546,24 @@ func (f *FakeK8s) Deploy(_ context.Context, spec k8s.DeploySpec) (k8s.DeployResu
 	for i := 0; i < s.Replicas; i++ {
 		f.c.pods = append(f.c.pods, k8s.Pod{Name: s.Name + "-5d8f7c9b6d-" + randSuffix(len(f.c.pods)+i+100), Namespace: s.Namespace, Status: "Running", Ready: "1/1", Node: "framework", IP: fmt.Sprintf("10.42.0.%d", 100+len(f.c.pods)), Labels: sel, CreatedAt: now})
 	}
-	if s.Port > 0 {
+	res.Expose = s.Expose
+	switch s.Expose {
+	case k8s.ExposeNodePort:
 		res.NodePort = 30100 + len(f.c.services)
 		f.c.services = append(f.c.services, k8s.Service{Name: s.Name, Namespace: s.Namespace, Type: "NodePort", ClusterIP: fmt.Sprintf("10.43.1.%d", len(f.c.services)+10), Ports: []k8s.ServicePort{{Port: s.Port, NodePort: res.NodePort, Protocol: "TCP"}}, Selector: sel, CreatedAt: now})
+	case k8s.ExposeLoadBalancer:
+		// 與真實實作相同：其他 LoadBalancer 已用的埠順延到下一個
+		port := s.HostPort
+		for taken := true; taken; {
+			taken = false
+			for _, sv := range f.c.services {
+				if sv.Type == "LoadBalancer" && len(sv.Ports) > 0 && sv.Ports[0].Port == port {
+					port, taken = port+1, true
+				}
+			}
+		}
+		res.HostPort, res.PortChanged = port, port != s.HostPort
+		f.c.services = append(f.c.services, k8s.Service{Name: s.Name, Namespace: s.Namespace, Type: "LoadBalancer", ClusterIP: fmt.Sprintf("10.43.1.%d", len(f.c.services)+10), Ports: []k8s.ServicePort{{Port: port, Protocol: "TCP"}}, Selector: sel, CreatedAt: now})
 	}
 	return res, nil
 }

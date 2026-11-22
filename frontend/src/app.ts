@@ -3177,6 +3177,30 @@ export class App {
     const port = mk("deploy-port", { inputmode: "numeric", placeholder: "8080" });
     const replicas = mk("deploy-replicas", { inputmode: "numeric" });
     replicas.value = "1";
+    const hostPort = mk("deploy-hostport", { inputmode: "numeric", placeholder: t("gui.k8s.deploy.same_as_container") });
+    type Expose = "loadbalancer" | "nodeport" | "none";
+    const exposeRadios = {} as Record<Expose, HTMLInputElement>;
+    const exposeGroup = el("div", { class: "expose-group", role: "radiogroup", "aria-label": t("gui.k8s.deploy.expose"), "data-testid": "deploy-expose" });
+    const exposeOpts: [Expose, string, string][] = [
+      ["loadbalancer", "gui.k8s.deploy.expose_lb", "gui.k8s.deploy.expose_lb_d"],
+      ["nodeport", "gui.k8s.deploy.expose_np", "gui.k8s.deploy.expose_np_d"],
+      ["none", "gui.k8s.deploy.expose_none", "gui.k8s.deploy.expose_none_d"],
+    ];
+    for (const [v, label, hint] of exposeOpts) {
+      const radio = el("input", { type: "radio", name: "deploy-expose", value: v, id: `deploy-expose-${v}`, "data-testid": `deploy-expose-${v}` }) as HTMLInputElement;
+      radio.checked = v === "loadbalancer";
+      exposeRadios[v] = radio;
+      exposeGroup.append(el("label", { class: "expose-opt", for: radio.id }, radio, el("span", {}, el("b", { text: t(label) }), el("small", { text: t(hint) }))));
+    }
+    const hostField = el("label", { class: "field", "data-testid": "deploy-hostport-field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.host_port") }), textField(hostPort));
+    const exposeMode = (): Expose => (Object.keys(exposeRadios) as Expose[]).find((k) => exposeRadios[k].checked) ?? "loadbalancer";
+    const syncExpose = () => {
+      hostField.hidden = exposeMode() !== "loadbalancer";
+    };
+    for (const r of Object.values(exposeRadios)) r.onchange = () => {
+      syncExpose();
+      err.hidden = true;
+    };
     const err = el("div", { class: "field-error", "data-testid": "deploy-error", hidden: "" });
     const submit = btn({ class: "primary", type: "submit", "data-testid": "deploy-submit" }, "play", t("gui.k8s.deploy.submit"));
     const cancel = btn({ type: "button", "data-testid": "deploy-cancel" }, "close", t("gui.cancel"));
@@ -3197,6 +3221,9 @@ export class App {
       if (!NAME_RE.test(name.value.trim()) || name.value.trim().length > 63) return t("gui.k8s.deploy.err_name");
       const p = port.value.trim();
       if (p !== "" && !(/^\d+$/.test(p) && +p >= 1 && +p <= 65535)) return t("gui.k8s.deploy.err_port");
+      if (exposeMode() !== "none" && p === "") return t("gui.k8s.deploy.err_port_req");
+      const h = hostPort.value.trim();
+      if (exposeMode() === "loadbalancer" && h !== "" && !(/^\d+$/.test(h) && +h >= 1 && +h <= 65535)) return t("gui.k8s.deploy.err_port");
       if (!/^\d+$/.test(replicas.value.trim()) || +replicas.value < 1 || +replicas.value > 100) return t("gui.k8s.deploy.err_replicas");
       return "";
     };
@@ -3208,6 +3235,8 @@ export class App {
         el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.port") }), textField(port)),
         el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.replicas") }), textField(replicas)),
       ),
+      el("div", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.expose") }), exposeGroup),
+      hostField,
       el("p", { class: "field-hint", text: t("gui.k8s.deploy.hint") }),
       err,
       el("div", { class: "row" }, cancel, submit),
@@ -3224,9 +3253,25 @@ export class App {
       submit.disabled = true;
       submit.querySelector(".label")!.textContent = t("gui.k8s.deploy.deploying");
       try {
-        const res = await api.k8sDeploy({ image: image.value.trim(), name: name.value.trim(), port: port.value.trim() ? +port.value : undefined, replicas: +replicas.value });
+        const mode = exposeMode();
+        const res = await api.k8sDeploy({
+          image: image.value.trim(),
+          name: name.value.trim(),
+          port: port.value.trim() ? +port.value : undefined,
+          expose: mode,
+          host_port: mode === "loadbalancer" && hostPort.value.trim() ? +hostPort.value : undefined,
+          replicas: +replicas.value,
+        });
         d.close();
-        this.notify(res.node_port ? fmt(t("gui.k8s.deploy.done_url"), res.name, String(res.node_port)) : fmt(t("gui.k8s.deploy.done"), res.name), { sticky: true });
+        let msg = fmt(t("gui.k8s.deploy.done"), res.name);
+        if (res.expose === "loadbalancer" && res.host_port) {
+          msg = res.port_changed
+            ? fmt(t("gui.k8s.deploy.done_moved"), res.name, String(res.host_port), hostPort.value.trim() || port.value.trim())
+            : fmt(t("gui.k8s.deploy.done_url"), res.name, String(res.host_port));
+        } else if (res.node_port) {
+          msg = fmt(t("gui.k8s.deploy.done_url"), res.name, String(res.node_port));
+        }
+        this.notify(msg, { sticky: true });
         await this.refresh();
       } catch (e) {
         err.textContent = e instanceof ApiError ? e.message : String(e);
@@ -3238,7 +3283,11 @@ export class App {
     };
     d.addEventListener("close", () => {
       nameEdited = false;
+      exposeRadios.loadbalancer.checked = true;
+      hostPort.value = "";
+      syncExpose();
     });
+    syncExpose();
     d.append(el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.deploy.dialog") })), form);
     return d;
   }

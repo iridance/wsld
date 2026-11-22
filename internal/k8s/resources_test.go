@@ -449,3 +449,83 @@ func TestStartReportsStepsInOrder(t *testing.T) {
 		t.Fatalf("steps = %v", steps)
 	}
 }
+
+func TestDeploySpecNormalizeExpose(t *testing.T) {
+	// 向下相容：有 port 無 expose → nodeport；無 port → none
+	s, err := DeploySpec{Image: "x", Name: "a", Port: 80}.Normalize()
+	if err != nil || s.Expose != ExposeNodePort {
+		t.Fatalf("legacy port should mean nodeport: %+v %v", s, err)
+	}
+	s, _ = DeploySpec{Image: "x", Name: "a"}.Normalize()
+	if s.Expose != ExposeNone {
+		t.Fatalf("no port should mean none: %+v", s)
+	}
+	// loadbalancer：host_port 預設等於容器埠
+	s, err = DeploySpec{Image: "x", Name: "a", Port: 3000, Expose: ExposeLoadBalancer}.Normalize()
+	if err != nil || s.HostPort != 3000 {
+		t.Fatalf("host port default: %+v %v", s, err)
+	}
+	for _, bad := range []DeploySpec{
+		{Image: "x", Name: "a", Expose: "bogus", Port: 80},
+		{Image: "x", Name: "a", Expose: ExposeLoadBalancer}, // 缺容器埠
+		{Image: "x", Name: "a", Expose: ExposeNodePort},     // 缺容器埠
+		{Image: "x", Name: "a", Expose: ExposeLoadBalancer, Port: 80, HostPort: 70000},
+	} {
+		if _, err := bad.Normalize(); err == nil {
+			t.Errorf("expected rejection for %+v", bad)
+		}
+	}
+}
+
+const lbSvcs = `{"items":[
+ {"metadata":{"name":"web","namespace":"default"},"spec":{"type":"LoadBalancer","ports":[{"port":8080,"protocol":"TCP"}]}},
+ {"metadata":{"name":"kube-dns","namespace":"kube-system"},"spec":{"type":"ClusterIP","ports":[{"port":53,"protocol":"UDP"}]}}]}`
+
+func TestDeployLoadBalancerUsesHostPortAndSkipsTakenPorts(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get services -A -o json", resp{out: lbSvcs})
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	m := newMgr(f)
+	m.PortBusy = func(p int) bool { return p == 8081 } // Windows 端 8081 被占用
+	res, err := m.Deploy(context.Background(), DeploySpec{Image: "api:1", Name: "api", Port: 3000, Expose: ExposeLoadBalancer, HostPort: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 8080 被另一個 LoadBalancer 用掉、8081 被 Windows 占用 → 8082
+	if res.HostPort != 8082 || !res.PortChanged || res.Expose != ExposeLoadBalancer || res.NodePort != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	mf := f.stdin[d+" k3s kubectl apply -f -"]
+	for _, want := range []string{`"type":"LoadBalancer"`, `"port":8082`, `"targetPort":3000`, `"containerPort":3000`} {
+		if !strings.Contains(mf, want) {
+			t.Errorf("manifest missing %s: %s", want, mf)
+		}
+	}
+}
+
+func TestDeployLoadBalancerKeepsItsOwnPortOnRedeploy(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get services -A -o json", resp{out: lbSvcs})
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	m := newMgr(f)
+	m.PortBusy = func(p int) bool { return p == 8080 } // 8080 正是 web 自己在聽
+	res, err := m.Deploy(context.Background(), DeploySpec{Image: "web:2", Name: "web", Port: 80, Expose: ExposeLoadBalancer, HostPort: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.HostPort != 8080 || res.PortChanged {
+		t.Fatalf("own port should stay: %+v", res)
+	}
+}
+
+func TestDeployLoadBalancerWithoutConflictKeepsRequestedPort(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get services -A -o json", resp{err: errors.New("exit 1")}) // 列不出來仍可部署
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	m := newMgr(f)
+	m.PortBusy = func(int) bool { return false }
+	res, err := m.Deploy(context.Background(), DeploySpec{Image: "api:1", Name: "api", Port: 3000, Expose: ExposeLoadBalancer, HostPort: 9000})
+	if err != nil || res.HostPort != 9000 || res.PortChanged {
+		t.Fatalf("result = %+v, err %v", res, err)
+	}
+}

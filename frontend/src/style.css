@@ -899,3 +899,11 @@ button.arch-node:hover:not(:disabled) { border-color: var(--accent); }
 .skel-stack { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; padding-top: 6px; }
 .machine-card > .skel { margin-top: 2px; }
 table[data-testid="skeleton"] tbody td { height: 44px; }
+
+/* Deploy 對話框：對外方式 */
+.expose-group { display: flex; flex-direction: column; gap: 6px; }
+.expose-opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.expose-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.expose-opt input { margin-top: 3px; }
+.expose-opt span { display: flex; flex-direction: column; gap: 2px; }
+.expose-opt small { color: var(--muted); font-size: 12px; line-height: 1.4; }

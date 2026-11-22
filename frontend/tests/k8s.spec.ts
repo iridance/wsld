@@ -643,6 +643,44 @@ test("Ready with no user workloads invites a first deploy; Deploy creates it and
   await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-node-pods")).toHaveText("2/2");
 });
 
+test("Deploy dialog: fixed localhost port is the default; a taken port moves to the next one and says so", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  const dlg = page.getByTestId("deploy-dialog");
+  const deploy = async (image: string, port: string, host: string) => {
+    await page.getByTestId("btn-k8s-deploy").click();
+    await expect(dlg.getByTestId("deploy-expose-loadbalancer")).toBeChecked();
+    await expect(dlg.getByTestId("deploy-hostport-field")).toBeVisible();
+    await dlg.getByTestId("deploy-image").fill(image);
+    await dlg.getByTestId("deploy-port").fill(port);
+    await dlg.getByTestId("deploy-hostport").fill(host);
+    await dlg.getByTestId("deploy-submit").click();
+    await expect(dlg).toBeHidden();
+  };
+  await deploy("shop:1", "3000", "8080");
+  await expect(page.getByTestId("notice")).toContainText("shop deployed — http://localhost:8080");
+  await deploy("blog:1", "3000", "8080");
+  await expect(page.getByTestId("notice")).toContainText("http://localhost:8081");
+  await expect(page.getByTestId("notice")).toContainText("port 8080 was in use");
+});
+
+test("Deploy dialog: expose modes show or hide the localhost port and require a container port", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await page.getByTestId("btn-k8s-deploy").click();
+  const dlg = page.getByTestId("deploy-dialog");
+  await dlg.getByTestId("deploy-image").fill("svc:1");
+  await dlg.getByTestId("deploy-submit").click();
+  await expect(dlg.getByTestId("deploy-error")).toContainText("container port"); // 預設要對外，缺 port
+  await dlg.getByLabel("Random NodePort").check();
+  await expect(dlg.getByTestId("deploy-hostport-field")).toBeHidden();
+  await dlg.getByLabel("Cluster only").check();
+  await dlg.getByTestId("deploy-submit").click(); // 不對外：不需要 port
+  await expect(dlg).toBeHidden();
+  await expect(page.getByTestId("notice")).toContainText("svc deployed");
+  await expect(page.getByTestId("notice")).not.toContainText("localhost");
+});
+
 test("toolbar Deploy and Copy context appear only when Ready", async ({ page }) => {
   await goK8s(page);
   await startCluster(page);
