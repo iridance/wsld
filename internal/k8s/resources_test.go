@@ -529,3 +529,57 @@ func TestDeployLoadBalancerWithoutConflictKeepsRequestedPort(t *testing.T) {
 		t.Fatalf("result = %+v, err %v", res, err)
 	}
 }
+
+const webDeployment = `{"spec":{"selector":{"matchLabels":{"app":"web","tier":"fe"}},"template":{"spec":{"containers":[{"name":"c","ports":[{"containerPort":3000}]}]}}}}`
+
+func TestExposeBuildsServiceFromDeploymentSelectorAndPort(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get deployment web -n default -o json", resp{out: webDeployment})
+	f.on(d+" k3s kubectl get services -A -o json", resp{out: lbSvcs})
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	m := newMgr(f)
+	m.PortBusy = func(int) bool { return false }
+	res, err := m.Expose(context.Background(), ExposeSpec{Namespace: "default", Name: "web", Expose: ExposeLoadBalancer, HostPort: 9000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.HostPort != 9000 || res.PortChanged || res.Expose != ExposeLoadBalancer {
+		t.Fatalf("result = %+v", res)
+	}
+	mf := f.stdin[d+" k3s kubectl apply -f -"]
+	for _, want := range []string{`"type":"LoadBalancer"`, `"port":9000`, `"targetPort":3000`, `"app":"web"`, `"tier":"fe"`, `"name":"web"`} {
+		if !strings.Contains(mf, want) {
+			t.Errorf("manifest missing %s: %s", want, mf)
+		}
+	}
+}
+
+func TestExposeKeepsItsOwnPortAndRejectsBadInput(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get deployment web -n default -o json", resp{out: webDeployment})
+	f.on(d+" k3s kubectl get services -A -o json", resp{out: lbSvcs}) // web 自己已在 8080
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	m := newMgr(f)
+	m.PortBusy = func(p int) bool { return p == 8080 }
+	res, err := m.Expose(context.Background(), ExposeSpec{Namespace: "default", Name: "web", Expose: ExposeLoadBalancer, HostPort: 8080})
+	if err != nil || res.HostPort != 8080 || res.PortChanged {
+		t.Fatalf("own port should stay: %+v %v", res, err)
+	}
+	for _, bad := range []ExposeSpec{
+		{Namespace: "default", Name: "-x", Expose: ExposeNodePort},
+		{Namespace: "default", Name: "web", Expose: "none"},
+		{Namespace: "default", Name: "web", Expose: ExposeNodePort, Port: 70000},
+	} {
+		if _, err := newMgr(newFake()).Expose(context.Background(), bad); err == nil {
+			t.Errorf("expected rejection for %+v", bad)
+		}
+	}
+}
+
+func TestExposeNeedsAContainerPortWhenNoneDeclared(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl get deployment w -n default -o json", resp{out: `{"spec":{"selector":{"matchLabels":{"app":"w"}},"template":{"spec":{"containers":[{"name":"c"}]}}}}`})
+	if _, err := newMgr(f).Expose(context.Background(), ExposeSpec{Namespace: "default", Name: "w", Expose: ExposeNodePort}); err == nil || !strings.Contains(err.Error(), "container port") {
+		t.Fatalf("want container-port error, got %v", err)
+	}
+}

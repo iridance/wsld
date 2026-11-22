@@ -27,6 +27,7 @@ import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
 import { brandMark, icon, type IconName } from "./icons";
 import { distroLogo } from "./distroLogos";
+import { buildApps, type App as K8sApp } from "./k8sApps";
 import { buildNamespaceGraph, endpointCount, isSystemNs, nodePortsOf, ownerOf, serviceTargets, summarizeNamespace, usedBy, type K8sResources } from "./k8sGraph";
 
 /** k8s：Kubernetes 頁的 Pod 面板（logs／exec 走 /api/k8s/pods/...），其餘為容器／machine 面板。 */
@@ -841,6 +842,7 @@ export class App {
       this.buildAddMachineDialog(),
       this.buildResizeDialog(),
       this.buildDeployDialog(),
+      this.buildExposeDialog(),
     );
     this.renderNav();
     this.renderView();
@@ -2853,6 +2855,10 @@ export class App {
   private k8sPollTimer?: number;
   private k8sListError?: string;
   private k8sAddContext: boolean = loadJSON<boolean>(LS_K8S_ADDCTX, true);
+  /** Ready 時的主視圖：Apps（預設）或 Namespaces（進階：namespace 卡片與側欄分頁） */
+  private k8sView: "apps" | "namespaces" = loadJSON<string>(LS_K8S_VIEW, "apps") === "namespaces" ? "namespaces" : "apps";
+  private k8sShowSystem: boolean = loadJSON<boolean>(LS_K8S_SHOWSYS, false);
+  private k8sExpandedApps = new Set<string>();
   private k8sGroup: K8sGroup = loadJSON<string>(LS_K8S_GROUP, "workloads") === "system" ? "system" : "workloads";
 
   /** /api/k8s 狀態；k3s 就緒（且沒有進行中的作業）時再載入 namespace 與目前分頁的資源。 */
@@ -3328,8 +3334,21 @@ export class App {
     }
     // 頁籤：Workloads（default 與自建）／System（kube-*，Kubernetes 內建）。各自佔滿內容區，不互搶空間。
     const res = this.k8sRes();
-    // 還沒有任何使用者 workload：先邀請部署第一個 app
-    if (!res.deployments.some((x) => !isSystemNs(x.namespace)) && !res.statefulsets.some((x) => !isSystemNs(x.namespace))) wrap.append(this.k8sDeployEmpty());
+    const viewBar = tabs({
+      testid: "k8s-view-tabs",
+      selected: this.k8sView,
+      items: (["apps", "namespaces"] as const).map((id) => ({ id, testid: `k8s-view-${id}`, label: t(`gui.k8s.view.${id}`) })),
+      onSelect: (id) => {
+        this.k8sView = id === "namespaces" ? "namespaces" : "apps";
+        saveJSON(LS_K8S_VIEW, this.k8sView);
+        this.renderKubernetes();
+      },
+    });
+    wrap.append(viewBar);
+    if (this.k8sView === "apps") {
+      wrap.append(this.k8sAppsView());
+      return wrap;
+    }
     const groups: Record<K8sGroup, string[]> = {
       workloads: this.st.k8sNamespaces.filter((ns) => !isSystemNs(ns)),
       system: this.st.k8sNamespaces.filter(isSystemNs),
@@ -3356,6 +3375,216 @@ export class App {
     }
     wrap.append(grid);
     return wrap;
+  }
+
+  // ---- Apps 視圖（預設）：一個 Deployment＋它的 Service／Pods 合成一列 -------------------
+
+  private k8sAppsView(): HTMLElement {
+    const wrap = el("div", { class: "k8s-apps", "data-testid": "k8s-apps" });
+    const apps = buildApps(this.k8sRes(), this.k8sShowSystem);
+    const showSys = el("input", { type: "checkbox", "data-testid": "k8s-show-system" }) as HTMLInputElement;
+    showSys.checked = this.k8sShowSystem;
+    showSys.onchange = () => {
+      this.k8sShowSystem = showSys.checked;
+      saveJSON(LS_K8S_SHOWSYS, this.k8sShowSystem);
+      showSys.blur(); // 輪詢重繪會略過仍有 input 焦點的清單
+      this.renderKubernetes();
+    };
+    wrap.append(el("div", { class: "k8s-apps-head" }, el("label", { class: "k8s-opt" }, showSys, t("gui.k8s.apps.show_system"))));
+    const table = el("div", { class: "k8s-apps-table", role: "table" },
+      el("div", { class: "k8s-app-row head", role: "row" },
+        el("span", { text: t("gui.k8s.apps.col.app") }),
+        el("span", { text: t("gui.k8s.apps.col.status") }),
+        el("span", { text: t("gui.k8s.apps.col.url") }),
+        el("span"),
+      ),
+    );
+    if (apps.length === 0) {
+      table.append(this.k8sDeployEmpty());
+    } else {
+      for (const a of apps) table.append(...this.k8sAppRows(a));
+    }
+    wrap.append(table);
+    return wrap;
+  }
+
+  private k8sAppRows(a: K8sApp): HTMLElement[] {
+    const key = `k8s-app:${a.namespace}/${a.name}`;
+    const id = `${a.namespace}/${a.name}`;
+    const open = this.k8sExpandedApps.has(id);
+    const toggle = el("button", { type: "button", class: "app-toggle", "data-testid": "btn-app-expand", "aria-expanded": String(open), "aria-label": open ? t("gui.k8s.apps.collapse") : t("gui.k8s.apps.expand"), text: open ? "▾" : "▸" });
+    toggle.onclick = () => {
+      if (open) this.k8sExpandedApps.delete(id);
+      else this.k8sExpandedApps.add(id);
+      this.renderKubernetes();
+    };
+    const statusText = a.status === "stopped" ? t("gui.k8s.apps.status.stopped") : fmt(t(`gui.k8s.apps.status.${a.status}`), a.ready);
+    const status = el("span", { class: `app-status ${a.status}`, "data-testid": "app-status", "data-status": a.status, text: a.reason ? `${statusText} · ${a.reason}` : statusText });
+
+    const urlCell = el("span", { class: "app-urls", "data-testid": "app-urls" });
+    for (const u of a.urls) {
+      const link = el("a", { href: u.href, class: "app-url", "data-testid": "app-url-link", "data-port": String(u.port), text: `${u.label} ↗` });
+      link.onclick = (ev) => {
+        ev.preventDefault();
+        void api.k8sOpen(u.port).catch((err) => {
+          this.st.lastError = err instanceof ApiError ? err.message : String(err);
+          this.renderBanner();
+        });
+      };
+      urlCell.append(link);
+    }
+    const addUrl = el("button", { type: "button", class: "app-add-url", "data-testid": a.urls.length ? "btn-app-edit-url" : "btn-app-add-url", text: a.urls.length ? t("gui.k8s.apps.edit_url") : `＋ ${t("gui.k8s.apps.add_url")}` });
+    addUrl.onclick = () => void this.openExpose(a);
+    urlCell.append(addUrl);
+
+    const restart = iconBtn({ "data-testid": "btn-app-restart" }, "refresh", t("gui.k8s.restart"));
+    restart.disabled = this.st.busy.has(key);
+    restart.onclick = () => void this.k8sMutate(key, () => api.k8sRestart(a.namespace, a.name), fmt(t("gui.k8s.restarted"), a.name));
+    const rm = iconBtn({ "data-testid": "btn-app-delete", class: "danger" }, "trash", t("gui.k8s.apps.delete"));
+    rm.disabled = this.st.busy.has(key);
+    rm.onclick = () => void this.k8sDeleteApp(a);
+
+    const row = el("div", { class: "k8s-app-row", role: "row", "data-testid": "k8s-app-row", "data-name": a.name, "data-ns": a.namespace, "data-status": a.status, "data-expanded": String(open) },
+      el("span", { class: "app-name-cell" }, toggle,
+        el("span", { class: "app-name-wrap" },
+          el("span", { class: "app-name", "data-testid": "app-name", text: a.name }),
+          el("span", { class: "app-sub muted", "data-testid": "app-sub", text: [a.image, a.namespace].filter(Boolean).join(" · "), title: a.image }),
+        )),
+      status, urlCell, el("span", { class: "app-actions" }, restart, rm),
+    );
+    const out: HTMLElement[] = [row];
+    if (open) out.push(this.k8sAppDetail(a));
+    return out;
+  }
+
+  /** 展開的一列：副本數調整與 Pods（Logs／Exec）。 */
+  private k8sAppDetail(a: K8sApp): HTMLElement {
+    const { stepper, apply } = this.k8sScaleControls(a.deployment);
+    const pods = a.pods.length
+      ? a.pods.map((p) => {
+          const logs = iconBtn({ "data-testid": `btn-pod-logs-${p.name}` }, "logs", t("gui.logs"));
+          logs.onclick = () => this.openPodLogs(p.namespace, p.name);
+          const term = iconBtn({ "data-testid": `btn-pod-term-${p.name}` }, "terminal", t("gui.terminal"));
+          term.disabled = p.status !== "Running";
+          term.onclick = () => this.openPodTerminal(p.namespace, p.name);
+          return el("div", { class: "app-pod", "data-testid": "app-pod", "data-name": p.name },
+            el("span", { class: "mono", text: p.name, title: p.name }),
+            el("span", { class: `state ${podStateClass(p.status)}`, text: p.status }),
+            el("span", { class: "muted mono", text: p.ip ?? "" }),
+            el("span", { class: "app-actions" }, logs, term),
+          );
+        })
+      : [el("div", { class: "muted", text: t("gui.k8s.apps.no_pods") })];
+    return el("div", { class: "k8s-app-detail", "data-testid": "app-detail" },
+      el("div", { class: "app-scale" }, el("span", { class: "muted", text: t("gui.k8s.replicas") }), stepper, apply),
+      ...pods,
+    );
+  }
+
+  /** 刪除 app：Deployment 與「只指向這個 app」的 Service 一起刪（共用的 Service 保留）。 */
+  private async k8sDeleteApp(a: K8sApp): Promise<void> {
+    const key = `k8s-app:${a.namespace}/${a.name}`;
+    const others = buildApps(this.k8sRes(), true).filter((x) => x.namespace === a.namespace && x.name !== a.name);
+    const own = a.services.filter((sv) => !others.some((o) => o.services.some((s2) => s2.name === sv.name)));
+    await this.resourceAction(key, fmt(t("gui.k8s.apps.confirm_delete"), a.name), async () => {
+      await api.k8sDelete("deployments", a.namespace, a.name);
+      for (const sv of own) await api.k8sDelete("services", sv.namespace, sv.name);
+      if (this.st.k8sDetail?.name === a.name) this.st.k8sDetail = undefined;
+      this.k8sExpandedApps.delete(`${a.namespace}/${a.name}`);
+      return fmt(t("gui.k8s.apps.deleted"), a.name);
+    });
+  }
+
+  private buildExposeDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "expose-dialog" }) as HTMLDialogElement;
+    const mk = (testid: string, extra: Record<string, string> = {}) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid, ...extra }) as HTMLInputElement;
+    const hostPort = mk("expose-hostport", { inputmode: "numeric", placeholder: t("gui.k8s.deploy.same_as_container") });
+    const port = mk("expose-port", { inputmode: "numeric", placeholder: t("gui.k8s.expose.auto_port") });
+    const err = el("div", { class: "field-error", "data-testid": "expose-error", hidden: "" });
+    const title = el("h2", { "data-testid": "expose-title" });
+    type Mode = "loadbalancer" | "nodeport";
+    const radios = {} as Record<Mode, HTMLInputElement>;
+    const group = el("div", { class: "expose-group", role: "radiogroup", "aria-label": t("gui.k8s.deploy.expose") });
+    for (const [v, label, hint] of [["loadbalancer", "gui.k8s.deploy.expose_lb", "gui.k8s.deploy.expose_lb_d"], ["nodeport", "gui.k8s.deploy.expose_np", "gui.k8s.deploy.expose_np_d"]] as [Mode, string, string][]) {
+      const r = el("input", { type: "radio", name: "expose-mode", value: v, id: `expose-mode-${v}`, "data-testid": `expose-mode-${v}` }) as HTMLInputElement;
+      radios[v] = r;
+      group.append(el("label", { class: "expose-opt", for: r.id }, r, el("span", {}, el("b", { text: t(label) }), el("small", { text: t(hint) }))));
+    }
+    const hostField = el("label", { class: "field", "data-testid": "expose-hostport-field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.host_port") }), textField(hostPort));
+    const mode = (): Mode => (radios.nodeport.checked ? "nodeport" : "loadbalancer");
+    const sync = () => {
+      hostField.hidden = mode() !== "loadbalancer";
+    };
+    for (const r of Object.values(radios)) r.onchange = () => {
+      sync();
+      err.hidden = true;
+    };
+    const submit = btn({ class: "primary", type: "submit", "data-testid": "expose-submit" }, "check", t("gui.k8s.expose.submit"));
+    const cancel = btn({ type: "button", "data-testid": "expose-cancel" }, "close", t("gui.cancel"));
+    cancel.onclick = () => d.close();
+    const valid = (v: string) => v === "" || (/^\d+$/.test(v) && +v >= 1 && +v <= 65535);
+    const form = el("form", { method: "dialog", class: "add-machine-form" },
+      el("div", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.expose") }), group),
+      hostField,
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.expose.container_port") }), textField(port)),
+      err,
+      el("div", { class: "row" }, cancel, submit),
+    );
+    form.noValidate = true;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const target = this.k8sExposeTarget;
+      if (!target) return;
+      if (!valid(port.value.trim()) || (mode() === "loadbalancer" && !valid(hostPort.value.trim()))) {
+        err.textContent = t("gui.k8s.deploy.err_port");
+        err.hidden = false;
+        return;
+      }
+      submit.disabled = true;
+      try {
+        const res = await api.k8sExpose({
+          namespace: target.namespace,
+          name: target.name,
+          expose: mode(),
+          port: port.value.trim() ? +port.value : undefined,
+          host_port: mode() === "loadbalancer" && hostPort.value.trim() ? +hostPort.value : undefined,
+        });
+        d.close();
+        const shown = res.expose === "loadbalancer" ? res.host_port : res.node_port;
+        if (shown) {
+          this.notify(res.port_changed ? fmt(t("gui.k8s.expose.done_moved"), res.name, String(shown), hostPort.value.trim() || port.value.trim()) : fmt(t("gui.k8s.expose.done"), res.name, String(shown)), { sticky: true });
+        }
+        await this.refresh();
+      } catch (e) {
+        err.textContent = e instanceof ApiError ? e.message : String(e);
+        err.hidden = false;
+      } finally {
+        submit.disabled = false;
+      }
+    };
+    d.append(el("div", { class: "dialog-head" }, title), form);
+    // openExpose 需要設定標題與預設值
+    (d as HTMLDialogElement & { prep?: (a: K8sApp) => void }).prep = (a: K8sApp) => {
+      const lb = a.services.find((sv) => sv.type === "LoadBalancer");
+      const np = a.services.find((sv) => sv.type === "NodePort");
+      title.textContent = fmt(t(a.urls.length ? "gui.k8s.expose.title_edit" : "gui.k8s.expose.title"), a.name);
+      radios.loadbalancer.checked = !np || !!lb || !a.urls.length;
+      radios.nodeport.checked = !radios.loadbalancer.checked;
+      hostPort.value = lb?.ports[0] ? String(lb.ports[0].port) : "";
+      port.value = "";
+      err.hidden = true;
+      sync();
+    };
+    return d;
+  }
+
+  private k8sExposeTarget?: K8sApp;
+
+  private async openExpose(a: K8sApp): Promise<void> {
+    const d = this.root.querySelector<HTMLDialogElement & { prep?: (a: K8sApp) => void }>('[data-testid="expose-dialog"]')!;
+    this.k8sExposeTarget = a;
+    d.prep?.(a);
+    d.showModal();
   }
 
   private k8sNsCard(ns: string): HTMLElement {
@@ -4614,6 +4843,8 @@ const LS_VIEW = "wsld.view";
 const LS_K8S_TAB = "wsld.k8s.tab";
 const LS_K8S_GROUP = "wsld.k8s.group";
 const LS_K8S_ADDCTX = "wsld.k8s.addcontext";
+const LS_K8S_VIEW = "wsld.k8s.view";
+const LS_K8S_SHOWSYS = "wsld.k8s.showsystem";
 const LS_K8S_GROUP_SEEN = "wsld.k8s.groupSeen";
 const LABEL_PROJECT = "com.docker.compose.project";
 const LABEL_SERVICE = "com.docker.compose.service";

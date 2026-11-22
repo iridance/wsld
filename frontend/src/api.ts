@@ -247,6 +247,15 @@ export interface K8sDeployRequest {
   replicas?: number;
 }
 
+export interface K8sExposeRequest {
+  namespace: string;
+  name: string;
+  expose: "nodeport" | "loadbalancer";
+  /** 容器埠；省略時取 Deployment 宣告的第一個 containerPort */
+  port?: number;
+  host_port?: number;
+}
+
 export interface K8sDeployResult {
   namespace: string;
   name: string;
@@ -565,6 +574,7 @@ export const api = {
   k8sScale: (ns: string, name: string, replicas: number) =>
     call<void>("POST", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/scale`, { replicas }),
   k8sDeploy: (req: K8sDeployRequest) => call<K8sDeployResult>("POST", "/api/k8s/deploy", req),
+  k8sExpose: (req: K8sExposeRequest) => call<K8sDeployResult>("POST", "/api/k8s/expose", req),
   k8sApply: (manifest: string) => call<{ output: string }>("POST", "/api/k8s/apply", manifest),
   k8sOpen: (port: number) => call<{ url: string }>("POST", "/api/k8s/open", { port }),
   k8sLogsUrl: (ns: string, pod: string, tail = 100) =>

@@ -210,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/k8s/kubeconfig", s.handleK8sKubeconfig)
 	mux.HandleFunc("POST /api/k8s/open", s.handleK8sOpen)
 	mux.HandleFunc("POST /api/k8s/deploy", s.handleK8sDeploy)
+	mux.HandleFunc("POST /api/k8s/expose", s.handleK8sExpose)
 	mux.HandleFunc("POST /api/k8s/apply", s.handleK8sApply)
 	mux.HandleFunc("GET /api/k8s/namespaces", s.handleK8sNamespaces)
 	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)

@@ -5,7 +5,9 @@ test.beforeEach(async ({ request }) => {
   await reset(request);
 });
 
-async function goK8s(page: Page) {
+async function goK8s(page: Page, view: "apps" | "namespaces" = "namespaces") {
+  // Ready 時預設是 Apps 視圖；舊的 namespace／分頁測試固定在 Namespaces 視圖
+  await page.addInitScript((v) => localStorage.setItem("wsld.k8s.view", JSON.stringify(v)), view);
   await open(page);
   await page.getByTestId("nav-kubernetes").click();
   await expect(page.getByTestId("view-kubernetes")).toBeVisible();
@@ -617,7 +619,7 @@ test("a failed enable names the step it stopped at and offers Retry", async ({ p
 });
 
 test("Ready with no user workloads invites a first deploy; Deploy creates it and shows the localhost URL", async ({ page }) => {
-  await goK8s(page);
+  await goK8s(page, "apps");
   await startCluster(page);
   await expect(page.getByTestId("k8s-deploy-empty")).toHaveCount(0); // 範例叢集已有 poc-web
   await page.getByTestId("btn-k8s-reset").click();
@@ -640,6 +642,8 @@ test("Ready with no user workloads invites a first deploy; Deploy creates it and
   await expect(page.getByTestId("notice")).toContainText("myapp deployed");
   await expect(page.getByTestId("notice")).toContainText("http://localhost:");
   await expect(page.getByTestId("k8s-deploy-empty")).toHaveCount(0);
+  await expect(page.locator('[data-testid="k8s-app-row"][data-name="myapp"]')).toBeVisible();
+  await page.getByTestId("k8s-view-namespaces").click();
   await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-node-pods")).toHaveText("2/2");
 });
 
@@ -695,7 +699,7 @@ test("toolbar Deploy and Copy context appear only when Ready", async ({ page }) 
 });
 
 test("Apply YAML file sends the file to kubectl apply and reports the result", async ({ page }) => {
-  await goK8s(page);
+  await goK8s(page, "apps");
   await startCluster(page);
   await page.getByTestId("btn-k8s-reset").click();
   await page.getByTestId("confirm-dialog").getByTestId("confirm-ok").click();
@@ -704,4 +708,100 @@ test("Apply YAML file sends the file to kubectl apply and reports the result", a
   await page.getByTestId("btn-k8s-apply-yaml").click();
   await (await chooser).setFiles({ name: "app.yaml", mimeType: "text/yaml", buffer: Buffer.from("apiVersion: apps/v1\nkind: Deployment\n") });
   await expect(page.getByTestId("notice")).toContainText("Applied");
+});
+
+// ---- Apps 視圖 -----------------------------------------------------------------
+
+const appRow = (page: Page, name: string) => page.locator(`[data-testid="k8s-app-row"][data-name="${name}"]`);
+
+test("Apps is the default Ready view: one row per app with status and a clickable localhost URL; system apps are hidden", async ({ page }) => {
+  await goK8s(page, "apps");
+  await startCluster(page);
+  await expect(page.getByTestId("k8s-view-apps")).toHaveAttribute("aria-selected", "true");
+  const row = appRow(page, "poc-web");
+  await expect(row).toBeVisible();
+  await expect(row.getByTestId("app-status")).toContainText("1/1 Running");
+  await expect(row.getByTestId("app-url-link")).toHaveText("localhost:30080 ↗"); // NodePort Service 併入同一列
+  await expect(page.locator('[data-testid="k8s-app-row"][data-ns^="kube-"]')).toHaveCount(0);
+  await page.getByTestId("k8s-show-system").check();
+  await expect(page.locator('[data-testid="k8s-app-row"][data-ns^="kube-"]').first()).toBeVisible();
+});
+
+test("an app row expands to its pods and scale controls", async ({ page }) => {
+  await goK8s(page, "apps");
+  await startCluster(page);
+  const row = appRow(page, "poc-web");
+  await row.getByTestId("btn-app-expand").click();
+  await expect(page.getByTestId("app-detail")).toBeVisible();
+  await expect(page.getByTestId("app-pod")).toHaveCount(1);
+  await page.getByTestId("btn-replicas-inc-poc-web").click();
+  await page.getByTestId("btn-scale-poc-web").click();
+  await expect(page.getByTestId("app-pod")).toHaveCount(2, { timeout: 10_000 });
+  await page.getByTestId("btn-pod-logs-" + (await page.getByTestId("app-pod").first().getAttribute("data-name"))).click();
+  await expect(page.getByTestId("panel")).toBeVisible();
+});
+
+test("an unexposed app offers Add URL; a fixed localhost port becomes its link, a taken port moves on", async ({ page }) => {
+  await goK8s(page, "apps");
+  await startCluster(page);
+  // 兩個不對外的 app
+  for (const [img, name] of [["a:1", "alpha"], ["b:1", "beta"]]) {
+    await page.getByTestId("btn-k8s-deploy").click();
+    const dlg = page.getByTestId("deploy-dialog");
+    await dlg.getByTestId("deploy-image").fill(img);
+    await dlg.getByTestId("deploy-name").fill(name);
+    await dlg.getByLabel("Cluster only").check();
+    await dlg.getByTestId("deploy-submit").click();
+    await expect(dlg).toBeHidden();
+  }
+  await expect(appRow(page, "alpha").getByTestId("btn-app-add-url")).toBeVisible();
+  const expose = page.getByTestId("expose-dialog");
+  await appRow(page, "alpha").getByTestId("btn-app-add-url").click();
+  await expect(expose).toBeVisible();
+  await expect(expose.getByTestId("expose-mode-loadbalancer")).toBeChecked();
+  await expose.getByTestId("expose-hostport").fill("8080");
+  await expose.getByTestId("expose-port").fill("3000");
+  await expose.getByTestId("expose-submit").click();
+  await expect(expose).toBeHidden();
+  await expect(page.getByTestId("notice")).toContainText("alpha is now at http://localhost:8080");
+  await expect(appRow(page, "alpha").getByTestId("app-url-link")).toHaveText("localhost:8080 ↗");
+  // 同一個埠再加一次：順延並說明
+  await appRow(page, "beta").getByTestId("btn-app-add-url").click();
+  await expose.getByTestId("expose-hostport").fill("8080");
+  await expose.getByTestId("expose-port").fill("3000");
+  await expose.getByTestId("expose-submit").click();
+  await expect(page.getByTestId("notice")).toContainText("http://localhost:8081");
+  await expect(page.getByTestId("notice")).toContainText("port 8080 was in use");
+});
+
+test("Change URL switches an exposed app from NodePort to a fixed localhost port", async ({ page }) => {
+  await goK8s(page, "apps");
+  await startCluster(page);
+  const row = appRow(page, "poc-web");
+  await row.getByTestId("btn-app-edit-url").click();
+  const expose = page.getByTestId("expose-dialog");
+  await expect(expose.getByTestId("expose-title")).toContainText("Change the URL of poc-web");
+  await expect(expose.getByTestId("expose-mode-nodeport")).toBeChecked();
+  await expose.getByTestId("expose-mode-loadbalancer").check();
+  await expose.getByTestId("expose-hostport").fill("9090");
+  await expose.getByTestId("expose-port").fill("8080");
+  await expose.getByTestId("expose-submit").click();
+  await expect(expose).toBeHidden();
+  await expect(row.getByTestId("app-url-link")).toHaveCount(1);
+  await expect(row.getByTestId("app-url-link")).toHaveText("localhost:9090 ↗");
+});
+
+test("Delete app removes the Deployment and the Service that points at it, after confirmation", async ({ page }) => {
+  await goK8s(page, "apps");
+  await startCluster(page);
+  const row = appRow(page, "poc-web");
+  await row.getByTestId("btn-app-delete").click();
+  await page.getByTestId("confirm-dialog").getByTestId("confirm-cancel").click();
+  await expect(row).toBeVisible();
+  await row.getByTestId("btn-app-delete").click();
+  await page.getByTestId("confirm-dialog").getByTestId("confirm-ok").click();
+  await expect(row).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByTestId("k8s-deploy-empty")).toBeVisible();
+  await page.getByTestId("k8s-view-namespaces").click();
+  await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-node-services")).toHaveText("1"); // 只剩內建的 kubernetes Service
 });

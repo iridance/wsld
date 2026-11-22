@@ -136,14 +136,18 @@ func DeployManifest(s DeploySpec) ([]byte, error) {
 
 // serviceItem 產生對外 Service：port 為 Service 埠（LoadBalancer 即 localhost 上的埠），targetPort 為容器埠。
 func serviceItem(s DeploySpec, typ string, port int) map[string]any {
-	labels := map[string]string{"app": s.Name}
+	return serviceObject(s.Namespace, s.Name, typ, port, s.Port, map[string]string{"app": s.Name})
+}
+
+// serviceObject 組出一個單埠 Service；selector 同時作為它自己的 label。
+func serviceObject(ns, name, typ string, port, targetPort int, selector map[string]string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1", "kind": "Service",
-		"metadata": map[string]any{"name": s.Name, "namespace": s.Namespace, "labels": labels},
+		"metadata": map[string]any{"name": name, "namespace": ns, "labels": selector},
 		"spec": map[string]any{
 			"type":     typ,
-			"selector": labels,
-			"ports":    []any{map[string]any{"port": port, "targetPort": s.Port}},
+			"selector": selector,
+			"ports":    []any{map[string]any{"port": port, "targetPort": targetPort}},
 		},
 	}
 }

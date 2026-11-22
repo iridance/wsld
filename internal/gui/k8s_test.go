@@ -733,3 +733,57 @@ func TestK8sDeployExposeModes(t *testing.T) {
 		}
 	}
 }
+
+func TestK8sExposeAddsAServiceToAnExistingDeployment(t *testing.T) {
+	k := newK8sEnv(t)
+	k.enable(t)
+	resp, b := k.req(t, "POST", "/api/k8s/expose", `{"namespace":"default","name":"poc-web","expose":"loadbalancer","host_port":8080}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expose = %d %s", resp.StatusCode, b)
+	}
+	var res k8s.DeployResult
+	_ = json.Unmarshal(b, &res)
+	if res.Expose != "loadbalancer" || res.HostPort != 8080 || res.PortChanged {
+		t.Fatalf("%+v", res)
+	}
+	var svcs []k8s.Service
+	_, b = k.req(t, "GET", "/api/k8s/services?ns=default", "")
+	_ = json.Unmarshal(b, &svcs)
+	n := 0
+	for _, s := range svcs {
+		if s.Name == "poc-web" {
+			n++
+			if s.Type != "LoadBalancer" {
+				t.Fatalf("service should be replaced in place: %+v", s)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one poc-web service, got %d", n)
+	}
+	for _, bad := range []string{`{`, `{"namespace":"default","name":"poc-web","expose":"none"}`, `{"namespace":"Bad NS","name":"x","expose":"nodeport"}`, `{"namespace":"default","name":"missing","expose":"nodeport"}`} {
+		r, _ := k.req(t, "POST", "/api/k8s/expose", bad)
+		if r.StatusCode < 400 {
+			t.Errorf("%s should fail, got %d", bad, r.StatusCode)
+		}
+	}
+}
+
+func TestK8sOpenAllowsLoadBalancerPorts(t *testing.T) {
+	k := newK8sEnv(t)
+	k.enable(t)
+	var opened []string
+	k.s.OnOpenURL = func(u string) error { opened = append(opened, u); return nil }
+	if resp, _ := k.req(t, "POST", "/api/k8s/open", `{"port":9091}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a port nobody listens on must be refused, got %d", resp.StatusCode)
+	}
+	if resp, b := k.req(t, "POST", "/api/k8s/expose", `{"namespace":"default","name":"poc-web","expose":"loadbalancer","host_port":9091}`); resp.StatusCode != 200 {
+		t.Fatalf("expose = %d %s", resp.StatusCode, b)
+	}
+	if resp, b := k.req(t, "POST", "/api/k8s/open", `{"port":9091}`); resp.StatusCode != 200 || !strings.Contains(string(b), "localhost:9091") {
+		t.Fatalf("LoadBalancer port should open: %d %s", resp.StatusCode, b)
+	}
+	if len(opened) != 1 || !strings.HasSuffix(opened[0], ":9091") {
+		t.Fatalf("opened = %v", opened)
+	}
+}

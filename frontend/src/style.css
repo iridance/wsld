@@ -907,3 +907,29 @@ table[data-testid="skeleton"] tbody td { height: 44px; }
 .expose-opt input { margin-top: 3px; }
 .expose-opt span { display: flex; flex-direction: column; gap: 2px; }
 .expose-opt small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+/* Apps 視圖：一列一個 app（Deployment＋Service＋Pods） */
+.k8s-apps { display: flex; flex-direction: column; gap: 10px; }
+.k8s-apps-head { display: flex; justify-content: flex-end; }
+.k8s-apps-table { background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.k8s-app-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 12px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 13px; }
+.k8s-app-row.head { border-top: 0; background: var(--bg-soft, rgba(127, 127, 127, 0.08)); color: var(--muted); font-size: 12px; font-weight: 600; }
+.app-name-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.app-name-wrap { display: flex; flex-direction: column; min-width: 0; }
+.app-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-sub { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-toggle { background: none; border: 0; cursor: pointer; color: var(--muted); font-size: 14px; width: 20px; padding: 0; }
+.app-status.running { color: var(--ok, #15803d); font-weight: 600; }
+.app-status.pending { color: var(--warn); font-weight: 600; }
+.app-status.error { color: var(--danger, #b42318); font-weight: 600; }
+.app-status.stopped { color: var(--muted); }
+.app-urls { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.app-url { color: var(--accent); font-weight: 600; text-decoration: none; }
+.app-url:hover { text-decoration: underline; }
+.app-add-url { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.app-add-url:hover { text-decoration: underline; }
+.app-actions { display: inline-flex; gap: 4px; justify-content: flex-end; }
+.k8s-app-detail { padding: 6px 14px 12px 42px; border-top: 1px solid var(--border); background: var(--accent-soft); display: flex; flex-direction: column; gap: 4px; }
+.app-scale { display: flex; align-items: center; gap: 8px; padding: 4px 0 8px; }
+.app-pod { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.8fr) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.k8s-apps-table .k8s-deploy-empty { border: 0; border-radius: 0; margin: 0; }

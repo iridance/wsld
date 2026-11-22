@@ -568,6 +568,63 @@ func (f *FakeK8s) Deploy(_ context.Context, spec k8s.DeploySpec) (k8s.DeployResu
 	return res, nil
 }
 
+// Expose 實作 K8s：替同名 Deployment 建立（或取代）Service；埠衝突的處理與 Deploy 相同。
+func (f *FakeK8s) Expose(_ context.Context, spec k8s.ExposeSpec) (k8s.DeployResult, error) {
+	f.c.mu.Lock()
+	defer f.c.mu.Unlock()
+	if err := f.requireRunning(); err != nil {
+		return k8s.DeployResult{}, err
+	}
+	var dep *k8s.Deployment
+	for i := range f.c.deploys {
+		if f.c.deploys[i].Namespace == spec.Namespace && f.c.deploys[i].Name == spec.Name {
+			dep = &f.c.deploys[i]
+		}
+	}
+	if dep == nil {
+		return k8s.DeployResult{}, fmt.Errorf("deployments.apps %q not found", spec.Name)
+	}
+	port := spec.Port
+	if port == 0 {
+		port = 8080 // 假叢集的 Deployment 沒有宣告 containerPort：以 8080 代替
+	}
+	// 同名 Service 先移除（等同就地更新）
+	kept := f.c.services[:0]
+	for _, sv := range f.c.services {
+		if !(sv.Namespace == spec.Namespace && sv.Name == spec.Name) {
+			kept = append(kept, sv)
+		}
+	}
+	f.c.services = kept
+	f.c.Calls = append(f.c.Calls, fmt.Sprintf("expose:%s/%s=%s", spec.Namespace, spec.Name, spec.Expose))
+	res := k8s.DeployResult{Namespace: spec.Namespace, Name: spec.Name, Expose: spec.Expose}
+	sel := dep.Selector
+	switch spec.Expose {
+	case k8s.ExposeNodePort:
+		res.NodePort = 30100 + len(f.c.services)
+		f.c.services = append(f.c.services, k8s.Service{Name: spec.Name, Namespace: spec.Namespace, Type: "NodePort", ClusterIP: fmt.Sprintf("10.43.1.%d", len(f.c.services)+10), Ports: []k8s.ServicePort{{Port: port, NodePort: res.NodePort, Protocol: "TCP"}}, Selector: sel, CreatedAt: time.Now()})
+	case k8s.ExposeLoadBalancer:
+		want := spec.HostPort
+		if want == 0 {
+			want = port
+		}
+		hp := want
+		for taken := true; taken; {
+			taken = false
+			for _, sv := range f.c.services {
+				if sv.Type == "LoadBalancer" && len(sv.Ports) > 0 && sv.Ports[0].Port == hp {
+					hp, taken = hp+1, true
+				}
+			}
+		}
+		res.HostPort, res.PortChanged = hp, hp != want
+		f.c.services = append(f.c.services, k8s.Service{Name: spec.Name, Namespace: spec.Namespace, Type: "LoadBalancer", ClusterIP: fmt.Sprintf("10.43.1.%d", len(f.c.services)+10), Ports: []k8s.ServicePort{{Port: hp, Protocol: "TCP"}}, Selector: sel, CreatedAt: time.Now()})
+	default:
+		return k8s.DeployResult{}, fmt.Errorf("invalid expose %q", spec.Expose)
+	}
+	return res, nil
+}
+
 // Apply 實作 K8s：只記錄動作並回傳固定輸出（假叢集不解析 YAML）。
 func (f *FakeK8s) Apply(_ context.Context, manifest []byte) (string, error) {
 	f.c.mu.Lock()

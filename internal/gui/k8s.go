@@ -36,6 +36,7 @@ type K8s interface {
 	RestartDeployment(ctx context.Context, ns, name string) error
 	ScaleDeployment(ctx context.Context, ns, name string, replicas int) error
 	Deploy(ctx context.Context, spec k8s.DeploySpec) (k8s.DeployResult, error)
+	Expose(ctx context.Context, spec k8s.ExposeSpec) (k8s.DeployResult, error)
 	Apply(ctx context.Context, manifest []byte) (string, error)
 }
 
@@ -573,13 +574,15 @@ func (s *Server) handleK8sOpen(w http.ResponseWriter, r *http.Request) {
 	allowed := false
 	for _, sv := range svcs {
 		for _, p := range sv.Ports {
-			if in.Port > 0 && p.NodePort == in.Port && (p.Protocol == "" || p.Protocol == "TCP") {
+			tcp := p.Protocol == "" || p.Protocol == "TCP"
+			// NodePort，或 LoadBalancer 的 Service 埠（k3s ServiceLB 把它綁在 localhost 上）
+			if in.Port > 0 && tcp && (p.NodePort == in.Port || (sv.Type == "LoadBalancer" && p.Port == in.Port)) {
 				allowed = true
 			}
 		}
 	}
 	if !allowed {
-		writeErr(w, http.StatusBadRequest, "usage", errors.New("not a NodePort of any service"))
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("not a NodePort or LoadBalancer port of any service"))
 		return
 	}
 	url := LocalURL(in.Port)
@@ -728,6 +731,30 @@ func (s *Server) handleK8sDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := mgr.Deploy(r.Context(), req)
+	if err != nil {
+		k8sErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleK8sExpose 替既有 Deployment 建立（或更新）同名 Service。
+func (s *Server) handleK8sExpose(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	var req k8s.ExposeSpec
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid JSON body"))
+		return
+	}
+	if !k8s.ValidName(req.Namespace) || !k8s.ValidName(req.Name) || (req.Expose != k8s.ExposeNodePort && req.Expose != k8s.ExposeLoadBalancer) ||
+		req.Port < 0 || req.Port > 65535 || req.HostPort < 0 || req.HostPort > 65535 {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid expose request"))
+		return
+	}
+	res, err := mgr.Expose(r.Context(), req)
 	if err != nil {
 		k8sErr(w, err)
 		return
