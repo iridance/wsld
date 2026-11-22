@@ -733,6 +733,16 @@ func TestAutoStartBringsUpReadyActive(t *testing.T) {
 	}
 }
 
+func TestAutoStartSkipsStartWhenAlreadyReady(t *testing.T) {
+	e := newEnv(t, "")
+	if err := e.s.AutoStart(); err != nil {
+		t.Fatal(err)
+	}
+	if e.life.Starts() != 0 {
+		t.Fatalf("running engine must not be restarted, starts=%d", e.life.Starts())
+	}
+}
+
 func TestAutoStartSkipsUninitializedActive(t *testing.T) {
 	e := newEnv(t, "")
 	c := config.Default() // 沒有 active machine：全新安裝不自動初始化

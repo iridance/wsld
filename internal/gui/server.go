@@ -447,6 +447,12 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 
 // engineStart：啟動 active machine 的引擎，成功後背景恢復 k3s。已有啟動進行中回 busy。
 func (s *Server) engineStart() (st lifecycle.Status, err error, busy bool) {
+	return s.engineStartOpt(false)
+}
+
+// engineStartOpt：reuse 為 true 時，若 engine 已在跑（關閉 app 不會停掉它，只放掉保活 session）
+// 就只補掛保活並在背景確認 k3s，不走完整啟動流程。檢查在 starting 旗標內進行，畫面不會空窗。
+func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, busy bool) {
 	s.startMu.Lock()
 	if s.starting {
 		s.startMu.Unlock()
@@ -461,6 +467,13 @@ func (s *Server) engineStart() (st lifecycle.Status, err error, busy bool) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	if reuse {
+		if cur := s.life().Status(ctx); cur.Ready() {
+			s.holdPrimary()
+			go s.resumeK8sIfDown()
+			return cur, nil, false
+		}
+	}
 	st, err = s.bringUpActive(ctx)
 	if err != nil {
 		return st, err, false
@@ -478,7 +491,7 @@ func (s *Server) AutoStart() error {
 	if !ok || !am.Ready() {
 		return nil
 	}
-	_, err, _ := s.engineStart()
+	_, err, _ := s.engineStartOpt(true)
 	return err
 }
 

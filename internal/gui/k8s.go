@@ -203,6 +203,22 @@ func (s *Server) resumeK8s() {
 	})
 }
 
+// resumeK8sIfDown：engine 已在跑時，只有 k3s 沒起來才恢復（避免無謂的「啟動中」狀態）。
+func (s *Server) resumeK8sIfDown() {
+	if s.K8sFor == nil {
+		return
+	}
+	cfg := s.cfg()
+	m, ok := cfg.K8sMachine()
+	if !ok || !strings.EqualFold(m.Distro, cfg.Active) {
+		return
+	}
+	if s.k8sMgr(m.Distro).Status(context.Background()).State == k8s.StateReady {
+		return
+	}
+	s.resumeK8s()
+}
+
 func (s *Server) k8sBusy(w http.ResponseWriter) {
 	writeErr(w, http.StatusConflict, "conflict", errors.New("another Kubernetes operation is in progress"))
 }

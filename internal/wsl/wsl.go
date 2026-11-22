@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -107,7 +108,11 @@ func (r ExecRunner) runOnce(ctx context.Context, stdin io.Reader, args ...string
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}
+	start := time.Now()
 	err := cmd.Run()
+	if d := time.Since(start); d >= slowCallThreshold {
+		log.Printf("wsl.exe slow call %.1fs: %s (err=%v stderr=%q)", d.Seconds(), briefArgs(args), err, briefText(DecodeOutput(errb.Bytes())))
+	}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -116,6 +121,19 @@ func (r ExecRunner) runOnce(ctx context.Context, stdin io.Reader, args ...string
 		return out.Bytes(), errb.Bytes(), err
 	}
 	return out.Bytes(), errb.Bytes(), nil
+}
+
+// 超過這個時間的 wsl.exe 呼叫會寫進 log，用來診斷啟動／重連時卡在哪一步。
+const slowCallThreshold = time.Second
+
+func briefArgs(args []string) string { return briefText(strings.Join(args, " ")) }
+
+func briefText(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
 
 // DecodeOutput 把 wsl.exe 自身輸出（UTF-16LE，可能無 BOM）轉為 UTF-8；已是 UTF-8 則原樣回傳。
