@@ -2884,7 +2884,15 @@ export class App {
     try {
       // 卡片與架構圖都需要全部 namespace 的資源；側欄的表格再依 namespace 過濾。
       // 每個請求都是一次 wsl.exe + kubectl，全部並行（namespace 清單不依賴其他結果）。
-      [this.st.k8sNamespaces, this.st.k8sPods, this.st.k8sDeployments, this.st.k8sServices, this.st.k8sExtras] = await Promise.all([api.k8sNamespaces(signal), api.k8sPods("", signal), api.k8sDeployments("", signal), api.k8sServices("", signal), api.k8sExtras("", signal)]);
+      // extras（ConfigMap／PVC 等）一律走 kubectl，慢又只是附加資訊：不讓它拖住 Apps／Pods 的顯示，晚到再補畫。
+      const extras = api.k8sExtras("", signal);
+      extras.catch(() => {});
+      [this.st.k8sNamespaces, this.st.k8sPods, this.st.k8sDeployments, this.st.k8sServices] = await Promise.all([api.k8sNamespaces(signal), api.k8sPods("", signal), api.k8sDeployments("", signal), api.k8sServices("", signal)]);
+      void extras.then((x) => {
+        if (signal?.aborted || this.st.view !== "kubernetes") return;
+        this.st.k8sExtras = x;
+        this.renderKubernetes();
+      }).catch(() => {});
       if (this.st.k8sNs && !this.st.k8sNamespaces.includes(this.st.k8sNs)) this.st.k8sNs = "";
       if (this.st.k8sDetail) {
         const d = this.st.k8sDetail;

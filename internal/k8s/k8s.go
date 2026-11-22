@@ -67,6 +67,9 @@ type Manager struct {
 	PortBusy func(port int) bool // Windows 端該埠是否已被占用（預設以 127.0.0.1 撥號探測）
 
 	DisableAPI bool // true = 不走 TCP API，全部經 kubectl（測試用）
+	// AsyncProbes：true = 記憶體／IP 過期後背景更新、Status 不等待（GUI 長駐輪詢用）。
+	// 預設同步：CLI／doctor 是一次性查詢，要拿到完整結果。
+	AsyncProbes bool
 
 	apiMu sync.Mutex
 	apiC  *apiConn
@@ -78,8 +81,10 @@ type Manager struct {
 	installedAt time.Time // 最近一次確認 k3s 已安裝的時間
 	memAt       time.Time
 	memCache    string
+	memBusy     bool
 	ipAt        time.Time
 	ipOut       string
+	ipBusy      bool
 
 	ReadyAttempts int           // 預設 120
 	ReadyInterval time.Duration // 預設 1s
@@ -239,13 +244,13 @@ func (m *Manager) Status(ctx context.Context) Status {
 	// 記憶體與 IP 變動慢：各自快取一段時間，不必每次輪詢都開 wsl.exe。
 	go func() {
 		defer wg.Done()
-		memOut, memErr = m.cachedProbe(&m.memAt, &m.memCache, memTTL, func() (string, error) {
-			return m.root(ctx, nil, "systemctl", "show", "k3s", "-p", "MemoryCurrent", "--value")
+		memOut, memErr = m.cachedProbe(&m.memAt, &m.memCache, &m.memBusy, memTTL, func(c context.Context) (string, error) {
+			return m.root(c, nil, "systemctl", "show", "k3s", "-p", "MemoryCurrent", "--value")
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		ipOut, ipErr = m.cachedProbe(&m.ipAt, &m.ipOut, ipTTL, func() (string, error) { return m.root(ctx, nil, "hostname", "-I") })
+		ipOut, ipErr = m.cachedProbe(&m.ipAt, &m.ipOut, &m.ipBusy, ipTTL, func(c context.Context) (string, error) { return m.root(c, nil, "hostname", "-I") })
 	}()
 	wg.Wait()
 	if nodeErr == nil {
@@ -273,23 +278,53 @@ const (
 	installedTTL = 60 * time.Second
 )
 
-// cachedProbe 在 ttl 內回傳上次成功的輸出；過期才執行 fn（失敗不快取）。
-func (m *Manager) cachedProbe(at *time.Time, val *string, ttl time.Duration, fn func() (string, error)) (string, error) {
+// cachedProbe 是「過期就背景更新」的快取：Status 絕不等待它。
+//   - ttl 內：直接回傳快取值。
+//   - 過期：先回傳舊值，並在背景重查（同一時間只有一個重查在跑）。
+//   - 從未成功過：回傳錯誤（呼叫端略過該欄位），同樣在背景重查。
+//
+// 記憶體與 IP 只是顯示用；WSL 偶爾讓單次 wsl.exe 卡 30 秒（0xFFFFFFFF 重試），
+// 不能讓整個 Status（也就是整個畫面更新）等它們。
+func (m *Manager) cachedProbe(at *time.Time, val *string, busy *bool, ttl time.Duration, fn func(context.Context) (string, error)) (string, error) {
 	m.probeMu.Lock()
-	if !at.IsZero() && time.Since(*at) < ttl {
-		v := *val
+	have := !at.IsZero()
+	v := *val
+	if have && time.Since(*at) < ttl {
 		m.probeMu.Unlock()
 		return v, nil
 	}
-	m.probeMu.Unlock()
-	out, err := fn()
-	if err == nil {
-		m.probeMu.Lock()
-		*at, *val = time.Now(), out
+	if !m.AsyncProbes {
 		m.probeMu.Unlock()
+		out, err := fn(context.Background())
+		if err == nil {
+			m.probeMu.Lock()
+			*at, *val = time.Now(), out
+			m.probeMu.Unlock()
+		}
+		return out, err
 	}
-	return out, err
+	if !*busy {
+		*busy = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			out, err := fn(ctx)
+			m.probeMu.Lock()
+			defer m.probeMu.Unlock()
+			*busy = false
+			if err == nil {
+				*at, *val = time.Now(), out
+			}
+		}()
+	}
+	m.probeMu.Unlock()
+	if have {
+		return v, nil
+	}
+	return "", errProbePending
 }
+
+var errProbePending = errors.New("probe pending")
 
 func (m *Manager) installedRecently() bool {
 	m.probeMu.Lock()

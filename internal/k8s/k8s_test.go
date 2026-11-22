@@ -462,3 +462,51 @@ func TestInstallPassesPickedPort(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// slowRunner 讓 hostname／systemctl show 卡住，模擬 WSL 偶發的 30 秒 wsl.exe 卡頓。
+type slowRunner struct {
+	*fakeRunner
+	release chan struct{}
+}
+
+func (s *slowRunner) Run(ctx context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
+	key := strings.Join(args, " ")
+	if strings.Contains(key, "hostname") || strings.Contains(key, "MemoryCurrent") {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+	return s.fakeRunner.Run(ctx, stdin, args...)
+}
+
+// 記憶體／IP 只是顯示用：它們卡住時 Status 仍要立刻回 Ready，不能拖住整個畫面更新。
+func TestStatusDoesNotWaitForSlowMemoryAndIPProbes(t *testing.T) {
+	f := newFake()
+	f.running()
+	f.on(d+" test -x /usr/local/bin/k3s", resp{})
+	f.on(d+" systemctl is-active k3s", resp{out: "active\n"})
+	f.on(d+" k3s kubectl get --raw /readyz", resp{out: "ok"})
+	f.on(d+" k3s kubectl get nodes -o json", resp{out: nodesReady})
+	f.on(d+" systemctl show k3s -p MemoryCurrent --value", resp{out: "439762944\n"})
+	f.on(d+" hostname -I", resp{out: "172.20.3.68\n"})
+	sr := &slowRunner{fakeRunner: f, release: make(chan struct{})}
+	m := newMgr(f)
+	m.WSL = sr
+	m.AsyncProbes = true
+	done := make(chan Status, 1)
+	go func() { done <- m.Status(context.Background()) }()
+	select {
+	case st := <-done:
+		if st.State != StateReady || st.NodeName != "framework" {
+			t.Fatalf("%+v", st)
+		}
+		if st.MemoryBytes != 0 {
+			t.Fatalf("memory is unknown until the background probe finishes: %d", st.MemoryBytes)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Status blocked on a slow memory/IP probe")
+	}
+	close(sr.release)
+}

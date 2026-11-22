@@ -137,7 +137,7 @@ func main() {
 			if c, err := config.Load(cfgPath); err == nil {
 				port = c.K8sAPIPort
 			}
-			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle(), APIPort: port}
+			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle(), APIPort: port, AsyncProbes: true}
 		},
 		K8sStream: gui.HostCommandStream{},
 		LAN:       &lan.Manager{Host: lan.NewHost(), Exe: exe},
