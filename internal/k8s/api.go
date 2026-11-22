@@ -120,8 +120,19 @@ func (m *Manager) conn(ctx context.Context) *apiConn {
 	return c
 }
 
+// hasConn 回報憑證是否已在記憶體（不會觸發任何 wsl.exe）。
+func (m *Manager) hasConn() bool {
+	if m.DisableAPI {
+		return false
+	}
+	m.apiMu.Lock()
+	defer m.apiMu.Unlock()
+	return m.apiC != nil
+}
+
 // ResetAPI 丟棄快取的憑證與連線（k3s 重裝／reset 後憑證會變）。
 func (m *Manager) ResetAPI() {
+	m.resetProbes()
 	m.apiMu.Lock()
 	defer m.apiMu.Unlock()
 	m.apiDownUntil = time.Time{}

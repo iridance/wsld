@@ -902,6 +902,17 @@ table[data-testid="skeleton"] tbody td { height: 44px; }
 
 /* Deploy 對話框：對外方式 */
 .expose-group { display: flex; flex-direction: column; gap: 6px; }
+.expose-group.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.expose-group.cols .expose-opt { flex-direction: column; gap: 4px; padding: 10px 12px; position: relative; }
+.expose-group.cols .expose-opt input { position: absolute; top: 12px; right: 12px; margin: 0; }
+.expose-group.cols .expose-opt b { padding-right: 22px; font-size: 13px; }
+.expose-group.cols .expose-opt small { font-size: 12px; }
+dialog.deploy-dialog { width: min(600px, calc(100vw - 32px)); max-width: none; padding: 20px 24px; }
+dialog.deploy-dialog form { gap: 12px; }
+dialog.deploy-dialog .dialog-head { margin-bottom: 10px; }
+.deploy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.deploy-grid.name-row { grid-template-columns: minmax(0, 1fr) 120px; }
+.deploy-grid .field[hidden] { display: none; }
 .expose-opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .expose-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .expose-opt input { margin-top: 3px; }
@@ -910,6 +921,8 @@ table[data-testid="skeleton"] tbody td { height: 44px; }
 
 /* Apps 視圖：一張卡片一個 app（Deployment＋Service＋Pods），外層容器透明，卡片各自浮在頁面上 */
 .k8s-apps { display: flex; flex-direction: column; gap: 12px; }
+.k8s-resources > nav.tabs, .k8s-resources > [data-testid="k8s-view-tabs"] { margin-bottom: 10px; }
+.k8s-ns-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }
 .k8s-viewbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .k8s-showsys { color: var(--muted); }
 .k8s-app-list { display: flex; flex-direction: column; gap: 10px; }

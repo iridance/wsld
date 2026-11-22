@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iridance/wsld/internal/config"
@@ -38,6 +39,10 @@ type Manager struct {
 	Output io.Writer // init 時串流 bootstrap 輸出；nil 則丟棄
 	// NewAPI 在 Start 自動 bootstrap 後重綁 Pinger（埠可能變更）；可選。
 	NewAPI func(cfg config.Config) Pinger
+
+	verMu      sync.Mutex
+	verifiedAt time.Time // 最近一次完整驗證通過的時間
+	distroVer  int
 
 	PingAttempts int                 // 預設 20
 	PingInterval time.Duration       // 預設 500ms
@@ -85,8 +90,27 @@ func (m *Manager) pingInterval() time.Duration {
 }
 
 // Status 盡力收集狀態，不回傳錯誤（細節寫入欄位）。
+//
+// 快速路徑：這個 distro 最近（verifyTTL 內）完整驗證過，且 Docker API 的 ping 仍成功，
+// 就視為 distro 在跑、systemd 與 dockerd 都起來了，不必再開 wsl.exe 查（每次 3 秒以上，WSL 忙時更久）。
+// 不能只看 ping：同一個埠也可能是別的 distro 或其他引擎在回應。
+// ping 失敗或驗證過期，就走完整探測，找出是哪一層沒起來。
 func (m *Manager) Status(ctx context.Context) Status {
 	st := Status{Distro: m.Cfg.Distro, APIEndpoint: m.Cfg.APIEndpoint}
+	var pingErr error
+	if m.API != nil {
+		if pingErr = m.API.Ping(ctx); pingErr == nil {
+			st.APIReachable = true
+			if v, ok := m.verifiedVersion(); ok {
+				st.DistroFound, st.DistroRunning, st.SystemdActive, st.DockerActive = true, true, true, true
+				st.DistroVersion = v
+				return st
+			}
+		} else {
+			st.APIError = pingErr.Error()
+			m.clearVerified()
+		}
+	}
 	if list, err := wsl.ListDistros(ctx, m.WSL); err == nil {
 		if d, ok := wsl.FindDistro(list, m.Cfg.Distro); ok {
 			st.DistroFound = true
@@ -102,14 +126,34 @@ func (m *Manager) Status(ctx context.Context) Status {
 			st.DockerActive = m.dockerActive(ctx)
 		}
 	}
-	if m.API != nil {
-		if err := m.API.Ping(ctx); err != nil {
-			st.APIError = err.Error()
-		} else {
-			st.APIReachable = true
-		}
+	if st.APIReachable && st.DistroFound && st.DistroRunning && st.SystemdActive && st.DockerActive {
+		m.markVerified(st.DistroVersion)
 	}
 	return st
+}
+
+// verifyTTL：完整驗證的有效期。期間內 ping 成功就不再開 wsl.exe 重驗。
+const verifyTTL = 60 * time.Second
+
+func (m *Manager) verifiedVersion() (int, bool) {
+	m.verMu.Lock()
+	defer m.verMu.Unlock()
+	if m.verifiedAt.IsZero() || time.Since(m.verifiedAt) >= verifyTTL {
+		return 0, false
+	}
+	return m.distroVer, true
+}
+
+func (m *Manager) markVerified(version int) {
+	m.verMu.Lock()
+	m.verifiedAt, m.distroVer = time.Now(), version
+	m.verMu.Unlock()
+}
+
+func (m *Manager) clearVerified() {
+	m.verMu.Lock()
+	m.verifiedAt = time.Time{}
+	m.verMu.Unlock()
 }
 
 // systemctl is-system-running：running／degraded 都算可用（degraded 時 exit 1）。

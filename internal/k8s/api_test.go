@@ -271,3 +271,59 @@ func TestAPIFailureEntersCooldownUntilReset(t *testing.T) {
 		t.Fatal("reset should clear the cooldown")
 	}
 }
+
+// 憑證已快取且 /readyz 通了：輪詢不再開任何 wsl.exe（不查 list／test／is-active／記憶體／IP）。
+func TestStatusPollingUsesNoWSLOnceAPIIsUp(t *testing.T) {
+	p := newTestPKI(t)
+	srv, _ := startAPI(t, p, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, "ok")
+		case "/api/v1/nodes":
+			fmt.Fprint(w, nodesReady)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	f := newFake()
+	f.running()
+	f.on(d+" test -x /usr/local/bin/k3s", resp{})
+	f.on(d+" systemctl is-active k3s", resp{out: "active\n"})
+	f.on(d+" systemctl show k3s -p MemoryCurrent --value", resp{out: "439762944\n"})
+	f.on(d+" hostname -I", resp{out: "172.20.3.68\n"})
+	m := apiMgr(f, p.kubeconfig(srv.URL))
+	if st := m.Status(context.Background()); st.State != StateReady || st.MemoryBytes != 439762944 {
+		t.Fatalf("first poll: %+v", st)
+	}
+	f.mu.Lock()
+	f.calls = nil
+	f.mu.Unlock()
+	st := m.Status(context.Background())
+	if st.State != StateReady || !st.Ready || st.MemoryBytes != 439762944 || st.NodeName != "framework" {
+		t.Fatalf("second poll: %+v", st)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("steady-state polling must not run wsl.exe: %v", f.calls)
+	}
+}
+
+// API 掛了就落回完整探測（distro 停了要看得出來，且不能喚醒它）。
+func TestStatusFallsBackWhenAPIGoesDown(t *testing.T) {
+	p := newTestPKI(t)
+	srv, _ := startAPI(t, p, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })
+	f := newFake()
+	f.running()
+	f.on(d+" k3s kubectl get --raw /readyz", resp{out: "ok"})
+	f.on(d+" k3s kubectl get nodes -o json", resp{out: nodesReady})
+	f.on(d+" test -x /usr/local/bin/k3s", resp{})
+	f.on(d+" systemctl is-active k3s", resp{out: "active\n"})
+	f.on(d+" systemctl show k3s -p MemoryCurrent --value", resp{out: "1\n"})
+	f.on(d+" hostname -I", resp{out: "172.20.3.68\n"})
+	m := apiMgr(f, p.kubeconfig(srv.URL))
+	m.Status(context.Background())
+	srv.Close()
+	f.on("--list --verbose", resp{out: "  NAME            STATE           VERSION\n* Ubuntu-26.04    Stopped         2\n"})
+	if st := m.Status(context.Background()); st.State != StateStopped {
+		t.Fatalf("State = %q", st.State)
+	}
+}

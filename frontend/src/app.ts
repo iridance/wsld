@@ -403,6 +403,8 @@ export class App {
   private noticeTimer?: number;
   private usageTimer?: number;
   private refreshAbort?: AbortController;
+  /** 有請求還在飛：定時輪詢不得打斷它（wsl.exe 慢於輪詢間隔時，打斷＝每次都被殺掉、永遠等不到結果）。 */
+  private refreshInFlight = false;
   private refreshGen = 0;
   private root: HTMLElement;
 
@@ -461,7 +463,7 @@ export class App {
     if (this.timer) window.clearInterval(this.timer);
     const sec = Math.max(1, this.st.meta.config.refresh_interval_sec || 3);
     this.timer = window.setInterval(() => {
-      if (!this.st.paused && this.st.busy.size === 0) void this.refresh();
+      if (!this.st.paused && this.st.busy.size === 0 && !this.refreshInFlight) void this.refresh();
     }, sec * 1000);
   }
 
@@ -485,6 +487,7 @@ export class App {
     this.refreshAbort = ac;
     const gen = ++this.refreshGen;
     const { signal } = ac;
+    this.refreshInFlight = true;
     try {
       // Kubernetes 頁不依賴 Docker 引擎狀態：與 /api/k8s 並行，不讓兩段 wsl.exe 查詢串行相加
       const k8sLoad = this.st.view === "kubernetes" ? this.loadKubernetes(signal) : undefined;
@@ -525,6 +528,8 @@ export class App {
       if (signal.aborted || gen !== this.refreshGen) return;
       this.st.lastError = e instanceof ApiError ? e.message : String(e);
       if (this.st.status) this.st.status = { ...this.st.status, ready: false, APIReachable: false };
+    } finally {
+      if (gen === this.refreshGen) this.refreshInFlight = false;
     }
     if (signal.aborted || gen !== this.refreshGen) return;
     this.st.loaded.add(this.st.view);
@@ -3013,7 +3018,7 @@ export class App {
     // 沒有資源可列時（未安裝／已關閉／啟動中）不顯示空白的列表面板
     if (k.enabled && state === "ready" && !op) {
       list.style.display = "";
-      list.classList.toggle("cards", this.k8sView === "apps");
+      list.classList.add("cards"); // 容器透明，Apps 卡片與 Namespaces 面板各自浮在頁面上
       list.replaceChildren(this.k8sResources());
     } else {
       list.style.display = "none";
@@ -3176,7 +3181,7 @@ export class App {
   private k8sApplyOutput?: string;
 
   private buildDeployDialog(): HTMLDialogElement {
-    const d = el("dialog", { "data-testid": "deploy-dialog" }) as HTMLDialogElement;
+    const d = el("dialog", { class: "deploy-dialog", "data-testid": "deploy-dialog" }) as HTMLDialogElement;
     const mk = (testid: string, extra: Record<string, string> = {}) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid, ...extra }) as HTMLInputElement;
     const image = mk("deploy-image", { list: "deploy-images", placeholder: "myapp:latest" });
     const datalist = el("datalist", { id: "deploy-images" });
@@ -3187,7 +3192,7 @@ export class App {
     const hostPort = mk("deploy-hostport", { inputmode: "numeric", placeholder: t("gui.k8s.deploy.same_as_container") });
     type Expose = "loadbalancer" | "nodeport" | "none";
     const exposeRadios = {} as Record<Expose, HTMLInputElement>;
-    const exposeGroup = el("div", { class: "expose-group", role: "radiogroup", "aria-label": t("gui.k8s.deploy.expose"), "data-testid": "deploy-expose" });
+    const exposeGroup = el("div", { class: "expose-group cols", role: "radiogroup", "aria-label": t("gui.k8s.deploy.expose"), "data-testid": "deploy-expose" });
     const exposeOpts: [Expose, string, string][] = [
       ["loadbalancer", "gui.k8s.deploy.expose_lb", "gui.k8s.deploy.expose_lb_d"],
       ["nodeport", "gui.k8s.deploy.expose_np", "gui.k8s.deploy.expose_np_d"],
@@ -3237,13 +3242,15 @@ export class App {
     cancel.onclick = () => d.close();
     const form = el("form", { method: "dialog", class: "add-machine-form" },
       el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.image") }), textField(image), datalist),
-      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.name") }), textField(name)),
-      el("div", { class: "row" },
-        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.port") }), textField(port)),
+      el("div", { class: "deploy-grid name-row" },
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.name") }), textField(name)),
         el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.replicas") }), textField(replicas)),
       ),
       el("div", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.expose") }), exposeGroup),
-      hostField,
+      el("div", { class: "deploy-grid" },
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.port") }), textField(port)),
+        hostField,
+      ),
       el("p", { class: "field-hint", text: t("gui.k8s.deploy.hint") }),
       err,
       el("div", { class: "row" }, cancel, submit),
@@ -3368,13 +3375,14 @@ export class App {
       })),
       onSelect: (id) => this.k8sSelectGroup(id as K8sGroup),
     });
-    wrap.append(bar);
+    const panel = el("div", { class: "k8s-ns-panel" }, bar);
+    wrap.append(panel);
     const grid = el("div", { class: "k8s-ns-grid", "data-testid": "k8s-ns-grid" });
     for (const ns of groups[this.k8sGroup]) grid.append(this.k8sNsCard(ns));
     if (this.k8sGroup === "workloads" && groups.workloads.length === 1 && groups.workloads[0] === "default") {
       grid.append(el("div", { class: "k8s-ns-hint", "data-testid": "k8s-ns-hint" }, el("strong", { text: t("gui.k8s.ns.hint_title") }), el("span", { text: t("gui.k8s.ns.hint_body") })));
     }
-    wrap.append(grid);
+    panel.append(grid);
     return wrap;
   }
 

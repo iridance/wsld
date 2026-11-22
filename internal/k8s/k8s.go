@@ -73,6 +73,14 @@ type Manager struct {
 	// apiDownUntil：API 失敗後的冷卻期，期間直接走 kubectl，避免每次輪詢都重試（並多讀一次 kubeconfig）。
 	apiDownUntil time.Time
 
+	// 輪詢用的快取：少打 wsl.exe（每次都要 3 秒以上，WSL 忙時更久）。
+	probeMu     sync.Mutex
+	installedAt time.Time // 最近一次確認 k3s 已安裝的時間
+	memAt       time.Time
+	memCache    string
+	ipAt        time.Time
+	ipOut       string
+
 	ReadyAttempts int           // 預設 120
 	ReadyInterval time.Duration // 預設 1s
 	Sleep         func(time.Duration)
@@ -155,27 +163,48 @@ func (m *Manager) print(s string) {
 // Status 盡力收集狀態。distro 未執行時不喚醒它（GUI 會輪詢）。
 func (m *Manager) Status(ctx context.Context) Status {
 	st := Status{Distro: m.Distro, State: StateStopped, Endpoint: APIServer(m.apiPort()), Context: ContextName(m.Distro)}
-	list, err := wsl.ListDistros(ctx, m.WSL)
-	if err != nil {
-		st.State = StateUnknown
-		return st
-	}
-	d, ok := wsl.FindDistro(list, m.Distro)
-	if !ok || !strings.EqualFold(d.State, "Running") {
-		return st
-	}
-	if _, err := m.root(ctx, nil, "test", "-x", k3sBin); err != nil {
-		// 只有 test 本身以 1 結束才代表檔案不存在；wsl.exe 逾時等其他錯誤是「不知道」。
-		if wsl.ExitCode(err) == 1 {
-			st.State = StateNotInstalled
-		} else {
-			st.State = StateUnknown
+	// 快速路徑：憑證已在記憶體、API 的 /readyz 直接回 ok，就代表 distro 在跑、k3s 已安裝且 active，
+	// 一個 wsl.exe 都不必打。任何失敗都落回下面的完整探測。
+	fast := false
+	if m.hasConn() {
+		if out, ok := m.apiGet(ctx, "/readyz"); ok && strings.TrimSpace(out) == "ok" {
+			fast = true
 		}
-		return st
 	}
-	st.Installed = true
+	if fast {
+		st.Installed, st.Active, st.State = true, true, StateStarting
+		m.markInstalled()
+	} else {
+		list, err := wsl.ListDistros(ctx, m.WSL)
+		if err != nil {
+			st.State = StateUnknown
+			return st
+		}
+		d, ok := wsl.FindDistro(list, m.Distro)
+		if !ok || !strings.EqualFold(d.State, "Running") {
+			return st
+		}
+		if !m.installedRecently() {
+			if _, err := m.root(ctx, nil, "test", "-x", k3sBin); err != nil {
+				// 只有 test 本身以 1 結束才代表檔案不存在；wsl.exe 逾時等其他錯誤是「不知道」。
+				if wsl.ExitCode(err) == 1 {
+					st.State = StateNotInstalled
+				} else {
+					st.State = StateUnknown
+				}
+				return st
+			}
+			m.markInstalled()
+		}
+		st.Installed = true
+	}
 	// is-active 未啟動時以非 0 結束但仍會印出狀態字，所以只看輸出；沒有輸出＝查詢失敗。
-	out, _ := m.root(ctx, nil, "systemctl", "is-active", "k3s")
+	var out string
+	if fast {
+		out = "active"
+	} else {
+		out, _ = m.root(ctx, nil, "systemctl", "is-active", "k3s")
+	}
 	switch strings.TrimSpace(out) {
 	case "active":
 		st.Active = true
@@ -192,8 +221,10 @@ func (m *Manager) Status(ctx context.Context) Status {
 		return st
 	}
 	st.State = StateStarting
-	if out, err := m.get(ctx, "/readyz", "get", "--raw", "/readyz"); err != nil || strings.TrimSpace(out) != "ok" {
-		return st
+	if !fast {
+		if out, err := m.get(ctx, "/readyz", "get", "--raw", "/readyz"); err != nil || strings.TrimSpace(out) != "ok" {
+			return st
+		}
 	}
 	st.Ready = true
 	// 三個查詢互不相依，每個都是一次 wsl.exe：並行以縮短輪詢耗時。
@@ -205,11 +236,17 @@ func (m *Manager) Status(ctx context.Context) Status {
 		defer wg.Done()
 		nodeOut, nodeErr = m.get(ctx, "/api/v1/nodes", "get", "nodes", "-o", "json")
 	}()
+	// 記憶體與 IP 變動慢：各自快取一段時間，不必每次輪詢都開 wsl.exe。
 	go func() {
 		defer wg.Done()
-		memOut, memErr = m.root(ctx, nil, "systemctl", "show", "k3s", "-p", "MemoryCurrent", "--value")
+		memOut, memErr = m.cachedProbe(&m.memAt, &m.memCache, memTTL, func() (string, error) {
+			return m.root(ctx, nil, "systemctl", "show", "k3s", "-p", "MemoryCurrent", "--value")
+		})
 	}()
-	go func() { defer wg.Done(); ipOut, ipErr = m.root(ctx, nil, "hostname", "-I") }()
+	go func() {
+		defer wg.Done()
+		ipOut, ipErr = m.cachedProbe(&m.ipAt, &m.ipOut, ipTTL, func() (string, error) { return m.root(ctx, nil, "hostname", "-I") })
+	}()
 	wg.Wait()
 	if nodeErr == nil {
 		if n, err := ParseNode(nodeOut); err == nil {
@@ -228,6 +265,49 @@ func (m *Manager) Status(ctx context.Context) Status {
 		st.State = StateReady
 	}
 	return st
+}
+
+const (
+	memTTL       = 30 * time.Second
+	ipTTL        = 60 * time.Second
+	installedTTL = 60 * time.Second
+)
+
+// cachedProbe 在 ttl 內回傳上次成功的輸出；過期才執行 fn（失敗不快取）。
+func (m *Manager) cachedProbe(at *time.Time, val *string, ttl time.Duration, fn func() (string, error)) (string, error) {
+	m.probeMu.Lock()
+	if !at.IsZero() && time.Since(*at) < ttl {
+		v := *val
+		m.probeMu.Unlock()
+		return v, nil
+	}
+	m.probeMu.Unlock()
+	out, err := fn()
+	if err == nil {
+		m.probeMu.Lock()
+		*at, *val = time.Now(), out
+		m.probeMu.Unlock()
+	}
+	return out, err
+}
+
+func (m *Manager) installedRecently() bool {
+	m.probeMu.Lock()
+	defer m.probeMu.Unlock()
+	return !m.installedAt.IsZero() && time.Since(m.installedAt) < installedTTL
+}
+
+func (m *Manager) markInstalled() {
+	m.probeMu.Lock()
+	m.installedAt = time.Now()
+	m.probeMu.Unlock()
+}
+
+// resetProbes 清掉輪詢快取（安裝／移除／reset／啟停後狀態會變）。
+func (m *Manager) resetProbes() {
+	m.probeMu.Lock()
+	defer m.probeMu.Unlock()
+	m.installedAt, m.memAt, m.ipAt = time.Time{}, time.Time{}, time.Time{}
 }
 
 // Node 是 `kubectl get nodes -o json` 的精簡結果（單節點）。

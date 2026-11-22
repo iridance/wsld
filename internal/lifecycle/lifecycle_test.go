@@ -540,3 +540,24 @@ func TestStartResetsFailedStateBeforeStartingDocker(t *testing.T) {
 		t.Fatalf("reset-failed must run before start: reset=%d start=%d", reset, start)
 	}
 }
+
+// 完整驗證過一次之後，ping 仍成功時輪詢不再開 wsl.exe；ping 失敗就回到完整探測。
+func TestStatusSteadyStateSkipsWSLProbes(t *testing.T) {
+	fr := &fakeRunner{resp: map[string][]resp{
+		"--list --verbose": {{out: utf16(listUbuntuRunning)}},
+		"-d Ubuntu-26.04 -- systemctl is-system-running": {{out: "running\n"}},
+		"-d Ubuntu-26.04 -- systemctl is-active docker":  {{out: "active\n"}},
+	}}
+	m := newMgr(fr, &fakePinger{})
+	if st := m.Status(context.Background()); !st.Ready() {
+		t.Fatalf("first: %+v", st)
+	}
+	n := len(fr.calls)
+	st := m.Status(context.Background())
+	if !st.Ready() || st.DistroVersion != 2 {
+		t.Fatalf("second: %+v", st)
+	}
+	if len(fr.calls) != n {
+		t.Fatalf("steady-state poll must not run wsl.exe: %v", fr.calls[n:])
+	}
+}
