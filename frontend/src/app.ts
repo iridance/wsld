@@ -3430,6 +3430,7 @@ export class App {
     toggle.onclick = () => {
       if (open) this.k8sExpandedApps.delete(id);
       else this.k8sExpandedApps.add(id);
+      toggle.blur(); // renderKubernetes 會略過仍聚焦且 aria-expanded=true 的元素，不先失焦就無法折疊
       this.renderKubernetes();
     };
     const statusText = a.status === "stopped" ? t("gui.k8s.apps.status.stopped") : fmt(t(`gui.k8s.apps.status.${a.status}`), a.ready);

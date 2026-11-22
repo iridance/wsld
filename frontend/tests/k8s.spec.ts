@@ -741,6 +741,17 @@ test("an app row expands to its pods and scale controls", async ({ page }) => {
   await expect(page.getByTestId("panel")).toBeVisible();
 });
 
+test("an expanded app row collapses again when its toggle is clicked", async ({ page }) => {
+  await goK8s(page, "apps");
+  await startCluster(page);
+  const row = appRow(page, "poc-web");
+  await row.getByTestId("btn-app-expand").click();
+  await expect(row.getByTestId("app-detail")).toBeVisible();
+  await row.getByTestId("btn-app-expand").click(); // 按鈕仍有焦點且 aria-expanded=true：重繪不能被略過
+  await expect(row.getByTestId("app-detail")).toHaveCount(0);
+  await expect(row).toHaveAttribute("data-expanded", "false");
+});
+
 test("an unexposed app offers Add URL; a fixed localhost port becomes its link, a taken port moves on", async ({ page }) => {
   await goK8s(page, "apps");
   await startCluster(page);
