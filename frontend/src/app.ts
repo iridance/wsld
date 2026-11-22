@@ -3013,6 +3013,7 @@ export class App {
     // 沒有資源可列時（未安裝／已關閉／啟動中）不顯示空白的列表面板
     if (k.enabled && state === "ready" && !op) {
       list.style.display = "";
+      list.classList.toggle("cards", this.k8sView === "apps");
       list.replaceChildren(this.k8sResources());
     } else {
       list.style.display = "none";
@@ -3344,7 +3345,7 @@ export class App {
         this.renderKubernetes();
       },
     });
-    wrap.append(viewBar);
+    wrap.append(this.k8sView === "apps" ? el("div", { class: "k8s-viewbar" }, viewBar, this.k8sShowSystemToggle()) : viewBar);
     if (this.k8sView === "apps") {
       wrap.append(this.k8sAppsView());
       return wrap;
@@ -3382,6 +3383,18 @@ export class App {
   private k8sAppsView(): HTMLElement {
     const wrap = el("div", { class: "k8s-apps", "data-testid": "k8s-apps" });
     const apps = buildApps(this.k8sRes(), this.k8sShowSystem);
+    if (apps.length === 0) {
+      wrap.append(this.k8sDeployEmpty());
+      return wrap;
+    }
+    const cards = el("div", { class: "k8s-app-list", role: "list" });
+    for (const a of apps) cards.append(this.k8sAppCard(a));
+    wrap.append(cards);
+    return wrap;
+  }
+
+  /** 顯示系統元件的開關：與 Apps／Namespaces 頁籤同一列，靠右。 */
+  private k8sShowSystemToggle(): HTMLElement {
     const showSys = el("input", { type: "checkbox", "data-testid": "k8s-show-system" }) as HTMLInputElement;
     showSys.checked = this.k8sShowSystem;
     showSys.onchange = () => {
@@ -3390,25 +3403,10 @@ export class App {
       showSys.blur(); // 輪詢重繪會略過仍有 input 焦點的清單
       this.renderKubernetes();
     };
-    wrap.append(el("div", { class: "k8s-apps-head" }, el("label", { class: "k8s-opt" }, showSys, t("gui.k8s.apps.show_system"))));
-    const table = el("div", { class: "k8s-apps-table", role: "table" },
-      el("div", { class: "k8s-app-row head", role: "row" },
-        el("span", { text: t("gui.k8s.apps.col.app") }),
-        el("span", { text: t("gui.k8s.apps.col.status") }),
-        el("span", { text: t("gui.k8s.apps.col.url") }),
-        el("span"),
-      ),
-    );
-    if (apps.length === 0) {
-      table.append(this.k8sDeployEmpty());
-    } else {
-      for (const a of apps) table.append(...this.k8sAppRows(a));
-    }
-    wrap.append(table);
-    return wrap;
+    return el("label", { class: "k8s-opt k8s-showsys" }, showSys, t("gui.k8s.apps.show_system"));
   }
 
-  private k8sAppRows(a: K8sApp): HTMLElement[] {
+  private k8sAppCard(a: K8sApp): HTMLElement {
     const key = `k8s-app:${a.namespace}/${a.name}`;
     const id = `${a.namespace}/${a.name}`;
     const open = this.k8sExpandedApps.has(id);
@@ -3444,17 +3442,18 @@ export class App {
     rm.disabled = this.st.busy.has(key);
     rm.onclick = () => void this.k8sDeleteApp(a);
 
-    const row = el("div", { class: "k8s-app-row", role: "row", "data-testid": "k8s-app-row", "data-name": a.name, "data-ns": a.namespace, "data-status": a.status, "data-expanded": String(open) },
-      el("span", { class: "app-name-cell" }, toggle,
-        el("span", { class: "app-name-wrap" },
-          el("span", { class: "app-name", "data-testid": "app-name", text: a.name }),
-          el("span", { class: "app-sub muted", "data-testid": "app-sub", text: [a.image, a.namespace].filter(Boolean).join(" · "), title: a.image }),
-        )),
-      status, urlCell, el("span", { class: "app-actions" }, restart, rm),
+    const card = el("div", { class: "k8s-app-card k8s-app-row", role: "listitem", "data-testid": "k8s-app-row", "data-name": a.name, "data-ns": a.namespace, "data-status": a.status, "data-expanded": String(open) },
+      el("div", { class: "k8s-app-main" },
+        el("span", { class: "app-name-cell" }, toggle,
+          el("span", { class: "app-name-wrap" },
+            el("span", { class: "app-name", "data-testid": "app-name", text: a.name }),
+            el("span", { class: "app-sub muted", "data-testid": "app-sub", text: [a.image, a.namespace].filter(Boolean).join(" · "), title: a.image }),
+          )),
+        status, urlCell, el("span", { class: "app-actions" }, restart, rm),
+      ),
     );
-    const out: HTMLElement[] = [row];
-    if (open) out.push(this.k8sAppDetail(a));
-    return out;
+    if (open) card.append(this.k8sAppDetail(a));
+    return card;
   }
 
   /** 展開的一列：副本數調整與 Pods（Logs／Exec）。 */
