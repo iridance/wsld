@@ -340,3 +340,112 @@ func TestListExtrasAndDeploymentDetail(t *testing.T) {
 		t.Fatal("invalid name must be rejected")
 	}
 }
+
+// ---- Deploy／Apply ---------------------------------------------------------
+
+func TestDeploySpecNormalize(t *testing.T) {
+	ok, err := DeploySpec{Image: "myapp:latest", Name: "myapp", Port: 8080}.Normalize()
+	if err != nil || ok.Namespace != "default" || ok.Replicas != 1 {
+		t.Fatalf("defaults not applied: %+v %v", ok, err)
+	}
+	bad := []DeploySpec{
+		{Image: "x", Name: "-flag"},
+		{Image: "x", Name: "Has.Dot"},
+		{Image: "--privileged", Name: "a"},
+		{Image: "a b", Name: "a"},
+		{Image: "x", Name: "a", Port: 70000},
+		{Image: "x", Name: "a", Replicas: 101},
+		{Image: "x", Name: "a", Namespace: "BAD NS"},
+	}
+	for _, s := range bad {
+		if _, err := s.Normalize(); err == nil {
+			t.Errorf("expected rejection for %+v", s)
+		}
+	}
+}
+
+func TestDeployAppliesManifestAndReadsNodePort(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	f.on(d+" k3s kubectl get service myapp -n default -o json", resp{out: `{"metadata":{"name":"myapp","namespace":"default"},"spec":{"type":"NodePort","ports":[{"port":8080,"nodePort":31234,"protocol":"TCP"}]}}`})
+	res, err := newMgr(f).Deploy(context.Background(), DeploySpec{Image: "myapp:latest", Name: "myapp", Port: 8080, Replicas: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NodePort != 31234 || res.Name != "myapp" || res.Namespace != "default" {
+		t.Fatalf("result = %+v", res)
+	}
+	m := f.stdin[d+" k3s kubectl apply -f -"]
+	for _, want := range []string{`"kind":"Deployment"`, `"kind":"Service"`, `"replicas":2`, `"image":"myapp:latest"`, `"imagePullPolicy":"IfNotPresent"`, `"type":"NodePort"`} {
+		if !strings.Contains(m, want) {
+			t.Errorf("manifest missing %s: %s", want, m)
+		}
+	}
+}
+
+func TestDeployWithoutPortCreatesNoService(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	res, err := newMgr(f).Deploy(context.Background(), DeploySpec{Image: "worker:1", Name: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NodePort != 0 || strings.Contains(f.stdin[d+" k3s kubectl apply -f -"], `"kind":"Service"`) {
+		t.Fatalf("unexpected service: %+v", res)
+	}
+}
+
+func TestDeployCreatesNonDefaultNamespaceFirst(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl apply -f -", resp{})
+	if _, err := newMgr(f).Deploy(context.Background(), DeploySpec{Image: "w:1", Name: "w", Namespace: "staging"}); err != nil {
+		t.Fatal(err)
+	}
+	applies := 0
+	for _, c := range f.calls {
+		if strings.HasSuffix(c, "apply -f -") {
+			applies++
+		}
+	}
+	if applies != 2 {
+		t.Fatalf("want namespace apply + workload apply, got %d: %v", applies, f.calls)
+	}
+}
+
+func TestApplyRejectsEmptyAndOversized(t *testing.T) {
+	m := newMgr(newFake())
+	if _, err := m.Apply(context.Background(), []byte("  \n")); err == nil {
+		t.Error("empty manifest must be rejected")
+	}
+	if _, err := m.Apply(context.Background(), make([]byte, MaxApplyBytes+1)); err == nil {
+		t.Error("oversized manifest must be rejected")
+	}
+}
+
+func TestApplyPipesManifestToKubectl(t *testing.T) {
+	f := newFake()
+	f.on(d+" k3s kubectl apply -f -", resp{out: "deployment.apps/x created\n"})
+	out, err := newMgr(f).Apply(context.Background(), []byte("kind: Deployment\n"))
+	if err != nil || !strings.Contains(out, "created") || f.stdin[d+" k3s kubectl apply -f -"] != "kind: Deployment\n" {
+		t.Fatalf("out=%q err=%v stdin=%q", out, err, f.stdin[d+" k3s kubectl apply -f -"])
+	}
+}
+
+func TestStartReportsStepsInOrder(t *testing.T) {
+	f := newFake()
+	f.running()
+	f.on(d+" test -x /usr/local/bin/k3s", resp{})
+	f.on(d+" systemctl is-active docker", resp{out: "active\n"})
+	f.on(d+" systemctl reset-failed k3s", resp{})
+	f.on(d+" systemctl start k3s", resp{})
+	f.on(d+" k3s kubectl get --raw /readyz", resp{out: "ok"})
+	f.on(d+" k3s kubectl get nodes -o json", resp{out: nodesReady})
+	var steps []string
+	ctx := WithProgress(context.Background(), func(s string) { steps = append(steps, s) })
+	if err := newMgr(f).Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(steps, ",") != "engine,install,node" {
+		t.Fatalf("steps = %v", steps)
+	}
+}

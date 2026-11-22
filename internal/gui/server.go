@@ -118,11 +118,13 @@ type Server struct {
 
 	lanMu sync.Mutex // 序列化區網轉發同步（背景迴圈與 API 共用）
 
-	k8sMu   sync.Mutex // 保護下列背景作業狀態（同一時間只跑一個 k3s 作業）
-	k8sOp   string
-	k8sErr  string
-	k8sWarn string
-	k8sLast map[string]k8s.Status // 各機器最近一次確定的狀態（查詢逾時時沿用）
+	k8sMu      sync.Mutex // 保護下列背景作業狀態（同一時間只跑一個 k3s 作業）
+	k8sOp      string
+	k8sErr     string
+	k8sWarn    string
+	k8sStep    string                // 啟動作業目前所在步驟（k8s.Step*）
+	k8sErrStep string                // 上一次失敗發生在哪個步驟
+	k8sLast    map[string]k8s.Status // 各機器最近一次確定的狀態（查詢逾時時沿用）
 
 	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC
 	fwPending atomic.Bool
@@ -207,6 +209,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/k8s/reset", s.handleK8sReset)
 	mux.HandleFunc("POST /api/k8s/kubeconfig", s.handleK8sKubeconfig)
 	mux.HandleFunc("POST /api/k8s/open", s.handleK8sOpen)
+	mux.HandleFunc("POST /api/k8s/deploy", s.handleK8sDeploy)
+	mux.HandleFunc("POST /api/k8s/apply", s.handleK8sApply)
 	mux.HandleFunc("GET /api/k8s/namespaces", s.handleK8sNamespaces)
 	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("GET /api/k8s/deployments", s.handleK8sDeployments)

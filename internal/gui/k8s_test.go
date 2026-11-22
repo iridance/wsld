@@ -594,3 +594,108 @@ func TestK8sExtrasAndDeploymentDetail(t *testing.T) {
 		t.Fatalf("missing deployment = %d", resp.StatusCode)
 	}
 }
+
+// ---- 單節點流程：步驟進度、add_context、Deploy／Apply ---------------------
+
+func TestK8sOnReportsStepsAndFailedStep(t *testing.T) {
+	k := newK8sEnv(t)
+	k.cluster.Delay = 40 * time.Millisecond
+	k.req(t, "POST", "/api/k8s/on", "")
+	seen := map[string]bool{}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		r := k.get(t)
+		if r.Op == "" {
+			break
+		}
+		if len(r.Steps) != 4 || r.Steps[0] != k8s.StepEngine || r.Steps[3] != k8s.StepContext {
+			t.Fatalf("steps = %v", r.Steps)
+		}
+		seen[r.Step] = true
+		time.Sleep(5 * time.Millisecond)
+	}
+	k.waitIdle(t)
+	if !seen[k8s.StepInstall] && !seen[k8s.StepNode] {
+		t.Fatalf("polling should observe at least one in-flight step: %v", seen)
+	}
+
+	k2 := newK8sEnv(t)
+	k2.cluster.FailStart = true
+	k2.req(t, "POST", "/api/k8s/on", "")
+	r := k2.waitIdle(t)
+	if r.Error == "" || r.ErrorStep != k8s.StepNode || r.Step != "" {
+		t.Fatalf("failure must name the step it stopped at: %+v", r)
+	}
+}
+
+func TestK8sOnAddContextMergesKubeconfig(t *testing.T) {
+	k := newK8sEnv(t)
+	k.req(t, "POST", "/api/k8s/on?add_context=1", "")
+	r := k.waitIdle(t)
+	if r.Error != "" || r.Warning != "" {
+		t.Fatalf("%+v", r)
+	}
+	if !k8s.HasExportedContext(k.kube, "Ubuntu-26.04") {
+		t.Fatal("add_context=1 must merge the context into the Windows kubeconfig")
+	}
+}
+
+func TestK8sDeployCreatesWorkloadAndReturnsNodePort(t *testing.T) {
+	k := newK8sEnv(t)
+	k.enable(t)
+	resp, b := k.req(t, "POST", "/api/k8s/deploy", `{"image":"myapp:latest","name":"myapp","port":8080,"replicas":2}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("deploy = %d %s", resp.StatusCode, b)
+	}
+	var res k8s.DeployResult
+	_ = json.Unmarshal(b, &res)
+	if res.Name != "myapp" || res.Namespace != "default" || res.NodePort == 0 {
+		t.Fatalf("%+v", res)
+	}
+	var pods []k8s.Pod
+	_, b = k.req(t, "GET", "/api/k8s/pods?ns=default", "")
+	_ = json.Unmarshal(b, &pods)
+	n := 0
+	for _, p := range pods {
+		if strings.HasPrefix(p.Name, "myapp-") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("want 2 myapp pods, got %d", n)
+	}
+}
+
+func TestK8sDeployValidationAndRequiresEnabled(t *testing.T) {
+	k := newK8sEnv(t)
+	if resp, _ := k.req(t, "POST", "/api/k8s/deploy", `{"image":"a","name":"a"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("disabled deploy = %d", resp.StatusCode)
+	}
+	k.enable(t)
+	for _, body := range []string{`{`, `{"image":"--privileged","name":"a"}`, `{"image":"a","name":"Bad.Name"}`, `{"image":"a","name":"a","port":99999}`, `{"image":"a","name":"a","replicas":500}`} {
+		if resp, b := k.req(t, "POST", "/api/k8s/deploy", body); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s → %d %s", body, resp.StatusCode, b)
+		}
+	}
+}
+
+func TestK8sApply(t *testing.T) {
+	k := newK8sEnv(t)
+	if resp, _ := k.req(t, "POST", "/api/k8s/apply", "kind: Deployment"); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("disabled apply = %d", resp.StatusCode)
+	}
+	k.enable(t)
+	resp, b := k.req(t, "POST", "/api/k8s/apply", "apiVersion: apps/v1\nkind: Deployment\n")
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "created") {
+		t.Fatalf("apply = %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := k.req(t, "POST", "/api/k8s/apply", "  \n"); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty = %d", resp.StatusCode)
+	}
+	if resp, _ := k.req(t, "POST", "/api/k8s/apply", "this is invalid"); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("kubectl error must surface as 502, got %d", resp.StatusCode)
+	}
+	if resp, _ := k.req(t, "POST", "/api/k8s/apply", strings.Repeat("x", k8s.MaxApplyBytes+10)); resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized = %d", resp.StatusCode)
+	}
+}

@@ -233,12 +233,33 @@ export interface K8sStatus {
   context: string;
 }
 
+export type K8sStep = "engine" | "install" | "node" | "context";
+
+export interface K8sDeployRequest {
+  image: string;
+  name: string;
+  namespace?: string;
+  port?: number;
+  replicas?: number;
+}
+
+export interface K8sDeployResult {
+  namespace: string;
+  name: string;
+  node_port?: number;
+}
+
 export interface K8sInfo {
   /** 目前開啟 k8s 的 machine；沒有人開啟時為按啟動會使用的 primary machine */
   machine: string;
   enabled: boolean;
   /** 背景作業進行中：starting | stopping | resetting；空 = 閒置 */
   op?: "starting" | "stopping" | "resetting";
+  /** starting 作業目前所在步驟（steps 之一）；steps 是完整順序 */
+  step?: K8sStep;
+  steps: K8sStep[];
+  /** 上一次作業失敗時所在步驟（與 error 同時出現） */
+  error_step?: K8sStep;
   error?: string;
   warning?: string;
   status: K8sStatus;
@@ -402,7 +423,7 @@ async function call<T>(method: string, path: string, body?: unknown, asText = fa
     resp = await fetch(cfg.base + path, {
       method,
       headers: headers(),
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
       signal,
     });
   } catch (e) {
@@ -511,8 +532,9 @@ export const api = {
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),
   k8s: (signal?: AbortSignal) => call<K8sInfo>("GET", "/api/k8s", undefined, false, signal),
-  k8sOn: (opts: { machine?: string; switch?: boolean } = {}) => {
+  k8sOn: (opts: { machine?: string; switch?: boolean; addContext?: boolean } = {}) => {
     const q = new URLSearchParams();
+    if (opts.addContext) q.set("add_context", "1");
     if (opts.machine) q.set("machine", opts.machine);
     if (opts.switch) q.set("switch", "1");
     const qs = q.toString();
@@ -534,6 +556,8 @@ export const api = {
     call<void>("POST", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/restart`),
   k8sScale: (ns: string, name: string, replicas: number) =>
     call<void>("POST", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/scale`, { replicas }),
+  k8sDeploy: (req: K8sDeployRequest) => call<K8sDeployResult>("POST", "/api/k8s/deploy", req),
+  k8sApply: (manifest: string) => call<{ output: string }>("POST", "/api/k8s/apply", manifest),
   k8sOpen: (port: number) => call<{ url: string }>("POST", "/api/k8s/open", { port }),
   k8sLogsUrl: (ns: string, pod: string, tail = 100) =>
     wsUrl(`/api/k8s/pods/${encodeURIComponent(ns)}/${encodeURIComponent(pod)}/logs/stream`, { tail }),

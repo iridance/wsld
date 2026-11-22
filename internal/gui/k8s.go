@@ -35,6 +35,8 @@ type K8s interface {
 	Delete(ctx context.Context, kind, ns, name string) error
 	RestartDeployment(ctx context.Context, ns, name string) error
 	ScaleDeployment(ctx context.Context, ns, name string, replicas int) error
+	Deploy(ctx context.Context, spec k8s.DeploySpec) (k8s.DeployResult, error)
+	Apply(ctx context.Context, manifest []byte) (string, error)
 }
 
 // CommandStream 在 distro 內執行單一指令並回傳雙向連線（kubectl logs／exec）。
@@ -57,10 +59,15 @@ type K8sResponse struct {
 	// Enabled：config 中 Machine 已開啟 k8s。
 	Enabled bool `json:"enabled"`
 	// Op：背景作業進行中（starting|stopping|resetting）；空 = 閒置。
-	Op      string     `json:"op,omitempty"`
-	Error   string     `json:"error,omitempty"`   // 上一次背景作業的錯誤
-	Warning string     `json:"warning,omitempty"` // 上一次背景作業成功但有附帶問題（如 kubeconfig 匯出失敗）
-	Status  k8s.Status `json:"status"`
+	Op string `json:"op,omitempty"`
+	// Step：starting 作業目前所在步驟（k8s.Steps 之一）；Steps 是完整順序，供前端畫步驟清單。
+	Step  string   `json:"step,omitempty"`
+	Steps []string `json:"steps"`
+	// ErrorStep：上一次作業失敗時所在的步驟（與 Error 同時出現）。
+	ErrorStep string     `json:"error_step,omitempty"`
+	Error     string     `json:"error,omitempty"`   // 上一次背景作業的錯誤
+	Warning   string     `json:"warning,omitempty"` // 上一次背景作業成功但有附帶問題（如 kubeconfig 匯出失敗）
+	Status    k8s.Status `json:"status"`
 	// KubeconfigPath：匯出 kubeconfig 的目標檔。
 	KubeconfigPath string `json:"kubeconfig_path"`
 }
@@ -68,7 +75,7 @@ type K8sResponse struct {
 // ResetK8sState 清除背景作業狀態（測試主機 /__test/reset 用）。
 func (s *Server) ResetK8sState() {
 	s.k8sMu.Lock()
-	s.k8sOp, s.k8sErr, s.k8sWarn = "", "", ""
+	s.k8sOp, s.k8sErr, s.k8sWarn, s.k8sStep, s.k8sErrStep = "", "", "", "", ""
 	s.k8sMu.Unlock()
 }
 
@@ -113,12 +120,18 @@ func (s *Server) k8sSnapshot(ctx context.Context) K8sResponse {
 	// 先讀背景作業狀態、再讀設定：作業結束（Op 為空）前一定已存好旗標，
 	// 反過來讀會在作業剛好完成時回出「Op 已空、旗標還是舊的」的錯誤組合。
 	s.k8sMu.Lock()
-	op, opErr, opWarn := s.k8sOp, s.k8sErr, s.k8sWarn
+	op, opErr, opWarn, opStep, opErrStep := s.k8sOp, s.k8sErr, s.k8sWarn, s.k8sStep, s.k8sErrStep
 	s.k8sMu.Unlock()
 	cfg := s.cfg()
 	target, enabled := k8sTarget(cfg)
-	resp := K8sResponse{Machine: target, Enabled: enabled, KubeconfigPath: s.kubeconfigPath()}
+	resp := K8sResponse{Machine: target, Enabled: enabled, KubeconfigPath: s.kubeconfigPath(), Steps: k8s.Steps}
 	resp.Op, resp.Error, resp.Warning = op, opErr, opWarn
+	if op == "starting" {
+		resp.Step = opStep
+	}
+	if opErr != "" {
+		resp.ErrorStep = opErrStep
+	}
 	if target == "" {
 		return resp
 	}
@@ -143,23 +156,31 @@ func (s *Server) k8sSnapshot(ctx context.Context) K8sResponse {
 }
 
 // startK8sOp 啟動單一背景作業；已有作業進行中回 false。
+// 傳給 fn 的 ctx 帶有進度回報（k8s.ReportStep），目前步驟會出現在 /api/k8s 的 step。
 func (s *Server) startK8sOp(op string, fn func(ctx context.Context) (warning string, err error)) bool {
 	s.k8sMu.Lock()
 	if s.k8sOp != "" {
 		s.k8sMu.Unlock()
 		return false
 	}
-	s.k8sOp, s.k8sErr, s.k8sWarn = op, "", ""
+	s.k8sOp, s.k8sErr, s.k8sWarn, s.k8sStep, s.k8sErrStep = op, "", "", "", ""
 	s.k8sMu.Unlock()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
+		ctx = k8s.WithProgress(ctx, func(step string) {
+			s.k8sMu.Lock()
+			s.k8sStep = step
+			s.k8sMu.Unlock()
+		})
 		warn, err := fn(ctx)
 		s.k8sMu.Lock()
 		s.k8sOp = ""
 		if err != nil {
 			s.k8sErr = err.Error()
+			s.k8sErrStep = s.k8sStep
 		}
+		s.k8sStep = ""
 		s.k8sWarn = warn
 		s.k8sMu.Unlock()
 	}()
@@ -229,6 +250,7 @@ func (s *Server) handleK8sOn(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("k8s is already enabled on %q (all WSL2 distros share one network namespace); turn it off there first", owner.Distro))
 		return
 	}
+	addContext := r.URL.Query().Get("add_context") == "1"
 	switchFrom := ""
 	if hasOwner && !strings.EqualFold(owner.Distro, m.Distro) {
 		switchFrom = owner.Distro
@@ -246,8 +268,19 @@ func (s *Server) handleK8sOn(w http.ResponseWriter, r *http.Request) {
 		if err := mgr.Start(ctx); err != nil {
 			return "", err
 		}
-		// 不自動寫 Windows 的 ~/.kube/config：kubeconfig 以機器內的 k3s.yaml 為準，需要時由使用者手動匯出。
-		return "", s.saveK8sFlag(m.Distro, true)
+		if err := s.saveK8sFlag(m.Distro, true); err != nil {
+			return "", err
+		}
+		// 預設不寫 Windows 的 ~/.kube/config（kubeconfig 以機器內的 k3s.yaml 為準）；
+		// GUI 的「Add context to ~/.kube/config」勾選時以 add_context=1 要求合併。
+		// 合併失敗只算警告：叢集本身已經可用。
+		if addContext {
+			k8s.ReportStep(ctx, k8s.StepContext)
+			if err := s.exportKubeconfig(ctx, mgr, m.Distro); err != nil {
+				return "kubeconfig: " + err.Error(), nil
+			}
+		}
+		return "", nil
 	}) {
 		s.k8sBusy(w)
 		return
@@ -675,4 +708,51 @@ func (s *Server) handleK8sExec(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// deployRequest 是 POST /api/k8s/deploy 的請求本文。
+type deployRequest = k8s.DeploySpec
+
+func (s *Server) handleK8sDeploy(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	var req deployRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid JSON body"))
+		return
+	}
+	if _, err := req.Normalize(); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", err)
+		return
+	}
+	res, err := mgr.Deploy(r.Context(), req)
+	if err != nil {
+		k8sErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleK8sApply(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, k8s.MaxApplyBytes+1))
+	if err != nil || len(body) > k8s.MaxApplyBytes {
+		writeErr(w, http.StatusRequestEntityTooLarge, "usage", errors.New("manifest is too large"))
+		return
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("empty manifest"))
+		return
+	}
+	out, err := mgr.Apply(r.Context(), body)
+	if err != nil {
+		k8sErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimSpace(out)})
 }

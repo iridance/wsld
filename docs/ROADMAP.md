@@ -241,9 +241,20 @@ Extra ≠ 0.5／v2.0 完成條件
   - wsl.exe 把 `-- cmd args` 交給外層 shell，雙引號內的 `$()`／`$var` 會被先展開（容器 ID 被當指令執行）→ `bash -c` 腳本不可含 `$ ` \ "`（有測試把關）
   - `Init` 以新建的 Machine 覆寫 profile，悄悄清掉 `k8s = true`（`wsld start` 後 k3s 不再恢復）→ `UpsertMachine` 保留 `K8s`，旗標只能經 `SetK8s` 改變
 
+#### 單節點流程重新設計（0.20.0 候選，分支 `feat/k8s-single-node-flow`）
+
+定位對標 OrbStack：維持單節點；多節點（容器化 node，kind／k3d 風格，Docker Desktop 的做法）列為日後可選 Cluster 進階模式。WSL2 所有 distro 共用網路命名空間，「每台 machine 一個 node」不可行。目標是讓「開啟 → 第一個 app 可連線」在 GUI 內一條龍：
+
+- **Off**：頁面中央 hero（Enable Kubernetes），選項「Add context to ~/.kube/config」（預設開、記在瀏覽器）；工具列不再放第二個啟動鈕
+- **Enabling**：步驟清單 Engine → Install k3s → Node Ready → Add context（`GET /api/k8s` 回 `step`／`steps`／`error_step`；`k8s.WithProgress` 以 context 傳遞進度，不改 `K8s` 介面的 `Start`）；失敗時停在該步驟並顯示 Retry
+- **Ready，無使用者 workload**：空狀態「Deploy your first app」，`Deploy`（`POST /api/k8s/deploy`：Deployment＋有填 port 時的 NodePort Service，映像用 `IfNotPresent`，完成後通知 `http://localhost:<NodePort>`）與 `Apply YAML file…`（`POST /api/k8s/apply`，≤ 1 MB，`kubectl apply -f -`）
+- **Ready**：工具列 `Deploy`、`kubectl context`（複製 `kubectl config use-context …`）
+- `POST /api/k8s/on?add_context=1` 啟動成功後合併 kubeconfig（失敗只算警告）；未帶參數維持原行為（不寫 `~/.kube/config`）
+- 與設計稿的差異：Deploy 以對話框而非空狀態內嵌表單（輪詢重繪會吃掉輸入）；Enabling 的 log 尾端、⋯ 選單、異常 namespace 的「CrashLoop 原因」未做，列為後續
+
 #### 不做
 
-- YAML 編輯／apply、Pod／Deployment／Service 以外的資源種類（交給 kubectl／k9s／Lens）
+- YAML **編輯器**、Pod／Deployment／Service 以外的資源種類（交給 kubectl／k9s／Lens）；選檔 `kubectl apply -f` 不在此限（見下方「單節點流程」）
 - 多節點、多叢集、指定 k8s 版本切換
 - Traefik／Ingress 預設啟用（避免與使用者容器搶 80／443；可由使用者自行開）
 - 區網存取轉發 NodePort／LoadBalancer（現有轉發器只看 docker published 埠；列為後續）

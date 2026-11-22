@@ -172,7 +172,11 @@ func (f *FakeK8s) Status(context.Context) k8s.Status {
 }
 
 // Start 實作 K8s（未安裝時等同安裝＋啟動）。
-func (f *FakeK8s) Start(context.Context) error {
+func (f *FakeK8s) Start(ctx context.Context) error {
+	k8s.ReportStep(ctx, k8s.StepEngine)
+	k8s.ReportStep(ctx, k8s.StepInstall)
+	f.sleep()
+	k8s.ReportStep(ctx, k8s.StepNode)
 	f.sleep()
 	f.c.mu.Lock()
 	defer f.c.mu.Unlock()
@@ -514,4 +518,51 @@ func (f *FakeCommandStream) OpenedCommands() [][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([][]string(nil), f.Opened...)
+}
+
+// Deploy 實作 K8s：新增 Deployment（含 pod）與可選的 NodePort Service，NodePort 依序配發。
+func (f *FakeK8s) Deploy(_ context.Context, spec k8s.DeploySpec) (k8s.DeployResult, error) {
+	s, err := spec.Normalize()
+	if err != nil {
+		return k8s.DeployResult{}, err
+	}
+	f.c.mu.Lock()
+	defer f.c.mu.Unlock()
+	if err := f.requireRunning(); err != nil {
+		return k8s.DeployResult{}, err
+	}
+	f.c.Calls = append(f.c.Calls, fmt.Sprintf("deploy:%s/%s=%s", s.Namespace, s.Name, s.Image))
+	now := time.Now()
+	sel := map[string]string{"app": s.Name}
+	known := false
+	for _, n := range f.c.namespaces {
+		known = known || n == s.Namespace
+	}
+	if !known {
+		f.c.namespaces = append(f.c.namespaces, s.Namespace)
+	}
+	res := k8s.DeployResult{Namespace: s.Namespace, Name: s.Name}
+	f.c.deploys = append(f.c.deploys, k8s.Deployment{Name: s.Name, Namespace: s.Namespace, Ready: fmt.Sprintf("%d/%d", s.Replicas, s.Replicas), Replicas: s.Replicas, UpToDate: s.Replicas, Available: s.Replicas, Selector: sel, Image: s.Image, Strategy: "RollingUpdate", MaxSurge: "25%", MaxUnavailable: "25%", CreatedAt: now})
+	for i := 0; i < s.Replicas; i++ {
+		f.c.pods = append(f.c.pods, k8s.Pod{Name: s.Name + "-5d8f7c9b6d-" + randSuffix(len(f.c.pods)+i+100), Namespace: s.Namespace, Status: "Running", Ready: "1/1", Node: "framework", IP: fmt.Sprintf("10.42.0.%d", 100+len(f.c.pods)), Labels: sel, CreatedAt: now})
+	}
+	if s.Port > 0 {
+		res.NodePort = 30100 + len(f.c.services)
+		f.c.services = append(f.c.services, k8s.Service{Name: s.Name, Namespace: s.Namespace, Type: "NodePort", ClusterIP: fmt.Sprintf("10.43.1.%d", len(f.c.services)+10), Ports: []k8s.ServicePort{{Port: s.Port, NodePort: res.NodePort, Protocol: "TCP"}}, Selector: sel, CreatedAt: now})
+	}
+	return res, nil
+}
+
+// Apply 實作 K8s：只記錄動作並回傳固定輸出（假叢集不解析 YAML）。
+func (f *FakeK8s) Apply(_ context.Context, manifest []byte) (string, error) {
+	f.c.mu.Lock()
+	defer f.c.mu.Unlock()
+	if err := f.requireRunning(); err != nil {
+		return "", err
+	}
+	if strings.Contains(string(manifest), "invalid") {
+		return "", errors.New("error: error validating data")
+	}
+	f.c.Calls = append(f.c.Calls, fmt.Sprintf("apply:%d", len(manifest)))
+	return "deployment.apps/applied created\n", nil
 }

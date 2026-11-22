@@ -9,6 +9,7 @@ import {
   type InstallProgress,
   type K8sDeployment,
   type K8sInfo,
+  type K8sStep,
   type K8sPod,
   type K8sService,
   type K8sExtras,
@@ -839,6 +840,7 @@ export class App {
       this.buildFirewallDialog(),
       this.buildAddMachineDialog(),
       this.buildResizeDialog(),
+      this.buildDeployDialog(),
     );
     this.renderNav();
     this.renderView();
@@ -2850,6 +2852,7 @@ export class App {
 
   private k8sPollTimer?: number;
   private k8sListError?: string;
+  private k8sAddContext: boolean = loadJSON<boolean>(LS_K8S_ADDCTX, true);
   private k8sGroup: K8sGroup = loadJSON<string>(LS_K8S_GROUP, "workloads") === "system" ? "system" : "workloads";
 
   /** /api/k8s 狀態；k3s 就緒（且沒有進行中的作業）時再載入 namespace 與目前分頁的資源。 */
@@ -2976,8 +2979,22 @@ export class App {
       ? btn({ "data-testid": "btn-k8s-stop" }, "stop", t("gui.k8s.stop"))
       : btn({ class: "primary", "data-testid": "btn-k8s-start" }, "play", t("gui.k8s.start"));
     toggle.disabled = !k || busyOp;
-    toggle.onclick = () => void this.k8sRun(() => (running ? api.k8sOff() : api.k8sOn()));
-    bar.replaceChildren(el("span", { class: "spacer" }), kube, reset, toggle);
+    toggle.onclick = () => void this.k8sRun(() => (running ? api.k8sOff() : api.k8sOn({ addContext: this.k8sAddContext })));
+    // 關閉狀態由頁面中央的 hero 負責啟用，工具列不再放第二個啟動鈕
+    const heroMode = !!k && !k.op && !k.enabled;
+    const ready = !!k && k.enabled && state === "ready" && !busyOp;
+    const deploy = btn({ "data-testid": "btn-k8s-deploy" }, "plus", t("gui.k8s.deploy"));
+    deploy.onclick = () => void this.openDeploy();
+    const copyCtx = btn({ "data-testid": "btn-k8s-copy-context" }, "kubernetes", t("gui.k8s.copy_context"));
+    copyCtx.title = k?.status.context ?? "";
+    copyCtx.onclick = () => void this.k8sCopyContext();
+    bar.replaceChildren(
+      el("span", { class: "spacer" }),
+      ...(ready ? [deploy, copyCtx] : []),
+      kube,
+      reset,
+      ...(heroMode ? [] : [toggle]),
+    );
 
     if (!k) {
       top.replaceChildren(this.skeletonK8sCard());
@@ -2986,7 +3003,7 @@ export class App {
       this.renderK8sSide();
       return;
     }
-    top.replaceChildren(this.k8sCard(k));
+    top.replaceChildren(heroMode ? this.k8sHero(k) : this.k8sCard(k));
     // 沒有資源可列時（未安裝／已關閉／啟動中）不顯示空白的列表面板
     if (k.enabled && state === "ready" && !op) {
       list.style.display = "";
@@ -3037,6 +3054,7 @@ export class App {
     } else if (k.op === "starting" && s.state === "not-installed") {
       hint(fmt(t("gui.k8s.hint.installing"), k.machine));
     }
+    if (k.op === "starting") card.append(this.k8sSteps(k));
     if (s.ip_mismatch) hint(t("gui.k8s.hint.ip_mismatch"), "k8s-ip-mismatch", "k8s-hint bad");
     if (k.error) hint(k.error, "k8s-error", "k8s-hint bad");
     if (k.warning) hint(k.warning, "k8s-warning", "k8s-hint warn");
@@ -3052,6 +3070,194 @@ export class App {
       card.append(el("p", { class: "k8s-hint", "data-testid": "k8s-owner", text: fmt(t("gui.k8s.hint.owner"), k.machine) }), move);
     }
     return card;
+  }
+
+  /** 啟用步驟清單：完成 ✓、進行中 …、之後 ○；失敗時標出停在哪一步。 */
+  private k8sSteps(k: K8sInfo): HTMLElement {
+    const steps: K8sStep[] = (k.steps ?? []).filter((x) => x !== "context" || this.k8sAddContext);
+    const cur = k.op === "starting" ? steps.indexOf(k.step ?? "engine") : k.error_step ? steps.indexOf(k.error_step) : -1;
+    const failed = !k.op && !!k.error;
+    const list = el("ol", { class: "k8s-steps", "data-testid": "k8s-steps" });
+    steps.forEach((step, i) => {
+      const status = failed ? (i < cur ? "done" : i === cur ? "failed" : "todo") : i < cur ? "done" : i === cur ? "active" : "todo";
+      list.append(el("li", { class: `k8s-step ${status}`, "data-testid": `k8s-step-${step}`, "data-status": status },
+        el("span", { class: "k8s-step-mark", "aria-hidden": "true", text: status === "done" ? "✓" : status === "failed" ? "✕" : status === "active" ? "…" : "○" }),
+        el("span", { text: t(`gui.k8s.step.${step}`) }),
+      ));
+    });
+    return list;
+  }
+
+  /** 關閉狀態的 hero：說明、啟用鈕、選項；失敗時顯示停在哪一步並改為 Retry。 */
+  private k8sHero(k: K8sInfo): HTMLElement {
+    const s = k.status;
+    const failed = !!k.error;
+    const enable = btn({ class: "primary", "data-testid": "btn-k8s-start" }, "play", failed ? t("gui.k8s.retry") : t("gui.k8s.hero.enable"));
+    enable.onclick = () => void this.k8sRun(() => api.k8sOn({ addContext: this.k8sAddContext }));
+    const ctx = el("input", { type: "checkbox", "data-testid": "k8s-opt-add-context" }) as HTMLInputElement;
+    ctx.checked = this.k8sAddContext;
+    ctx.onchange = () => {
+      this.k8sAddContext = ctx.checked;
+      saveJSON(LS_K8S_ADDCTX, ctx.checked);
+    };
+    const hero = el("section", { class: "k8s-hero", "data-testid": "k8s-hero", "data-state": s.state },
+      icon("kubernetes"),
+      el("h2", { text: t("gui.k8s.hero.title") }),
+      el("p", { class: "k8s-hero-body", text: t("gui.k8s.hero.body") }),
+      enable,
+      el("p", { class: "k8s-hero-facts", text: t("gui.k8s.hero.facts") }),
+      el("label", { class: "k8s-opt" }, ctx, el("span", { text: t("gui.k8s.opt.add_context") })),
+      el("p", { class: "k8s-hero-facts", "data-testid": "k8s-f-machine", text: fmt(t("gui.k8s.hero.machine"), k.machine) }),
+    );
+    const hint = (text: string, testid = "k8s-hint", cls = "k8s-hint") => hero.append(el("p", { class: cls, "data-testid": testid, text }));
+    if (s.state === "not-installed") hint(fmt(t("gui.k8s.hint.not_installed"), k.machine));
+    else if (s.state === "off") hint(fmt(t("gui.k8s.hint.off"), k.machine));
+    else if (s.state === "stopped") hint(fmt(t("gui.k8s.hint.stopped"), k.machine));
+    else if (s.state === "error") hint(fmt(t("gui.k8s.hint.error"), k.machine), "k8s-hint", "k8s-hint bad");
+    if (failed) {
+      hint(k.error ?? "", "k8s-error", "k8s-hint bad");
+      if (k.error_step) hint(fmt(t("gui.k8s.failed_at"), t(`gui.k8s.step.${k.error_step}`)), "k8s-failed-step", "k8s-hint bad");
+    }
+    if (k.warning) hint(k.warning, "k8s-warning", "k8s-hint warn");
+    return hero;
+  }
+
+  /** Ready 但還沒有任何使用者 workload：邀請部署第一個 app。 */
+  private k8sDeployEmpty(): HTMLElement {
+    const deploy = btn({ class: "primary", "data-testid": "btn-k8s-deploy-first" }, "plus", t("gui.k8s.deploy"));
+    deploy.onclick = () => void this.openDeploy();
+    const apply = btn({ "data-testid": "btn-k8s-apply-yaml" }, "download", t("gui.k8s.apply_yaml"));
+    apply.onclick = () => this.k8sPickYaml();
+    return el("section", { class: "k8s-deploy-empty", "data-testid": "k8s-deploy-empty" },
+      el("h3", { text: t("gui.k8s.deploy.title") }),
+      el("p", { text: t("gui.k8s.deploy.body") }),
+      el("div", { class: "row" }, deploy, apply),
+    );
+  }
+
+  private async k8sCopyContext(): Promise<void> {
+    const ctx = this.st.k8s?.status.context ?? "";
+    if (!ctx) return;
+    try {
+      await navigator.clipboard.writeText(`kubectl config use-context ${ctx}`);
+    } catch {
+      /* 剪貼簿不可用時仍顯示指令，使用者可手動複製 */
+    }
+    this.notify(fmt(t("gui.k8s.context_copied"), ctx));
+  }
+
+  /** 選一個 YAML／JSON 檔，交給 kubectl apply。 */
+  private k8sPickYaml(): void {
+    const input = el("input", { type: "file", accept: ".yaml,.yml,.json", "data-testid": "k8s-apply-file" }) as HTMLInputElement;
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      if (f.size > 1 << 20) {
+        this.st.lastError = t("gui.k8s.apply_too_large");
+        this.renderBanner();
+        return;
+      }
+      await this.k8sMutate("k8s:apply", async () => {
+        const r = await api.k8sApply(await f.text());
+        this.k8sApplyOutput = r.output;
+      }, "");
+      if (this.k8sApplyOutput) this.notify(fmt(t("gui.k8s.apply_done"), this.k8sApplyOutput.split("\n").join("; ")));
+      this.k8sApplyOutput = undefined;
+    };
+    input.click();
+  }
+  private k8sApplyOutput?: string;
+
+  private buildDeployDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "deploy-dialog" }) as HTMLDialogElement;
+    const mk = (testid: string, extra: Record<string, string> = {}) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid, ...extra }) as HTMLInputElement;
+    const image = mk("deploy-image", { list: "deploy-images", placeholder: "myapp:latest" });
+    const datalist = el("datalist", { id: "deploy-images" });
+    const name = mk("deploy-name", { placeholder: "myapp" });
+    const port = mk("deploy-port", { inputmode: "numeric", placeholder: "8080" });
+    const replicas = mk("deploy-replicas", { inputmode: "numeric" });
+    replicas.value = "1";
+    const err = el("div", { class: "field-error", "data-testid": "deploy-error", hidden: "" });
+    const submit = btn({ class: "primary", type: "submit", "data-testid": "deploy-submit" }, "play", t("gui.k8s.deploy.submit"));
+    const cancel = btn({ type: "button", "data-testid": "deploy-cancel" }, "close", t("gui.cancel"));
+    let nameEdited = false;
+    const NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+    /** 由 image 推一個合法名稱：去掉 registry 路徑與 tag。 */
+    const suggest = (img: string) => img.split("/").pop()!.split(":")[0]!.split("@")[0]!.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
+    image.oninput = () => {
+      if (!nameEdited) name.value = suggest(image.value.trim());
+      err.hidden = true;
+    };
+    name.oninput = () => {
+      nameEdited = true;
+      err.hidden = true;
+    };
+    const validate = (): string => {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image.value.trim())) return t("gui.k8s.deploy.err_image");
+      if (!NAME_RE.test(name.value.trim()) || name.value.trim().length > 63) return t("gui.k8s.deploy.err_name");
+      const p = port.value.trim();
+      if (p !== "" && !(/^\d+$/.test(p) && +p >= 1 && +p <= 65535)) return t("gui.k8s.deploy.err_port");
+      if (!/^\d+$/.test(replicas.value.trim()) || +replicas.value < 1 || +replicas.value > 100) return t("gui.k8s.deploy.err_replicas");
+      return "";
+    };
+    cancel.onclick = () => d.close();
+    const form = el("form", { method: "dialog", class: "add-machine-form" },
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.image") }), textField(image), datalist),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.name") }), textField(name)),
+      el("div", { class: "row" },
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.port") }), textField(port)),
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.replicas") }), textField(replicas)),
+      ),
+      el("p", { class: "field-hint", text: t("gui.k8s.deploy.hint") }),
+      err,
+      el("div", { class: "row" }, cancel, submit),
+    );
+    form.noValidate = true;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const bad = validate();
+      if (bad) {
+        err.textContent = bad;
+        err.hidden = false;
+        return;
+      }
+      submit.disabled = true;
+      submit.querySelector(".label")!.textContent = t("gui.k8s.deploy.deploying");
+      try {
+        const res = await api.k8sDeploy({ image: image.value.trim(), name: name.value.trim(), port: port.value.trim() ? +port.value : undefined, replicas: +replicas.value });
+        d.close();
+        this.notify(res.node_port ? fmt(t("gui.k8s.deploy.done_url"), res.name, String(res.node_port)) : fmt(t("gui.k8s.deploy.done"), res.name), { sticky: true });
+        await this.refresh();
+      } catch (e) {
+        err.textContent = e instanceof ApiError ? e.message : String(e);
+        err.hidden = false;
+      } finally {
+        submit.disabled = false;
+        submit.querySelector(".label")!.textContent = t("gui.k8s.deploy.submit");
+      }
+    };
+    d.addEventListener("close", () => {
+      nameEdited = false;
+    });
+    d.append(el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.deploy.dialog") })), form);
+    return d;
+  }
+
+  private async openDeploy(): Promise<void> {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="deploy-dialog"]')!;
+    for (const id of ["deploy-image", "deploy-name", "deploy-port"]) d.querySelector<HTMLInputElement>(`[data-testid="${id}"]`)!.value = "";
+    d.querySelector<HTMLInputElement>('[data-testid="deploy-replicas"]')!.value = "1";
+    d.querySelector<HTMLElement>('[data-testid="deploy-error"]')!.hidden = true;
+    const list = d.querySelector<HTMLElement>("#deploy-images")!;
+    try {
+      const imgs = await api.images();
+      const tags = imgs.flatMap((i) => i.RepoTags ?? []).filter((x) => x && x !== "<none>:<none>");
+      list.replaceChildren(...[...new Set(tags)].map((tag) => el("option", { value: tag })));
+    } catch {
+      /* 取不到本機映像清單時仍可手動輸入 */
+    }
+    d.showModal();
+    d.querySelector<HTMLInputElement>('[data-testid="deploy-image"]')!.focus();
   }
 
   /** 全部 namespace 的資源（卡片、架構圖、各分頁共用）。 */
@@ -3073,6 +3279,8 @@ export class App {
     }
     // 頁籤：Workloads（default 與自建）／System（kube-*，Kubernetes 內建）。各自佔滿內容區，不互搶空間。
     const res = this.k8sRes();
+    // 還沒有任何使用者 workload：先邀請部署第一個 app
+    if (!res.deployments.some((x) => !isSystemNs(x.namespace)) && !res.statefulsets.some((x) => !isSystemNs(x.namespace))) wrap.append(this.k8sDeployEmpty());
     const groups: Record<K8sGroup, string[]> = {
       workloads: this.st.k8sNamespaces.filter((ns) => !isSystemNs(ns)),
       system: this.st.k8sNamespaces.filter(isSystemNs),
@@ -4356,6 +4564,7 @@ const LS_COLLAPSED = "wsld.collapsedGroups";
 const LS_VIEW = "wsld.view";
 const LS_K8S_TAB = "wsld.k8s.tab";
 const LS_K8S_GROUP = "wsld.k8s.group";
+const LS_K8S_ADDCTX = "wsld.k8s.addcontext";
 const LS_K8S_GROUP_SEEN = "wsld.k8s.groupSeen";
 const LABEL_PROJECT = "com.docker.compose.project";
 const LABEL_SERVICE = "com.docker.compose.service";

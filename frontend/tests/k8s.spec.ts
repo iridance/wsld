@@ -35,7 +35,7 @@ async function startCluster(page: Page) {
 test("Kubernetes nav sits next to Machines and shows the not-installed state with an explanation", async ({ page }) => {
   await goK8s(page);
   await expect(page.getByTestId("page-title")).toHaveText("Kubernetes");
-  await expect(page.getByTestId("k8s-state")).toHaveAttribute("data-state", "not-installed");
+  await expect(page.getByTestId("k8s-hero")).toHaveAttribute("data-state", "not-installed");
   await expect(page.getByTestId("k8s-hint")).toContainText("downloads and installs k3s");
   await expect(page.getByTestId("btn-k8s-start")).toBeEnabled();
   await expect(page.getByTestId("btn-k8s-reset")).toBeDisabled();
@@ -73,7 +73,7 @@ test("one-click stop returns to Off and keeps k3s installed", async ({ page, req
   await goK8s(page);
   await startCluster(page);
   await page.getByTestId("btn-k8s-stop").click();
-  await expect(page.getByTestId("k8s-state")).toHaveAttribute("data-state", "off", { timeout: 10_000 });
+  await expect(page.getByTestId("k8s-hero")).toHaveAttribute("data-state", "off", { timeout: 10_000 });
   await expect(page.getByTestId("k8s-hint")).toContainText("k3s is off");
   await expect(page.getByTestId("btn-k8s-start")).toBeEnabled();
   expect((await k8sState(request)).running).toBe("");
@@ -234,8 +234,8 @@ test("the chosen tab is remembered across reloads", async ({ page }) => {
 test("Kubernetes page is localized (zh-TW)", async ({ page, request }) => {
   await setLang(request, "zh-TW");
   await goK8s(page);
-  await expect(page.getByTestId("k8s-state")).toHaveText("尚未安裝");
-  await expect(page.getByTestId("btn-k8s-start")).toContainText("啟動");
+  await expect(page.getByTestId("k8s-hero")).toContainText("在你的機器上跑 Kubernetes");
+  await expect(page.getByTestId("btn-k8s-start")).toContainText("啟用 Kubernetes");
   await expect(page.getByTestId("btn-k8s-reset")).toContainText("重置");
   await startCluster(page);
   await expect(page.getByTestId("k8s-state")).toHaveText("就緒");
@@ -274,11 +274,13 @@ test("Containers: no k3s containers means no k3s group", async ({ page, request 
 
 test("the cluster card is a standalone card above the list panel; no empty panel when there is nothing to list", async ({ page }) => {
   await goK8s(page);
+  await expect(page.getByTestId("k8s-hero")).toBeVisible(); // 未啟用：中央 hero，沒有資訊卡
+  await expect(page.getByTestId("k8s-card")).toHaveCount(0);
+  await expect(page.getByTestId("kubernetes-list")).toBeHidden(); // 未安裝：沒有資源可列
+  await startCluster(page);
   const card = page.getByTestId("k8s-card");
   await expect(card).toBeVisible();
   expect(await card.evaluate((e) => !!e.closest('[data-testid="kubernetes-list"]'))).toBe(false);
-  await expect(page.getByTestId("kubernetes-list")).toBeHidden(); // 未安裝：沒有資源可列
-  await startCluster(page);
   await expect(page.getByTestId("kubernetes-list")).toBeVisible();
   const c = (await card.boundingBox())!;
   const l = (await page.getByTestId("kubernetes-list").boundingBox())!;
@@ -563,4 +565,105 @@ test("architecture view marks NodePort services as exposed entry points", async 
   await expect(poc).toHaveClass(/exposed/);
   await expect(poc.getByTestId("arch-exposed")).toHaveText("NodePort 30080");
   await expect(page.locator('[data-testid="arch-svc"][data-name="kubernetes"]')).not.toHaveClass(/exposed/);
+});
+
+// ---- 單節點流程：hero、啟用步驟、空狀態、Deploy、Apply -----------------------------
+
+test("Off shows the hero with the add-context option on by default; the toolbar has no second Start", async ({ page }) => {
+  await goK8s(page);
+  await expect(page.getByTestId("k8s-hero")).toContainText("Run Kubernetes on your machine");
+  await expect(page.getByTestId("k8s-opt-add-context")).toBeChecked();
+  await expect(page.getByTestId("k8s-f-machine")).toContainText("Ubuntu-26.04");
+  await expect(page.getByTestId("btn-k8s-start")).toHaveCount(1);
+  await expect(page.getByTestId("btn-k8s-deploy")).toHaveCount(0); // 未就緒時不提供 Deploy
+});
+
+test("enabling shows a step checklist that advances and ends in Ready", async ({ page, request }) => {
+  await k8sScenario(request, { delay: 900 });
+  await goK8s(page);
+  await page.getByTestId("btn-k8s-start").click();
+  const steps = page.getByTestId("k8s-steps");
+  await expect(steps).toBeVisible();
+  await expect(steps.locator("li")).toHaveCount(4); // engine / install / node / context
+  await expect(steps.locator('li[data-status="active"]')).toHaveCount(1);
+  await expect(page.getByTestId("k8s-step-node")).toHaveAttribute("data-status", "active", { timeout: 10_000 });
+  await expect(page.getByTestId("k8s-step-engine")).toHaveAttribute("data-status", "done");
+  await expect(page.getByTestId("k8s-state")).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+  await expect(page.getByTestId("k8s-steps")).toHaveCount(0);
+});
+
+test("unchecking add-context drops that step and the choice is remembered", async ({ page, request }) => {
+  await k8sScenario(request, { delay: 600 });
+  await goK8s(page);
+  await page.getByTestId("k8s-opt-add-context").uncheck();
+  await page.getByTestId("btn-k8s-start").click();
+  await expect(page.getByTestId("k8s-steps").locator("li")).toHaveCount(3);
+  await expect(page.getByTestId("k8s-step-context")).toHaveCount(0);
+  await expect(page.getByTestId("k8s-state")).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+  await page.reload();
+  await page.getByTestId("nav-kubernetes").click();
+  await page.getByTestId("btn-k8s-stop").click();
+  await expect(page.getByTestId("k8s-hero")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("k8s-opt-add-context")).not.toBeChecked();
+});
+
+test("a failed enable names the step it stopped at and offers Retry", async ({ page, request }) => {
+  await k8sScenario(request, { fail: true });
+  await goK8s(page);
+  await page.getByTestId("btn-k8s-start").click();
+  await expect(page.getByTestId("k8s-error")).toContainText("did not become ready", { timeout: 10_000 });
+  await expect(page.getByTestId("k8s-failed-step")).toContainText("Wait for node to be Ready");
+  await expect(page.getByTestId("btn-k8s-start")).toContainText("Retry");
+});
+
+test("Ready with no user workloads invites a first deploy; Deploy creates it and shows the localhost URL", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await expect(page.getByTestId("k8s-deploy-empty")).toHaveCount(0); // 範例叢集已有 poc-web
+  await page.getByTestId("btn-k8s-reset").click();
+  await page.getByTestId("confirm-dialog").getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("k8s-deploy-empty")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("btn-k8s-deploy-first").click();
+  const dlg = page.getByTestId("deploy-dialog");
+  await expect(dlg).toBeVisible();
+  await dlg.getByTestId("deploy-submit").click();
+  await expect(dlg.getByTestId("deploy-error")).toContainText("Enter an image");
+  await dlg.getByTestId("deploy-image").fill("registry.local:5000/team/myapp:latest");
+  await expect(dlg.getByTestId("deploy-name")).toHaveValue("myapp"); // 由 image 推出名稱
+  await dlg.getByTestId("deploy-port").fill("99999");
+  await dlg.getByTestId("deploy-submit").click();
+  await expect(dlg.getByTestId("deploy-error")).toContainText("Port must be");
+  await dlg.getByTestId("deploy-port").fill("8080");
+  await dlg.getByTestId("deploy-replicas").fill("2");
+  await dlg.getByTestId("deploy-submit").click();
+  await expect(dlg).toBeHidden();
+  await expect(page.getByTestId("notice")).toContainText("myapp deployed");
+  await expect(page.getByTestId("notice")).toContainText("http://localhost:");
+  await expect(page.getByTestId("k8s-deploy-empty")).toHaveCount(0);
+  await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-node-pods")).toHaveText("2/2");
+});
+
+test("toolbar Deploy and Copy context appear only when Ready", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await expect(page.getByTestId("btn-k8s-deploy")).toBeVisible();
+  await expect(page.getByTestId("btn-k8s-copy-context")).toBeVisible();
+  await page.getByTestId("btn-k8s-copy-context").click();
+  await expect(page.getByTestId("notice")).toContainText("wsld-Ubuntu-26.04");
+  await page.getByTestId("btn-k8s-deploy").click();
+  await expect(page.getByTestId("deploy-dialog")).toBeVisible();
+  await page.getByTestId("deploy-cancel").click();
+  await expect(page.getByTestId("deploy-dialog")).toBeHidden();
+});
+
+test("Apply YAML file sends the file to kubectl apply and reports the result", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await page.getByTestId("btn-k8s-reset").click();
+  await page.getByTestId("confirm-dialog").getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("k8s-deploy-empty")).toBeVisible({ timeout: 10_000 });
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByTestId("btn-k8s-apply-yaml").click();
+  await (await chooser).setFiles({ name: "app.yaml", mimeType: "text/yaml", buffer: Buffer.from("apiVersion: apps/v1\nkind: Deployment\n") });
+  await expect(page.getByTestId("notice")).toContainText("Applied");
 });

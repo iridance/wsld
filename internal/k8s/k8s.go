@@ -271,20 +271,24 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	return nil
 }
 
-// Start 啟動 k3s：未安裝則先安裝 → 確認 dockerd → systemctl start → 等 node Ready。
+// Start 啟動 k3s：確認 dockerd → 未安裝則先安裝 → systemctl start → 等 node Ready。
+// ctx 帶 WithProgress 時，會依序回報 StepEngine／StepInstall／StepNode。
 func (m *Manager) Start(ctx context.Context) error {
-	if _, err := m.root(ctx, nil, "test", "-x", k3sBin); err != nil {
-		m.print(i18n.T("k8s.installing", m.Distro))
-		if err := m.Install(ctx); err != nil {
-			return err
-		}
-	}
+	ReportStep(ctx, StepEngine)
 	if out, _ := m.root(ctx, nil, "systemctl", "is-active", "docker"); strings.TrimSpace(out) != "active" {
 		_, _ = m.root(ctx, nil, "systemctl", "reset-failed", "docker")
 		if _, err := m.root(ctx, nil, "systemctl", "start", "docker"); err != nil {
 			return fmt.Errorf("%s: %w", i18n.T("k8s.docker_start_failed", m.Distro), err)
 		}
 	}
+	ReportStep(ctx, StepInstall)
+	if _, err := m.root(ctx, nil, "test", "-x", k3sBin); err != nil {
+		m.print(i18n.T("k8s.installing", m.Distro))
+		if err := m.Install(ctx); err != nil {
+			return err
+		}
+	}
+	ReportStep(ctx, StepNode)
 	// 之前連續失敗會觸發 start limit，start 會直接被拒；先 reset-failed。
 	_, _ = m.root(ctx, nil, "systemctl", "reset-failed", "k3s")
 	if _, err := m.root(ctx, nil, "systemctl", "start", "k3s"); err != nil {
