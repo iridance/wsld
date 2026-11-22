@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -321,7 +322,21 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 
 // Start 啟動 k3s：確認 dockerd → 未安裝則先安裝 → systemctl start → 等 node Ready。
 // ctx 帶 WithProgress 時，會依序回報 StepEngine／StepInstall／StepNode。
-func (m *Manager) Start(ctx context.Context) error {
+func (m *Manager) Start(ctx context.Context) (err error) {
+	begin := time.Now()
+	defer func() {
+		if err != nil {
+			log.Printf("k8s start %s: FAILED after %.1fs: %v", m.Distro, time.Since(begin).Seconds(), err)
+		} else {
+			log.Printf("k8s start %s: ready in %.1fs", m.Distro, time.Since(begin).Seconds())
+		}
+	}()
+	// 每個步驟結束時記下耗時，找出「重開很慢」卡在哪一步（寫入 GUI 的 crash.log）。
+	step := time.Now()
+	lap := func(name string) {
+		log.Printf("k8s start %s: %s done in %.1fs", m.Distro, name, time.Since(step).Seconds())
+		step = time.Now()
+	}
 	m.ResetAPI() // 憑證會隨安裝／reset 改變
 	ReportStep(ctx, StepEngine)
 	if out, _ := m.root(ctx, nil, "systemctl", "is-active", "docker"); strings.TrimSpace(out) != "active" {
@@ -330,6 +345,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			return fmt.Errorf("%s: %w", i18n.T("k8s.docker_start_failed", m.Distro), err)
 		}
 	}
+	lap("engine")
 	ReportStep(ctx, StepInstall)
 	if _, err := m.root(ctx, nil, "test", "-x", k3sBin); err != nil {
 		m.print(i18n.T("k8s.installing", m.Distro))
@@ -337,29 +353,39 @@ func (m *Manager) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	lap("install check")
 	ReportStep(ctx, StepNode)
 	// 之前連續失敗會觸發 start limit，start 會直接被拒；先 reset-failed。
 	_, _ = m.root(ctx, nil, "systemctl", "reset-failed", "k3s")
 	if _, err := m.root(ctx, nil, "systemctl", "start", "k3s"); err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("k8s.start_failed", m.Distro), err)
 	}
+	lap("systemctl start k3s")
 	return m.waitReady(ctx)
 }
 
 func (m *Manager) waitReady(ctx context.Context) error {
+	begin := time.Now()
+	apiReady := time.Duration(0)
 	for i := 0; i < m.readyAttempts(); i++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if out, err := m.get(ctx, "/readyz", "get", "--raw", "/readyz"); err == nil && strings.TrimSpace(out) == "ok" {
+			if apiReady == 0 {
+				apiReady = time.Since(begin)
+				log.Printf("k8s start %s: API /readyz ok after %.1fs (%d polls)", m.Distro, apiReady.Seconds(), i+1)
+			}
 			if js, err := m.get(ctx, "/api/v1/nodes", "get", "nodes", "-o", "json"); err == nil {
 				if n, err := ParseNode(js); err == nil && n.Ready {
+					log.Printf("k8s start %s: node Ready after %.1fs (%d polls)", m.Distro, time.Since(begin).Seconds(), i+1)
 					return nil
 				}
 			}
 		}
 		m.sleep(m.readyInterval())
 	}
+	log.Printf("k8s start %s: gave up waiting after %.1fs (API ready: %v)", m.Distro, time.Since(begin).Seconds(), apiReady > 0)
 	return errors.New(i18n.T("k8s.not_ready", m.Distro))
 }
 
