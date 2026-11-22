@@ -349,10 +349,6 @@ tr[data-pending] { opacity: 0.75; }
 }
 .panel-head { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 8px 4px 14px; border-bottom: 1px solid var(--border); }
 .panel-head strong { font-size: 13px; font-weight: 600; }
-.tabs { display: inline-flex; gap: 2px; margin-left: 8px; }
-button.tab { min-height: 34px; border: 0; border-radius: 0; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; }
-button.tab:hover:not(:disabled) { background: transparent; color: var(--fg); border-color: transparent; border-bottom-color: var(--border-strong); }
-button.tab[aria-selected="true"], button.tab[aria-selected="true"]:hover { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
 .panel[hidden] { display: none; }
 pre.logs { margin: 0; padding: 10px 14px; overflow: auto; font: 12.5px/1.6 var(--mono); background: var(--term-bg); color: var(--term-fg); white-space: pre-wrap; word-break: break-all; }
 .xterm-host { padding: 6px; background: var(--xterm-bg); overflow: hidden; }
@@ -850,11 +846,19 @@ button.arch-node:hover:not(:disabled) { border-color: var(--accent); }
 
 .k8s-ns-card .ns-others { display: block; margin-top: 4px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.k8s-group-tabs { display: flex; gap: 18px; padding: 0 14px; border-bottom: 1px solid var(--border, currentColor); }
-.k8s-group-tab { display: flex; align-items: center; gap: 6px; padding: 10px 0 8px; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--muted); font: inherit; cursor: pointer; }
-.k8s-group-tab.on { color: inherit; font-weight: 600; border-bottom-color: currentColor; }
-.k8s-group-count { font-size: 11px; font-weight: 400; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--muted); }
-.k8s-group-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+/* 共用 tab 元件（app.ts 的 tabs()）：樣式對齊頂部 nav */
+.ui-tabs { display: flex; align-items: stretch; gap: 2px; min-width: 0; }
+.ui-tabs.bordered { padding: 0 14px; border-bottom: 1px solid var(--border, currentColor); }
+.ui-tab { position: relative; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; background: transparent; border: none; border-radius: 0; color: var(--muted); font: inherit; font-size: 14px; white-space: nowrap; cursor: pointer; }
+.ui-tab .ico { width: 18px; height: 18px; stroke-width: 1.75; }
+.ui-tab:hover:not(:disabled) { background: var(--hover); color: var(--fg); border-color: transparent; }
+.ui-tab:disabled { opacity: .45; cursor: default; }
+.ui-tab[aria-selected="true"], .ui-tab[aria-selected="true"]:hover { color: var(--fg); font-weight: 600; }
+.ui-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--accent); }
+.ui-tabs.bordered .ui-tab[aria-selected="true"]::after { bottom: -1px; }
+.ui-tab-count { font-size: 11px; font-weight: 400; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--muted); }
+.ui-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+.panel-head .ui-tabs { align-self: stretch; margin: -4px 0 -4px 8px; }
 .ns-head-tags { display: flex; align-items: center; gap: 6px; flex: none; }
 .ns-kind { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--hover); color: var(--muted); }
 .ns-items { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }

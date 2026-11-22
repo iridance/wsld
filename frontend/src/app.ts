@@ -158,6 +158,26 @@ const btn = (attrs: Record<string, string>, ico: IconName, label: string): HTMLB
   return b;
 };
 
+/** 共用 tab 元件（樣式對齊頂部 nav：灰字、hover 底色、選取時粗體＋accent 底線）。
+ *  每個 tab：id（組 data-testid `${testid}-${id}`）、label、可選 icon／count 膠囊／警示紅點／disabled。
+ *  選取以 aria-selected 表示；點擊由 onSelect 處理（重複點選中的 tab 也會觸發，由呼叫端決定要不要忽略）。 */
+interface TabSpec { id: string; label: string; icon?: IconName; count?: number; dot?: string; disabled?: boolean; testid?: string }
+const tabs = (opts: { testid: string; selected: string; items: TabSpec[]; onSelect: (id: string) => void; bordered?: boolean; label?: string }): HTMLElement => {
+  const bar = el("div", { class: `ui-tabs${opts.bordered ? " bordered" : ""}`, role: "tablist", "data-testid": opts.testid });
+  if (opts.label) bar.setAttribute("aria-label", opts.label);
+  for (const it of opts.items) {
+    const b = el("button", { type: "button", role: "tab", class: "ui-tab", "data-testid": it.testid ?? `${opts.testid}-${it.id}`, "aria-selected": String(it.id === opts.selected) });
+    if (it.icon) b.append(icon(it.icon));
+    b.append(el("span", { class: "label", text: it.label }));
+    if (it.count !== undefined) b.append(el("span", { class: "ui-tab-count", text: String(it.count) }));
+    if (it.dot) b.append(el("span", { class: "ui-tab-dot", "data-testid": `${it.testid ?? `${opts.testid}-${it.id}`}-dot`, title: it.dot }));
+    b.disabled = !!it.disabled;
+    b.onclick = () => opts.onSelect(it.id);
+    bar.append(b);
+  }
+  return bar;
+};
+
 /** 只有圖示的按鈕：名稱交給 aria-label／title（列表操作、工具列）。 */
 const iconBtn = (attrs: Record<string, string>, ico: IconName, label: string): HTMLButtonElement => {
   const b = el("button", { ...attrs, class: `icon ${attrs.class ?? ""}`.trim(), "aria-label": label, title: label });
@@ -1613,31 +1633,26 @@ export class App {
       // Pod 面板：日誌／終端分頁（同一個 Pod）
       const { ns, pod } = p.k8s;
       title.textContent = pod;
-      const tabs = el("div", { class: "tabs", role: "tablist", "data-testid": "panel-tabs" });
-      for (const [kind, ico, label] of [["logs", "logs", t("gui.logs")], ["term", "terminal", t("gui.terminal")]] as const) {
-        const tab = btn({ type: "button", role: "tab", class: "tab", "data-testid": `panel-tab-${kind}`, "aria-selected": String(p.kind === kind) }, ico, label);
-        tab.onclick = () => {
+      kids.push(tabs({
+        testid: "panel-tabs", selected: p.kind,
+        items: [{ id: "logs", testid: "panel-tab-logs", icon: "logs", label: t("gui.logs") }, { id: "term", testid: "panel-tab-term", icon: "terminal", label: t("gui.terminal") }],
+        onSelect: (kind) => {
           if (this.st.panel?.kind === kind) return;
           if (kind === "logs") this.openPodLogs(ns, pod);
           else this.openPodTerminal(ns, pod);
-        };
-        tabs.append(tab);
-      }
-      kids.push(tabs);
+        },
+      }));
     } else if (c) {
       title.textContent = p.name;
-      const tabs = el("div", { class: "tabs", role: "tablist", "data-testid": "panel-tabs" });
-      for (const [kind, ico, label] of [["logs", "logs", t("gui.logs")], ["term", "terminal", t("gui.terminal")]] as const) {
-        const tab = btn({ type: "button", role: "tab", class: "tab", "data-testid": `panel-tab-${kind}`, "aria-selected": String(p.kind === kind) }, ico, label);
-        if (kind === "term" && c.State !== "running") tab.disabled = true;
-        tab.onclick = () => {
+      kids.push(tabs({
+        testid: "panel-tabs", selected: p.kind,
+        items: [{ id: "logs", testid: "panel-tab-logs", icon: "logs", label: t("gui.logs") }, { id: "term", testid: "panel-tab-term", icon: "terminal", label: t("gui.terminal"), disabled: c.State !== "running" }],
+        onSelect: (kind) => {
           if (this.st.panel?.kind === kind) return;
           if (kind === "logs") this.openLogs(c);
           else this.openTerminal(c);
-        };
-        tabs.append(tab);
-      }
-      kids.push(tabs);
+        },
+      }));
     }
     kids.push(el("span", { class: "spacer" }));
     if (p.kind === "logs") {
@@ -3066,16 +3081,16 @@ export class App {
       const h = summarizeNamespace(ns, res).health;
       return h === "warn" || h === "error";
     });
-    const bar = el("div", { class: "k8s-group-tabs", role: "tablist", "data-testid": "k8s-group-tabs" });
-    for (const id of ["workloads", "system"] as K8sGroup[]) {
-      const tab = el("button", { type: "button", role: "tab", class: `k8s-group-tab${this.k8sGroup === id ? " on" : ""}`, "data-testid": `k8s-group-${id}`, "aria-selected": String(this.k8sGroup === id) },
-        el("span", { text: t(`gui.k8s.group.${id}`) }),
-        el("span", { class: "k8s-group-count", text: String(groups[id].length) }),
-        ...(id === "system" && sysAbnormal ? [el("span", { class: "k8s-group-dot", "data-testid": "k8s-group-dot", title: t("gui.k8s.group.abnormal") })] : []),
-      );
-      tab.onclick = () => this.k8sSelectGroup(id);
-      bar.append(tab);
-    }
+    const bar = tabs({
+      testid: "k8s-group-tabs",
+      selected: this.k8sGroup,
+      bordered: true,
+      items: (["workloads", "system"] as K8sGroup[]).map((id) => ({
+        id, testid: `k8s-group-${id}`, label: t(`gui.k8s.group.${id}`), count: groups[id].length,
+        dot: id === "system" && sysAbnormal ? t("gui.k8s.group.abnormal") : undefined,
+      })),
+      onSelect: (id) => this.k8sSelectGroup(id as K8sGroup),
+    });
     wrap.append(bar);
     const grid = el("div", { class: "k8s-ns-grid", "data-testid": "k8s-ns-grid" });
     for (const ns of groups[this.k8sGroup]) grid.append(this.k8sNsCard(ns));
