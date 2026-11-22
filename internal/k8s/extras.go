@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"time"
@@ -311,7 +312,8 @@ func (m *Manager) DeploymentDetail(ctx context.Context, ns, name string) (Deploy
 	if err := checkRef(ns, name); err != nil {
 		return DeploymentDetail{}, err
 	}
-	rsOut, err := m.root(ctx, nil, "k3s", "kubectl", "get", "replicasets", "-n", ns, "-o", "json")
+	rsPath, _ := listPath("replicasets", ns)
+	rsOut, err := m.get(ctx, rsPath, "get", "replicasets", "-n", ns, "-o", "json")
 	if err != nil {
 		return DeploymentDetail{}, err
 	}
@@ -319,7 +321,9 @@ func (m *Manager) DeploymentDetail(ctx context.Context, ns, name string) (Deploy
 	if err != nil {
 		return DeploymentDetail{}, err
 	}
-	evOut, err := m.root(ctx, nil, "k3s", "kubectl", "get", "events", "-n", ns, "--field-selector", "involvedObject.kind=Deployment,involvedObject.name="+name, "-o", "json")
+	sel := "involvedObject.kind=Deployment,involvedObject.name=" + name
+	evPath, _ := listPath("events", ns)
+	evOut, err := m.get(ctx, evPath+"?"+url.Values{"fieldSelector": {sel}}.Encode(), "get", "events", "-n", ns, "--field-selector", sel, "-o", "json")
 	if err != nil {
 		return DeploymentDetail{}, err
 	}

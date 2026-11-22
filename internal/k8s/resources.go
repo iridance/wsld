@@ -357,9 +357,12 @@ func (m *Manager) list(ctx context.Context, kind, ns string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	args := append([]string{"k3s", "kubectl", "get", kind}, scope...)
+	args := append([]string{"get", kind}, scope...)
 	args = append(args, "-o", "json")
-	return m.root(ctx, nil, args...)
+	if path, ok := listPath(kind, ns); ok {
+		return m.get(ctx, path, args...)
+	}
+	return m.root(ctx, nil, append([]string{"k3s", "kubectl"}, args...)...)
 }
 
 // ListPods 列出 Pod；ns 為空 = 所有 namespace。
@@ -391,7 +394,7 @@ func (m *Manager) ListServices(ctx context.Context, ns string) ([]Service, error
 
 // ListNamespaces 列出 namespace 名稱。
 func (m *Manager) ListNamespaces(ctx context.Context) ([]string, error) {
-	out, err := m.root(ctx, nil, "k3s", "kubectl", "get", "namespaces", "-o", "json")
+	out, err := m.get(ctx, "/api/v1/namespaces", "get", "namespaces", "-o", "json")
 	if err != nil {
 		return nil, err
 	}

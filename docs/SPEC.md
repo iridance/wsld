@@ -173,6 +173,7 @@ wsld/
   - 安裝：`03-k3s.sh install`（內嵌 `scripts.K3sBundle()`）以 `--docker --disable traefik --write-kubeconfig-mode 644` 裝 k3s（k3s 內建 cri-dockerd，node 的 runtime 為 `docker://…`）。k3s.service 加 drop-in `After=docker.service`／`Requires=docker.service`：開機時 k3s 若早於 dockerd，agent 不會啟動 kubelet（node 永遠 NotReady）。unit 預設 disable，啟停由 wsld 管（`systemctl start k3s`）。
   - 單一叢集：所有 WSL2 distro 共用同一個 VM 網路命名空間（API 埠、flannel CIDR、kube-proxy 規則、node 名稱＝Windows 主機名），所以 config 中**同一時間只能有一台 machine `k8s = true`**；第二台被拒絕並指出目前開啟者（GUI 可一鍵移動）。
   - 停止：`k3s-killall.sh`（`--docker` 時 pod 容器不會隨 service 停止）。重置：停止後清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 再啟動。移除：`k3s-uninstall.sh`。
+  - 查詢路徑：唯讀查詢（Pod／Deployment／Service／Namespace 列表、node、`/readyz`、Deployment 的 ReplicaSet 與事件）優先直連 `https://127.0.0.1:<API 埠>`（以 k3s.yaml 的 CA 驗證、client cert 認證；憑證只留記憶體），省下每次 `wsl.exe` 的啟動成本；任何失敗（連不上、憑證、非 2xx）退回 `k3s kubectl`，失敗後 15 秒內不再嘗試。寫入（delete／scale／restart／apply）、logs／exec、安裝啟停仍走 `wsl.exe`。
   - kubeconfig：機器內 k3s.yaml 為正本；啟動不自動匯出，使用者手動匯出時才把它以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔）；server 為 `https://127.0.0.1:<port>`，埠取自 k3s.yaml 的實際值（新安裝 26443；已安裝的舊 k3s 仍為 6443，需重建才會換；憑證 SAN 含 127.0.0.1）。
   - 資源管理經 `wsl.exe … k3s kubectl …`（root）；不引入 client-go。使用者輸入進引數前驗證為 DNS 標籤，避免被當成旗標。
   - 重開機：`wsld start`／GUI 啟動引擎時，若 primary 為 `k8s = true` 則一併啟動 k3s。實測 `wsl --shutdown` 後 node IP 未變、k3s 自動恢復；k3s 每次啟動重新偵測 node IP，Windows 側一律走 127.0.0.1，故不預先綁固定位址，改由 doctor 偵測 node IP 與目前 eth0 不一致。

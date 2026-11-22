@@ -65,6 +65,13 @@ type Manager struct {
 	APIPort  int                 // 新安裝 k3s 的 API 埠偏好；0 = DefaultAPIPort。已安裝的 k3s 不會改埠
 	PortBusy func(port int) bool // Windows 端該埠是否已被占用（預設以 127.0.0.1 撥號探測）
 
+	DisableAPI bool // true = 不走 TCP API，全部經 kubectl（測試用）
+
+	apiMu sync.Mutex
+	apiC  *apiConn
+	// apiDownUntil：API 失敗後的冷卻期，期間直接走 kubectl，避免每次輪詢都重試（並多讀一次 kubeconfig）。
+	apiDownUntil time.Time
+
 	ReadyAttempts int           // 預設 120
 	ReadyInterval time.Duration // 預設 1s
 	Sleep         func(time.Duration)
@@ -184,7 +191,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 		return st
 	}
 	st.State = StateStarting
-	if out, err := m.root(ctx, nil, "k3s", "kubectl", "get", "--raw", "/readyz"); err != nil || strings.TrimSpace(out) != "ok" {
+	if out, err := m.get(ctx, "/readyz", "get", "--raw", "/readyz"); err != nil || strings.TrimSpace(out) != "ok" {
 		return st
 	}
 	st.Ready = true
@@ -195,7 +202,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		nodeOut, nodeErr = m.root(ctx, nil, "k3s", "kubectl", "get", "nodes", "-o", "json")
+		nodeOut, nodeErr = m.get(ctx, "/api/v1/nodes", "get", "nodes", "-o", "json")
 	}()
 	go func() {
 		defer wg.Done()
@@ -296,6 +303,7 @@ func (m *Manager) runScript(ctx context.Context, mode string) error {
 
 // Install 安裝 k3s（unit 預設不啟用；冪等）。
 func (m *Manager) Install(ctx context.Context) error {
+	m.ResetAPI() // 憑證會隨安裝／reset 改變
 	if err := m.runScript(ctx, "install "+strconv.Itoa(m.pickAPIPort())); err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("k8s.install_failed", m.Distro), err)
 	}
@@ -304,6 +312,7 @@ func (m *Manager) Install(ctx context.Context) error {
 
 // Uninstall 完整移除 k3s（k3s-uninstall.sh 與 drop-in）。
 func (m *Manager) Uninstall(ctx context.Context) error {
+	m.ResetAPI() // 憑證會隨安裝／reset 改變
 	if err := m.runScript(ctx, "uninstall"); err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("k8s.uninstall_failed", m.Distro), err)
 	}
@@ -313,6 +322,7 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 // Start 啟動 k3s：確認 dockerd → 未安裝則先安裝 → systemctl start → 等 node Ready。
 // ctx 帶 WithProgress 時，會依序回報 StepEngine／StepInstall／StepNode。
 func (m *Manager) Start(ctx context.Context) error {
+	m.ResetAPI() // 憑證會隨安裝／reset 改變
 	ReportStep(ctx, StepEngine)
 	if out, _ := m.root(ctx, nil, "systemctl", "is-active", "docker"); strings.TrimSpace(out) != "active" {
 		_, _ = m.root(ctx, nil, "systemctl", "reset-failed", "docker")
@@ -341,8 +351,8 @@ func (m *Manager) waitReady(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if out, err := m.root(ctx, nil, "k3s", "kubectl", "get", "--raw", "/readyz"); err == nil && strings.TrimSpace(out) == "ok" {
-			if js, err := m.root(ctx, nil, "k3s", "kubectl", "get", "nodes", "-o", "json"); err == nil {
+		if out, err := m.get(ctx, "/readyz", "get", "--raw", "/readyz"); err == nil && strings.TrimSpace(out) == "ok" {
+			if js, err := m.get(ctx, "/api/v1/nodes", "get", "nodes", "-o", "json"); err == nil {
 				if n, err := ParseNode(js); err == nil && n.Ready {
 					return nil
 				}
@@ -367,6 +377,7 @@ const (
 // Stop 停止 k3s：k3s-killall.sh（停 service、清 netns／iptables／掛載）→ 移除 k8s_* 容器。
 // 容器清理盡力而為（dockerd 可能已停）；killall 失敗才算失敗。
 func (m *Manager) Stop(ctx context.Context) error {
+	m.ResetAPI() // 憑證會隨安裝／reset 改變
 	if _, err := m.root(ctx, nil, k3sKillall); err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("k8s.stop_failed", m.Distro), err)
 	}
@@ -376,6 +387,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 // Reset 還原為乾淨叢集：停止 → 清除 k3s／kubelet 狀態 → 重新啟動。
 func (m *Manager) Reset(ctx context.Context) error {
+	m.ResetAPI() // 憑證會隨安裝／reset 改變
 	if err := m.Stop(ctx); err != nil {
 		return err
 	}

@@ -74,6 +74,7 @@ func newMgr(f *fakeRunner) *Manager {
 		ReadyAttempts: 3,
 		Sleep:         func(time.Duration) {},
 		PortBusy:      func(int) bool { return false },
+		DisableAPI:    true,
 	}
 }
 
