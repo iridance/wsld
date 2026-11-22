@@ -268,6 +268,8 @@ Extra ≠ 0.5／v2.0 完成條件
 - [x] 區網存取：0.9.0 以 mirrored＋Hyper-V 防火牆交付；0.10.0 改為 wsld-gui 內建轉發器（Windows 原生防火牆確認、不重啟 WSL），並提供 `wsld lan restore-nat` 還原 mirrored；0.11.0 開啟時以 UAC 替 wsld-gui 加入防火牆規則（私人＋公用、LocalSubnet），設定頁顯示授權狀態；0.12.0 改為 wsld-gui 啟動時請求授權，開關只改設定；0.13.0 改回使用者操作時才請求：先顯示 wsld 說明對話框，再提權 Windows 內建 netsh（UAC 顯示 Microsoft 已驗證的網路命令殼層），未授權前不監聽（見 SPEC §4.5）
 - [ ] npiperelay（Windows named pipe ↔ 引擎）
 - [ ] 自動更新（`wsld`／`wsld-gui` 本體）
+- [ ] `wsld import`：從 Docker Desktop 把映像檔、volume、容器搬進 wsld 引擎（參考 Kiri 的 `kiri import`）
+- [ ] Local domains：每個容器 `http://<name>.wsld.local`、Compose 為 `<service>.<project>.wsld.local`，可選 HTTPS（自家 CA）（參考 Kiri 的 `.kiri.local`）
 - [ ] arm64 正式支援
 - [ ] 專用隔離 distro 旗標
 
