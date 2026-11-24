@@ -2020,8 +2020,12 @@ export class App {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.machines") }));
       return;
     }
-    const grid = el("div", { class: "machine-grid" });
+    // Engine 單獨一組放最上面；其餘機器依原順序在下一組
+    const engineGrid = el("div", { class: "machine-grid" });
+    const otherGrid = el("div", { class: "machine-grid" });
     for (const d of m.machines) {
+      const isEngine = d.role === "engine";
+      const grid = isEngine ? engineGrid : otherGrid;
       const removing = this.st.busy.has(`remove:${d.name}`);
       const starting = (this.st.starting && d.active) || this.st.busy.has(`power-on:${d.name}`);
       const stopping = this.st.busy.has(`power-off:${d.name}`);
@@ -2064,7 +2068,8 @@ export class App {
         : iconBtn({ "data-testid": `btn-machine-start-${d.name}` }, "play", t("gui.machines.start"));
       power.disabled = locked;
       power.onclick = () => void this.machinePower(d.name, running ? "off" : "on", d.active);
-      tools.push(power, cfg, folder, term, compact, rm);
+      // Engine 是所有 distro 共用的 dockerd：不能停止、不能刪除（只在它沒在跑時留「啟動」）
+      tools.push(...(isEngine && running ? [] : [power]), cfg, folder, term, compact, ...(isEngine ? [] : [rm]));
 
       const footKids: HTMLElement[] = [];
       // engine／client 角色：沒有 engine 時可把任一機器設為 engine；有 engine 後其他機器可改為 client（共用 engine 的 docker）
@@ -2147,7 +2152,16 @@ export class App {
         ),
       );
     }
-    list.replaceChildren(grid);
+    if (!engineGrid.hasChildNodes()) {
+      list.replaceChildren(otherGrid); // 還沒有 engine（首次設定中）：維持單一清單
+      return;
+    }
+    const group = (id: string, titleKey: string, g: HTMLElement) =>
+      el("section", { class: "machine-group", "data-testid": `machines-group-${id}` }, el("h3", { class: "machine-group-title", text: t(titleKey) }), g);
+    list.replaceChildren(
+      group("engine", "gui.machines.group_engine", engineGrid),
+      ...(otherGrid.hasChildNodes() ? [group("others", "gui.machines.group_others", otherGrid)] : []),
+    );
   }
 
   /** 啟動／停止 distro。停止主要 distro 會連帶停掉 Docker，先確認。 */

@@ -30,3 +30,37 @@ test("Machines: Docker Desktop's internal distro never offers a role", async ({ 
   await page.getByTestId("nav-machines").click();
   await expect(page.getByTestId("btn-machine-role-docker-desktop")).toHaveCount(0);
 });
+
+test("Machines: the engine sits alone in the first group and can be neither stopped nor removed", async ({ page, request }) => {
+  await request.post("/__test/distro?name=Debian1");
+  await open(page);
+  await page.getByTestId("nav-machines").click();
+  const eng = page.getByTestId("machines-group-engine");
+  const others = page.getByTestId("machines-group-others");
+  await expect(eng.getByTestId("machine-row")).toHaveCount(1);
+  await expect(eng.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]')).toBeVisible();
+  await expect(others.getByTestId("machine-row")).toHaveCount(2); // Debian1、docker-desktop
+  // 引擎組在上、其他在下
+  const ey = (await eng.boundingBox())!.y;
+  const oy = (await others.boundingBox())!.y;
+  expect(ey).toBeLessThan(oy);
+
+  await expect(page.getByTestId("btn-machine-stop-Ubuntu-26.04")).toHaveCount(0);
+  await expect(page.getByTestId("btn-machine-start-Ubuntu-26.04")).toHaveCount(0); // 執行中：沒有電源鈕
+  await expect(page.getByTestId("btn-machine-remove-Ubuntu-26.04")).toHaveCount(0);
+  await expect(page.getByTestId("btn-machine-term-Ubuntu-26.04")).toBeVisible();
+  // 其他發行版仍可停止／刪除
+  await expect(page.getByTestId("btn-machine-remove-Debian1")).toBeVisible();
+  await expect(page.getByTestId("btn-machine-start-Debian1")).toBeVisible();
+});
+
+test("Machines: the API refuses to stop or remove the engine", async ({ request }) => {
+  for (const [path, data] of [
+    ["/api/machines/Ubuntu-26.04/stop", undefined],
+    ["/api/machines/Ubuntu-26.04/unmanage", undefined],
+    ["/api/machines/Ubuntu-26.04/unregister", { confirm: "Ubuntu-26.04" }],
+  ] as const) {
+    const r = await request.post(path, data ? { data } : {});
+    expect(r.status(), path).toBe(409);
+  }
+});

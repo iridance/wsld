@@ -376,20 +376,17 @@ func TestMachineStartStop(t *testing.T) {
 		t.Fatalf("stop again = %d", resp.StatusCode)
 	}
 
-	// 主要 distro：停止 → 引擎斷線；啟動 → 引擎回來
+	// engine：不能停止（409），仍在執行、引擎不斷線；對執行中的 engine 再啟動是冪等的
 	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/stop", "")
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("stop primary = %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stop engine = %d", resp.StatusCode)
 	}
-	if s := state("Ubuntu-26.04"); s != "Stopped" || !e.engine.Down {
-		t.Fatalf("after stop primary: state=%q down=%v", s, e.engine.Down)
+	if s := state("Ubuntu-26.04"); s != "Running" || e.engine.Down {
+		t.Fatalf("after refused stop: state=%q down=%v", s, e.engine.Down)
 	}
 	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/start", "")
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("start primary = %d", resp.StatusCode)
-	}
-	if s := state("Ubuntu-26.04"); s != "Running" || e.engine.Down {
-		t.Fatalf("after start primary: state=%q down=%v", s, e.engine.Down)
+		t.Fatalf("start engine = %d", resp.StatusCode)
 	}
 
 	// 錯誤：不存在 → 404；名稱不合法 → 400；沒有 WSL → 501
@@ -910,23 +907,11 @@ func TestPrimaryKeepAlive(t *testing.T) {
 	e.req(t, http.MethodPost, "/api/machines/docker-desktop/start", "")
 	waitHeld("Ubuntu-26.04")
 
-	// 使用者停止主要機器：放掉保活，輪詢也不會把它重掛（否則會把剛停掉的機器叫醒）
-	e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/stop", "")
-	waitHeld()
-	list()
-	list()
-	if len(held()) != 0 {
-		t.Fatalf("poll must not re-hold a user-stopped primary: %v", held())
-	}
-	for _, s := range fw.Spawns() {
-		if strings.Contains(s, "docker-desktop") {
+	for _, sp := range fw.Spawns() {
+		if strings.Contains(sp, "docker-desktop") {
 			t.Fatalf("non-primary must never be kept alive: %v", fw.Spawns())
 		}
 	}
-
-	// 再按啟動：回到保活
-	e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/start", "")
-	waitHeld("Ubuntu-26.04")
 
 	// wsl --shutdown 會結束 session；之後使用者開了終端（機器回到 Running）→ 輪詢補掛
 	_ = wsl.Shutdown(context.Background(), fw)
@@ -1010,5 +995,35 @@ func TestMachineRoleEngineAndClient(t *testing.T) {
 	}
 	if cm, _ := c.FindMachine("Debian1"); cm.APIEndpoint != c.APIEndpoint {
 		t.Fatalf("client shares the engine endpoint: %q vs %q", cm.APIEndpoint, c.APIEndpoint)
+	}
+}
+
+// engine 是所有 distro 共用的 dockerd：不能被停止、取消管理或刪除。
+func TestEngineCannotBeStoppedUnmanagedOrUnregistered(t *testing.T) {
+	e := newEnv(t, "")
+	fw := NewFakeWSL()
+	e.s.WSL = fw
+	for _, tc := range []struct{ path, body string }{
+		{"/api/machines/Ubuntu-26.04/stop", ""},
+		{"/api/machines/Ubuntu-26.04/unmanage", ""},
+		{"/api/machines/Ubuntu-26.04/unregister", `{"confirm":"Ubuntu-26.04"}`},
+	} {
+		resp, b := e.req(t, http.MethodPost, tc.path, tc.body)
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), "engine") {
+			t.Fatalf("%s = %d %s, want 409 mentioning the engine", tc.path, resp.StatusCode, b)
+		}
+	}
+	_, b := e.req(t, http.MethodGet, "/api/machines", "")
+	var m MachinesResponse
+	_ = json.Unmarshal(b, &m)
+	if m.Machines[0].Name != "Ubuntu-26.04" || m.Machines[0].State != "Running" {
+		t.Fatalf("engine must still be running: %+v", m.Machines[0])
+	}
+	c, _ := e.s.LoadConfig()
+	if en, ok := c.EngineMachine(); !ok || en.Distro != "Ubuntu-26.04" {
+		t.Fatalf("engine profile must stay: %+v", c.Machines)
+	}
+	if fw.Ran("--terminate") || fw.Ran("--unregister") {
+		t.Fatal("WSL must not be touched")
 	}
 }

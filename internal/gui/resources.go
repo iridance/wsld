@@ -615,9 +615,21 @@ func (s *Server) handleMachineStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMachineStop 停止 distro（wsl --terminate）。已納管的先 systemctl stop docker，讓容器正常結束。
+// refuseEngine 對 engine 回 409：它是所有 distro 共用的 dockerd，不能停止、取消管理或刪除。
+func (s *Server) refuseEngine(w http.ResponseWriter, name string) bool {
+	if m, ok := s.cfg().FindMachine(name); ok && m.IsEngine() {
+		writeErr(w, http.StatusConflict, "conflict", errors.New(i18n.T("gui.machines.engine_protected", m.Distro)))
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleMachineStop(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.findDistro(w, r)
 	if !ok {
+		return
+	}
+	if s.refuseEngine(w, d.Name) {
 		return
 	}
 	if !strings.EqualFold(d.State, "Running") {
@@ -791,6 +803,9 @@ func (s *Server) handleMachineResizeInfo(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleMachineUnmanage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if s.refuseEngine(w, name) {
+		return
+	}
 	cfg := s.cfg()
 	if _, ok := cfg.FindMachine(name); !ok {
 		writeErr(w, http.StatusNotFound, "not_found", errors.New("machine not managed: "+name))
@@ -821,6 +836,9 @@ func (s *Server) handleMachineUnregister(w http.ResponseWriter, r *http.Request)
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.Confirm == "" || body.Confirm != name {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("confirm must equal distro name"))
+		return
+	}
+	if s.refuseEngine(w, name) {
 		return
 	}
 	if s.WSL == nil {

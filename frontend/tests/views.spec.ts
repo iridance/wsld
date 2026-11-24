@@ -536,27 +536,15 @@ test("Machines: Start / Stop a non-primary distro toggles its state without a co
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
 });
 
-test("Machines: Stopping the engine distro confirms and disconnects; Start brings it back", async ({ page }) => {
+test("Machines: a non-engine distro can be stopped and started without confirmation; the engine keeps running", async ({ page }) => {
   await go(page, "machines");
-  const row = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(row).toHaveAttribute("data-state", "running");
-
-  // 取消 → 不停止
-  await page.getByTestId("btn-machine-stop-Ubuntu-26.04").click();
-  await expect(page.getByTestId("confirm-dialog")).toBeVisible();
-  await expect(page.getByTestId("confirm-text")).toContainText("engine distro");
-  await page.getByTestId("confirm-cancel").click();
-  await expect(row).toHaveAttribute("data-state", "running");
-
-  await page.getByTestId("btn-machine-stop-Ubuntu-26.04").click();
-  await expect(page.getByTestId("confirm-ok")).toHaveText("Stop distro");
-  await page.getByTestId("confirm-ok").click();
-  await expect(row).toHaveAttribute("data-state", "stopped");
-  await expect(page.getByTestId("status-connection")).not.toHaveAttribute("data-state", "connected");
-
-  await page.getByTestId("btn-machine-start-Ubuntu-26.04").click();
-  await expect(row).toHaveAttribute("data-state", "running");
-  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 10_000 });
+  const dd = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
+  await page.getByTestId("btn-machine-start-docker-desktop").click();
+  await expect(dd).toHaveAttribute("data-state", "running");
+  await page.getByTestId("btn-machine-stop-docker-desktop").click();
+  await expect(dd).toHaveAttribute("data-state", "stopped");
+  await expect(page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]')).toHaveAttribute("data-state", "running");
+  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
 });
 
 test("Machines: Terminal opens bottom panel exec session like containers", async ({ page }) => {

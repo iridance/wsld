@@ -659,8 +659,12 @@ func (a *App) cmdUnmanage(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := cfg.FindMachine(name); !ok {
+	m, ok := cfg.FindMachine(name)
+	if !ok {
 		return fail(ExitError, errors.New(i18n.T("cli.machine_missing", name)))
+	}
+	if m.IsEngine() {
+		return fail(ExitError, errors.New(i18n.T("gui.machines.engine_protected", m.Distro)))
 	}
 	_ = wsl.StopDocker(ctx, a.WSL, name) // best-effort：distro 未醒／無 docker 仍刪 profile
 	if !cfg.RemoveMachine(name) {
@@ -687,6 +691,9 @@ func (a *App) cmdUnregister(ctx context.Context, args []string) error {
 	cfg, err := a.loadConfig()
 	if err != nil {
 		return err
+	}
+	if m, ok := cfg.FindMachine(name); ok && m.IsEngine() {
+		return fail(ExitError, errors.New(i18n.T("gui.machines.engine_protected", m.Distro)))
 	}
 	_ = wsl.StopDocker(ctx, a.WSL, name)
 	if err := wsl.Unregister(ctx, a.WSL, name); err != nil {

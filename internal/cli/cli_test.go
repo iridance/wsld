@@ -540,3 +540,22 @@ func TestResizeDiskAlsoCompacts(t *testing.T) {
 		t.Fatalf("compact must follow resize; calls:\n%s", joined)
 	}
 }
+
+func TestEngineCannotBeUnmanagedOrUnregistered(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("unmanage", "Ubuntu-26.04"); code != ExitError || !strings.Contains(h.errb.String(), "engine") {
+		t.Fatalf("unmanage: code=%d err=%q", code, h.errb.String())
+	}
+	h.errb.Reset()
+	if code := h.run("unregister", "Ubuntu-26.04", "--confirm", "Ubuntu-26.04"); code != ExitError || !strings.Contains(h.errb.String(), "engine") {
+		t.Fatalf("unregister: code=%d err=%q", code, h.errb.String())
+	}
+	for _, c := range h.wsl.calls {
+		if strings.Contains(c, "--unregister") || strings.Contains(c, "stop docker") {
+			t.Fatalf("the engine must not be touched: %s", c)
+		}
+	}
+	if _, ok := h.cfg(t).EngineMachine(); !ok {
+		t.Fatal("engine profile must stay")
+	}
+}

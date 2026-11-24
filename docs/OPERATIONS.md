@@ -142,7 +142,7 @@ GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看�
 ## Machines：管理多個 WSL 發行版
 
 - GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
-- **單一 engine**：沒有「設為主要」或切換機器；Docker 一律走 engine。右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
+- **單一 engine**：沒有「設為主要」或切換機器；Docker 一律走 engine。Machines 頁把 Engine **單獨分一組放在最上面**，它不能停止、取消管理或刪除（GUI 沒有這些按鈕，API／CLI 回 409／錯誤）；只有它沒在跑時才出現「啟動」，其餘由 wsld 自動維持。右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
 - 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。之後在卡片上按「共用 engine」會 bootstrap（只裝 docker CLI，連到共用 engine）。支援 Ubuntu/Debian、Arch、openSUSE 系。
   - 密碼只經由 stdin 交給發行版內的 `chpasswd`，不會出現在指令參數中，也不會寫入設定檔或 log。
   - 密碼留空則帳號沒有密碼，`sudo` 無法使用；事後可補設：`wsl -d <machine> -u root passwd <帳號>`。
