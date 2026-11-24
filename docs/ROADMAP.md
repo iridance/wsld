@@ -12,7 +12,7 @@ Phase 2  共用核心 + wsld CLI              ✅
 Phase 3  GUI 基底（Wails + Playwright）   ✅
 Phase 4  打磨（文件／Tray 自啟／LICENSE） ✅  → 基底就緒
 Phase 5  0.5 主線：多 distro＋GUI 補完    ✅  → 語意化版號 **0.5.4**
-Extra    延後能力（含首次 Setup；k3s 已於 0.16.0 交付） ← 有需求再排
+Extra    延後能力（含首次 Setup；k3s 見「後續：本機 Kubernetes」） ← 有需求再排
 Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-WINUI.md
   6a Rust core + CLI（並行 opt-in）
   6b Rust 橋接 server + testhost
@@ -21,7 +21,7 @@ Phase 6  Rust core + WinUI3（純 Rust）      ← 之後 v2.0，設計見 GUI-W
   6e Machines/Settings/Terminal/Tray
   6f Parity 驗證 + cutover（→ v2.0.0）
 
-0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT；**0.11.0**（`v0.11.0`）= 區網存取的防火牆授權（UAC 提權 wsld-gui 自身加規則）＋容器列地球按鈕＋自繪下拉選單；**0.11.1**（`v0.11.1`）= 修正 Kali 等 Debian 衍生版 bootstrap 404＋WSL 發行版分類表（`scripts/lib/distros.tsv`）＋「設為目前」改稱「設為主要」（未單獨發布，併入 v0.12.0）；**0.12.0**（`v0.12.0`）= Machines 卡片啟動／停止發行版＋wsld-gui 啟動時請求防火牆授權（區網存取開關只改設定）；**0.13.0**（`v0.13.0`）= 防火牆授權改為使用者開啟區網存取時才詢問：wsld 先說明規則再提權 netsh（有封鎖規則時改用 wsld-gui helper），未授權前不在內網 IP 監聽；**0.14.0**（`v0.14.0`）= 容器列瀏覽器按鈕常駐：區網存取關閉或無轉發時以 `http://localhost:<埠>` 開啟；**0.15.0**（`v0.15.0`）= 各頁磁碟用量卡：容器／compose、映像、Volume、Machines（ext4.vhdx）每項佔用的長條與總計（`/system/df`）＋容器／Volume 大小欄；**0.15.1**（`v0.15.1`）= 新增機器對話框：取消改為右上角圖示、安裝開始後隱藏安裝鈕，安裝中不再出現捲軸；**0.15.2**（`v0.15.2`）= 磁碟用量改為頁標題旁的用量鈕（迷你長條＋總量，點開看每項），不再佔列表上方的高度；全域窄版捲軸（跟隨主題配色）；**0.16.0**（`v0.16.0`）= 本機 Kubernetes（k3s）：每台 machine 可選開啟單節點 k3s（`--docker` 與 dockerd 共用映像檔），`wsld k8s` 與 GUI 新增的 Kubernetes 頁（一鍵啟停、Pods／Deployments／Services 管理）；**0.17.0**（`v0.17.0`）= 機器磁碟上限：新增機器可指定虛擬磁碟上限（`wsl --install --vhd-size`，預設 60 GB；`wsld init --vhd-size`），既有機器可在 Info 或以 `wsld resize-disk` 調整（`wsl --manage --resize`；VHD 被占用時需經同意 `wsl --shutdown`，完成後重啟原本執行中的機器）；機器卡片「釋放磁碟空間」與 `wsld compact-disk`（`wsl --manage --compact`），調整大小後也一併壓縮；wsld-gui 閃退寫入 `%APPDATA%\wsld\crash.log`，卡片與 Info 顯示上限（讀 VHDX 標頭，不喚醒）；**0.17.1**（`v0.17.1`）= 修正開啟已停止機器的 Info（及每 3 秒的用量輪詢）會執行 `wsl -d … cat /etc/wsl.conf` 而把機器啟動：停止中不進 distro 執行命令，Info 顯示「啟動機器後才能查看 /etc/wsl.conf」、停止中不輪詢，機器啟動／停止後 Info 自動更新；FakeWSL 改為任何 `-d <name>` 命令都會喚醒 distro（可用 `WakeExempt` 豁免），測試能抓到誤喚醒；**0.17.2**（`v0.17.2`）= 機器卡片圖示改為各 distro 的 logo（依名稱比對，認不出來維持通用圖示）；修正主要機器啟動後約 20 秒被 WSL 回收：實測 `wsl -d <distro> -- true` 之類一閃即逝的命令結束後，即使 `systemd=true`，distro 約 20 秒就回到 Stopped（systemd 服務不算 session）。wsld-gui 改為替主要機器掛一個常駐 `wsl -d <distro> -- sleep infinity`（`wsl.KeepAlive`）：設為主要／啟動主要／狀態輪詢發現主要在執行時掛上，換主要時放掉舊的；使用者明確停止、`wsl --shutdown`、結束 wsld-gui 時放掉；非主要機器不保活；**0.18.0**（`v0.18.0`）= Kubernetes 頁重做：資源列表改為 namespace flow card（Ingress → Service → Workloads → Pods、ConfigMap／PVC 數量、對外 NodePort 標示；沒有 Ingress 就不顯示該節點），點卡片開右側 50% 側欄，分頁 Architecture（架構圖：Ingress → Service → Deployment／StatefulSet → Pods，ConfigMap／PVC 虛線掛載，連線依 selector／labels 比對）／Pods（搜尋、狀態篩選、owner）／Workloads（Deployment 卡片＋副本數調整器、StatefulSet 唯讀）／Services（endpoints、目標 workload、Ingress routes）／Config／Storage，點 Deployment 進詳情（Replicas／Strategy／Image、rollout 歷史、Pods、Events）；後端新增 `GET /api/k8s/extras` 與 `GET /api/k8s/deployments/{ns}/{name}/detail`，Pod／Deployment／Service 回應帶 labels／selector／掛載資訊；啟動後狀態轉換修正（node 尚未 Ready 時持續輪詢，不再卡在「啟動中」）、載入並行化、namespace 卡片如實顯示裡面的內容（沒有專屬分頁的 Lease／Role／Secret／Job 等依種類計數，新增 Other 分頁；namespace 分成 Workloads／System（`kube-*` 內建）兩個頁籤，System 有異常時頁籤亮紅點；卡片以分類標籤（預設／自建／系統）取代健康徽章，只在異常時標示；沒有 Pod 的系統 namespace 直接列出內容，架構圖為空時也列出）、k3s node 改以 machine 名稱命名（新安裝；既有叢集 Reset 後套用）；**0.19.0**（`v0.19.0`）= 各頁首次載入前顯示對齊資料版面的 loading 佔位（Containers／Images／Volumes／Networks／Machines／Kubernetes），載入完成才切換；App 啟動時自動連線（帶起 active machine 的引擎並恢復設為 k8s 的 k3s，等同按 Start engine；未初始化的 machine 不自動初始化）
+0.5 = Phase 5 完成定義全過（見下方）；**0.6.0**（`v0.6.0`）= Info／Networks 等後續打磨；**0.7.0**（`v0.7.0`）= GUI 全面改版＋新圖示；**0.8.0**（`v0.8.0`）= 頂部導覽＋自繪輸入元件；**0.8.1**（`v0.8.1`）= 新增機器下載進度；**0.8.2**（`v0.8.2`）= openSUSE 支援＋新機器免手動建使用者；**0.8.3**（`v0.8.3`）= 新增機器設定 Linux 帳號與密碼；**0.9.0**（`v0.9.0`）= 區網存取（mirrored＋Hyper-V 防火牆）；**0.10.0**（`v0.10.0`）= 區網存取改為 wsld-gui 內建轉發器＋還原 NAT；**0.11.0**（`v0.11.0`）= 區網存取的防火牆授權（UAC 提權 wsld-gui 自身加規則）＋容器列地球按鈕＋自繪下拉選單；**0.11.1**（`v0.11.1`）= 修正 Kali 等 Debian 衍生版 bootstrap 404＋WSL 發行版分類表（`scripts/lib/distros.tsv`）＋「設為目前」改稱「設為主要」（未單獨發布，併入 v0.12.0）；**0.12.0**（`v0.12.0`）= Machines 卡片啟動／停止發行版＋wsld-gui 啟動時請求防火牆授權（區網存取開關只改設定）；**0.13.0**（`v0.13.0`）= 防火牆授權改為使用者開啟區網存取時才詢問：wsld 先說明規則再提權 netsh（有封鎖規則時改用 wsld-gui helper），未授權前不在內網 IP 監聽；**0.14.0**（`v0.14.0`）= 容器列瀏覽器按鈕常駐：區網存取關閉或無轉發時以 `http://localhost:<埠>` 開啟；**0.15.0**（`v0.15.0`）= 各頁磁碟用量卡：容器／compose、映像、Volume、Machines（ext4.vhdx）每項佔用的長條與總計（`/system/df`）＋容器／Volume 大小欄；**0.15.1**（`v0.15.1`）= 新增機器對話框：取消改為右上角圖示、安裝開始後隱藏安裝鈕，安裝中不再出現捲軸；**0.15.2**（`v0.15.2`）= 磁碟用量改為頁標題旁的用量鈕（迷你長條＋總量，點開看每項），不再佔列表上方的高度；全域窄版捲軸（跟隨主題配色）；**0.16.0**（`v0.16.0`）= 本機 Kubernetes（k3s；已自 main 移出，見下方「後續：本機 Kubernetes」）；**0.17.0**（`v0.17.0`）= 機器磁碟上限：新增機器可指定虛擬磁碟上限（`wsl --install --vhd-size`，預設 60 GB；`wsld init --vhd-size`），既有機器可在 Info 或以 `wsld resize-disk` 調整（`wsl --manage --resize`；VHD 被占用時需經同意 `wsl --shutdown`，完成後重啟原本執行中的機器）；機器卡片「釋放磁碟空間」與 `wsld compact-disk`（`wsl --manage --compact`），調整大小後也一併壓縮；wsld-gui 閃退寫入 `%APPDATA%\wsld\crash.log`，卡片與 Info 顯示上限（讀 VHDX 標頭，不喚醒）；**0.17.1**（`v0.17.1`）= 修正開啟已停止機器的 Info（及每 3 秒的用量輪詢）會執行 `wsl -d … cat /etc/wsl.conf` 而把機器啟動：停止中不進 distro 執行命令，Info 顯示「啟動機器後才能查看 /etc/wsl.conf」、停止中不輪詢，機器啟動／停止後 Info 自動更新；FakeWSL 改為任何 `-d <name>` 命令都會喚醒 distro（可用 `WakeExempt` 豁免），測試能抓到誤喚醒；**0.17.2**（`v0.17.2`）= 機器卡片圖示改為各 distro 的 logo（依名稱比對，認不出來維持通用圖示）；修正主要機器啟動後約 20 秒被 WSL 回收：實測 `wsl -d <distro> -- true` 之類一閃即逝的命令結束後，即使 `systemd=true`，distro 約 20 秒就回到 Stopped（systemd 服務不算 session）。wsld-gui 改為替主要機器掛一個常駐 `wsl -d <distro> -- sleep infinity`（`wsl.KeepAlive`）：設為主要／啟動主要／狀態輪詢發現主要在執行時掛上，換主要時放掉舊的；使用者明確停止、`wsl --shutdown`、結束 wsld-gui 時放掉；非主要機器不保活；**0.19.0**（`v0.19.0`，tag 已移除、未發版）= 各頁首次載入前顯示對齊資料版面的 loading 佔位（Containers／Images／Volumes／Networks／Machines）；App 啟動時自動連線（帶起引擎，等同按 Start engine）
 之後 v2.0 = Phase 6（6a–6f）
 Extra ≠ 0.5／v2.0 完成條件
 ```
@@ -190,92 +190,21 @@ Extra ≠ 0.5／v2.0 完成條件
 
 **退出條件**：上列完成定義全勾；**不**阻擋 Phase 5／6。
 
-### 本機 Kubernetes（k3s）
+### 後續：本機 Kubernetes（k3s）
 
-> **狀態：已自 main 移出，改在 `feat/k8s` 分支維護，不隨下次 release 發布**（0.16.0–0.19.0 曾發布）。以下為該分支的規劃紀錄。
+> **狀態：已自 main 移出，在 `feat/k8s` 分支維護，不隨下次 release 發布**（0.16.0–0.19.0 曾發布）。main 不含 k8s 頁、`wsld k8s`、k8s 設定與 doctor 檢查。
 
-**目標**：每台 machine 可選開啟**單節點 k3s**（預設關），以 `--docker` 與該 distro 的 dockerd 共用映像檔：`docker build` 完 k8s 直接可用、不必架 registry；Windows 側 `kubectl` 透過 `127.0.0.1:6443` 連線。不做完整 k8s（kubeadm）／minikube／kind。
+**方向**：單節點 k3s 跑在共用 engine 上（`--docker` 與 dockerd 共用映像檔，不必架 registry），Windows 側 `kubectl` 透過 `127.0.0.1:6443` 連線；定位對標 OrbStack，多節點列為日後可選的 Cluster 進階模式。
 
-> 0.16.0 已交付：SPEC §1.5 已移出非目標，新增 §4.6。依版號原則屬功能變更（b 位進位）。
+後續項目：
 
-#### 評估依據（2026-11-19，實機 Ubuntu-26.04／WSL 6.18）
+- [ ] 在 `feat/k8s` 對齊單一 engine 後重新合併（k3s 只裝在 engine；一律由 engine 啟停）
+- [ ] 單節點流程重新設計（0.20.0 候選，分支 `feat/k8s-single-node-flow`）：Off 時中央 hero、Enabling 步驟清單、Deploy／Apply YAML、Import（Compose → k8s stack）
+- [ ] 實機驗收：GUI Kubernetes 頁手測、Windows 端 `kubectl.exe`、`wsl --shutdown` 後恢復
+- [ ] 區網存取轉發 NodePort／LoadBalancer（現有轉發器只看 docker published 埠）
+- [ ] Enabling log 尾端、⋯ 選單、異常 namespace 的「CrashLoop 原因」
 
-- cgroup v2（controllers 齊）、systemd 為 PID 1
-- 核心模組：`br_netfilter`、`overlay`、`vxlan`、`ip_vs`、`nf_tables`、`xt_conntrack` 皆可用
-- 資源：該機 WSL 僅 3 GB／4 核；k3s 待機約 0.5～1 GB → 必須 opt-in，並在 doctor 提示
-
-#### 方案選擇
-
-| 方案 | 決定 | 理由 |
-| ---- | ---- | ---- |
-| k3s 原生 + `--docker` | **採用** | 映像檔與 dockerd 共用；systemctl 啟停，與現有 `lifecycle` 管 dockerd 同模式；單一執行檔 |
-| k3d（k3s 跑在 docker 內） | 備案 | 不改動 distro、可多叢集；但映像檔需另外 import／registry，port 需建叢集時決定 |
-| kubeadm／minikube／kind | 不採用 | 過重，或在 WSL 上多一層虛擬化／巢狀，效益不足 |
-
-#### 0. PoC（go/no-go 關卡，先於交付）
-
-> 結論（2026-11-21，測試機 `Ubuntu-k3s-poc`、k3s v1.37.2+k3s1、Docker 29.10.0、WSL 6.18）：**go**，五項皆已驗證，進入交付。
-
-- [x] **node IP 漂移**：實測一次完整 `wsl --shutdown`（VM 重新開機）後 eth0 仍為 172.20.3.68，k3s 隨 docker 自動啟動、node 回到 Ready、pod 全數恢復、NodePort 可連、憑證 SAN 仍含 127.0.0.1。**限制**：僅驗證到 IP 未變的情況（未能人為製造漂移）；k3s 每次啟動會重新偵測 node IP 並由 dynamiclistener 補憑證 SAN，Windows 側一律走 127.0.0.1，故判定風險可接受 → 不預先綁固定位址。交付時由 doctor 檢查 node InternalIP 與 eth0 是否一致，不一致時提示 `wsld k8s off && on`
-- [x] **iptables 共存**：iptables 為 nf_tables 後端；Docker 與 k3s 並存，雙向皆通——pod 經 NodePort（127.0.0.1:30080）可達、Docker `-p` 容器可達、pod → Docker 容器（經主機 IP）、Docker 容器 → pod NodePort、pod DNS 與對外連線皆成功
-- [x] **`--docker` 路徑**：v1.37.2 仍內建 cri-dockerd（node `CONTAINER-RUNTIME=docker://29.10.0`）；`docker build` 的映像以 `imagePullPolicy: Never` 直接跑成 pod
-  - **發現：k3s 必須排在 docker 之後啟動**。開機時 k3s 先於 dockerd 起來，agent 不會啟動 kubelet／cri-dockerd（node NotReady、pod 永遠 Pending）；手動 `systemctl restart k3s` 即恢復。k3s unit 預設只 `After=network-online.target` → 交付須加 drop-in：`After=docker.service`＋`Requires=docker.service`（或由 `wsld` 依序啟動 docker → k3s）
-- [x] Windows 側連 `127.0.0.1:6443`：Windows `curl.exe` 以 k3s CA 驗證 TLS 通過（http 401＝需憑證，符合預期）；伺服器憑證 SAN 含 127.0.0.1。（Windows 尚未安裝 `kubectl.exe`，完整 kubectl 流程留待交付驗證）
-- [x] 量測待機資源（單節點、僅系統 pod）：k3s cgroup 約 440 MB、`k3s-server` RSS 約 590 MB、dockerd 約 145 MB、containerd 約 60 MB → k3s 約 0.6 GB。doctor 門檻：尚未執行時 MemAvailable < 1.5 GiB 警告；執行中 MemAvailable < 512 MiB 警告（不以總量判斷：3.9 GB 的 WSL 實測可跑）
-- **其他發現**：所有 WSL2 distro 共用網路命名空間——測試機看得到主 distro 的 docker 網橋與 :23750，兩台 dockerd 的 docker0／使用者網路子網（172.17–172.21.0.0/16）不與 k3s 的 pod 10.42.0.0/16、service 10.43.0.0/16 重疊；node 名稱當時沿用 Windows 主機名（`framework`），兩台 distro 同名（v0.19.0 起新安裝改以 machine 名稱命名，見 `--node-name`），故只允許單台開 k3s 的限制成立；distro 在沒有任何 wsl.exe 連線時會被 WSL 關閉（k3s 隨之停止），`wsld start` 需讓 distro 保持運行
-
-**go/no-go**：上列皆通過 → 進入交付。node IP 漂移無合理解 → 改評估 k3d 備案，回頭修訂本節。
-
-#### 交付（0.16.0 已交付）
-
-- **Bootstrap**：`scripts/03-k3s.sh install|uninstall`（內嵌為 `scripts.K3sBundle()`）；以 `--docker --disable traefik --write-kubeconfig-mode 644` 安裝，k3s.service 加 drop-in `After=docker.service`＋`Requires=docker.service`（PoC 發現），unit 預設 **disable**（不隨開機啟動）；`uninstall` 呼叫 `k3s-uninstall.sh`
-- **Config**：每 machine `k8s = true`（預設關）；**同一時間僅允許一台**（所有 WSL2 distro 共用網路命名空間：6443、flannel CIDR、kube-proxy 規則全 VM 共用）。`Config.SetK8s` 拒絕第二台並指出目前開啟者；`Validate` 擋下手改出兩台
-- **核心**：`internal/k8s`——安裝／啟動（先確認 dockerd）／停止（`k3s-killall.sh`，`--docker` 時 pod 容器不會隨 service 停）／重置（清 `/var/lib/rancher/k3s`、`/var/lib/kubelet`、`/etc/rancher/k3s` 後重啟）／狀態（`/readyz`、node、版本、記憶體、node IP 與 eth0 比對）／資源列表（pods／deployments／services／namespaces，另有 statefulsets／ingresses／configmaps／pvc 一次 `kubectl get` 取得，`-o json` 解析；Deployment 詳情取 ReplicaSet 歷史與事件）／刪除／rollout restart／scale。使用者輸入進 kubectl 前一律 `ValidName`。**不引入 client-go**
-- **Kubeconfig**：讀 `/etc/rancher/k3s/k3s.yaml`，以 `wsld-<distro>` 為 context／cluster／user 名稱**合併**進 `%USERPROFILE%\.kube\config`（保留既有項目、註解與 current-context；同名取代；server 固定 `127.0.0.1:6443`）；首次修改前備份為 `config.wsld-bak`；無法解析時不動原檔
-- **CLI**：`wsld k8s on|off|status|reset|kubeconfig|uninstall`（`--machine`、`--json`、`--yes`）；`wsld start` 在 active machine 為 k8s 時一併啟動 k3s
-- **doctor**：k3s 就緒／未就緒／失敗、node IP 漂移、記憶體、6443 被占用（k3s 未就緒時）、80／443 提示；皆只警告，不影響退出碼
-- **GUI**：新增頂部導覽 **Kubernetes** 頁：一鍵啟動／停止（背景作業＋輪詢）、重置（確認）、匯出 kubeconfig、叢集資訊卡（狀態徽章、版本、node、API、context、記憶體、kubeconfig 路徑）、另一台持有時的一鍵移動；namespace flow card（Ingress → Service → Workloads → Pods）＋右側 50% 側欄：**Architecture** 架構圖／**Pods**（logs 串流、exec 終端、刪除）／**Workloads**（Deployment scale、rollout restart、刪除）／**Services**（NodePort 開瀏覽器、Ingress routes、刪除）／**Config**／**Storage**，點 Deployment 進詳情（rollout 歷史、事件）；Containers 頁把 `k8s_*` 容器摺成預設收合的「Kubernetes (k3s)」群組。引擎啟動時若 primary 為 k8s 也會背景啟動 k3s
-- **文件**：SPEC §4.6／§5、OPERATIONS、GUI、README、TESTING
-- **實機發現（2026-11-21，拋棄式 distro、隔離 config 與 `%USERPROFILE%`）**——單元測試以 fake 看不到、已修並加回歸測試：
-  - `curl … | sh - </dev/null`：`</dev/null` 蓋掉管線，sh 讀到空腳本、curl 以 23 結束（首次安裝失敗）→ 改為先下載再執行
-  - `k3s-killall.sh` 不處理 `--docker` 的 pod 容器（`off` 後 `k8s_*` 仍在跑）→ `Stop` 之後另外 `docker rm -f`
-  - `/var/lib/kubelet` 在此 VM 是獨立掛載點（ext4），`rm -rf` 該目錄會 "Device or resource busy" → `reset` 只清空內容
-  - wsl.exe 把 `-- cmd args` 交給外層 shell，雙引號內的 `$()`／`$var` 會被先展開（容器 ID 被當指令執行）→ `bash -c` 腳本不可含 `$ ` \ "`（有測試把關）
-  - `Init` 以新建的 Machine 覆寫 profile，悄悄清掉 `k8s = true`（`wsld start` 後 k3s 不再恢復）→ `UpsertMachine` 保留 `K8s`，旗標只能經 `SetK8s` 改變
-
-#### 單節點流程重新設計（0.20.0 候選，分支 `feat/k8s-single-node-flow`）
-
-定位對標 OrbStack：維持單節點；多節點（容器化 node，kind／k3d 風格，Docker Desktop 的做法）列為日後可選 Cluster 進階模式。WSL2 所有 distro 共用網路命名空間，「每台 machine 一個 node」不可行。目標是讓「開啟 → 第一個 app 可連線」在 GUI 內一條龍：
-
-- **Off**：頁面中央 hero（Enable Kubernetes），選項「Add context to ~/.kube/config」（預設開、記在瀏覽器）；工具列不再放第二個啟動鈕
-- **Enabling**：步驟清單 Engine → Install k3s → Node Ready → Add context（`GET /api/k8s` 回 `step`／`steps`／`error_step`；`k8s.WithProgress` 以 context 傳遞進度，不改 `K8s` 介面的 `Start`）；失敗時停在該步驟並顯示 Retry
-- **Ready，無使用者 workload**：空狀態「Deploy your first app」，`Deploy`（`POST /api/k8s/deploy`：Deployment＋有填 port 時的 NodePort Service，映像用 `IfNotPresent`，完成後通知 `http://localhost:<NodePort>`）與 `Apply YAML file…`（`POST /api/k8s/apply`，≤ 1 MB，`kubectl apply -f -`）
-- **Ready**：工具列 `Deploy`、`kubectl context`（複製 `kubectl config use-context …`）
-- **Import（多服務編排，規劃版本 v0.20.0）**：工具列與空狀態的 `Import…`。以「檔案為來源」：先選位置（Windows 磁碟機或 WSL distro，各自獨立的下拉；已停止的 distro 需同意才啟動，不偷偷喚醒），在對話框內瀏覽資料夾（只列資料夾與 `.yml`／`.yaml`，`GET /api/fs/sources`、`GET /api/fs/list`，WSL 以該 distro 的預設使用者 `find`／`head` 唯讀存取）。選到 Compose 檔（頂層有 `services:`）後 `POST /api/k8s/compose/preview` 轉成 stack 並預覽：服務清單與部署順序、無法轉換項目的警告（`build:`、bind mount、`healthcheck`、`env_file` 找不到等）、可切換的 YAML（機密欄位遮蔽）；可改 stack 名稱與 namespace，再 `POST /api/k8s/stack` 一次 apply 並依拓撲序等 rollout，失敗時錯誤訊息附 Pod 最後 10 行 log。選到 k8s manifest 則改走 `POST /api/k8s/apply`。同資料夾的 `.env` 與服務的 `env_file` 自動讀取（路徑不得跳出該資料夾、單檔 ≤ 1 MB），支援 `${VAR}`／`${VAR:-d}` 插值。轉換規則：`ports "H:C"` → LoadBalancer（localhost:H）、named volume → PVC、`depends_on` → 順序加 `<DEP>_HOST`／`<DEP>_PORT`、`deploy.replicas`、`entrypoint`／`command`。CLI：`wsld k8s compose -f docker-compose.yml [--name N] [--namespace NS] [--dry-run]`、`wsld k8s stack -f stack.json [--dry-run|--delete [--pvc]]`（StackSpec JSON）。v1 不含多檔合併（override）、`extends`／`include`、Secret、Helm、探針與資源 limit；env 為明文；UI 暫無刪除 stack 按鈕（API／CLI 有）
-- `POST /api/k8s/on?add_context=1` 啟動成功後合併 kubeconfig（失敗只算警告）；未帶參數維持原行為（不寫 `~/.kube/config`）
-- 與設計稿的差異：Deploy 以對話框而非空狀態內嵌表單（輪詢重繪會吃掉輸入）；Enabling 的 log 尾端、⋯ 選單、異常 namespace 的「CrashLoop 原因」未做，列為後續
-
-#### 不做
-
-- YAML **編輯器**、Pod／Deployment／Service 以外的資源種類（交給 kubectl／k9s／Lens）；選檔 `kubectl apply -f` 不在此限（見下方「單節點流程」）
-- 多節點、多叢集、指定 k8s 版本切換
-- Traefik／Ingress 預設啟用（避免與使用者容器搶 80／443；可由使用者自行開）
-- 區網存取轉發 NodePort／LoadBalancer（現有轉發器只看 docker published 埠；列為後續）
-- 預先綁固定 node IP（PoC 判定不需要；以 doctor 偵測漂移）
-
-#### 完成定義
-
-- [x] PoC 關卡全過並記錄結論
-- [x] `wsld k8s on` 啟動（kubeconfig 不自動匯出，手動 `k8s kubeconfig`）、`off` 後釋放（`k3s-killall.sh`）；單元／整合測試涵蓋
-- [x] `wsld start`／GUI 啟動引擎可恢復 k3s（若該 machine 已開）
-- [x] 第二台 machine 嘗試開啟時明確拒絕並指出目前開啟者（CLI／GUI／config 驗證）
-- [x] Kubeconfig 合併不破壞既有 context；`reset` 回到乾淨叢集
-- [x] 本機 `docker build` 的映像可直接部署為 pod（PoC 已驗證 `imagePullPolicy: Never`）
-- [x] bats（bootstrap）＋Go 單測（config／cli／doctor／k8s／gui）＋Playwright（Kubernetes 頁、Containers 分組）通過
-- [x] 實機驗收（CLI）：拋棄式 distro 上 `uninstall`→`on`（全新安裝）→`status`→`doctor`→`reset`→`off`→（`wsl --terminate` 後）`wsld start` 自動恢復；Pod logs 串流與 exec 終端以真的 wsl.exe 驗證
-- [ ] 實機驗收（待做）：GUI Kubernetes 頁手測、Windows 端 `kubectl.exe`（目前只以 `curl.exe` 驗證 127.0.0.1:6443 TLS）、`wsl --shutdown` 後 `wsld start` 恢復
-
-**退出條件**：除 GUI／Windows kubectl 手測外已全勾；**不**阻擋 Phase 6。
+不做：YAML 編輯器、多叢集、k8s 版本切換、預設啟用 Traefik／Ingress。
 
 ### 其他候選
 
@@ -289,17 +218,16 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ### 共用 engine（專用 dockerd distro）
 
-動機：每個 distro 各裝 dockerd 造成 image／volume 重複。設計：一個 engine distro 跑 dockerd（與 k3s），其餘 client 只裝 CLI，經 `/mnt/wsl/wsld/docker.sock`（WSL2 所有 distro 共用的 tmpfs）連線；WSL2 共用 network namespace，published ports 在所有 distro 與 Windows 都可達。
+動機：每個 distro 各裝 dockerd 造成 image／volume 重複。設計：一個 engine distro 跑 dockerd，其餘 client 只裝 CLI，經 `/mnt/wsl/wsld/docker.sock`（WSL2 所有 distro 共用的 tmpfs）連線；WSL2 共用 network namespace，published ports 在所有 distro 與 Windows 都可達。
 
 階段 1（分支 `feat/shared-engine-distro`，尚未發版）：
 
-- [x] `Machine.Role`（engine／client）與設定驗證：最多一台 engine、k8s 只能在 engine
+- [x] `Machine.Role`（engine／client）與設定驗證：最多一台 engine
 - [x] bootstrap `--role engine|client`、`wsld init --role`
 - [x] engine 保活（wsld-gui）
-- [x] k8s 預設／限定在 engine
 - [x] doctor：`engine_socket`、`client_<distro>`
 - [x] GUI Machines：Engine／Client 標籤與設定按鈕
-- [x] 只剩單一 engine：舊設定載入時遷移（一律新增專用 `wsld-engine` 並於啟動時自動建立；原有已 init 的 distro 全部變 client、資料保留，再以 `wsld migrate` 搬進 engine；舊機器的 k8s 旗標清除）；移除 `wsld start`／`wsld use`、GUI「設為主要」「啟動引擎」與 k8s 機器間切換
+- [x] 只剩單一 engine：舊設定載入時遷移（一律新增專用 `wsld-engine` 並於啟動時自動建立；原有已 init 的 distro 全部變 client、資料保留，再以 `wsld migrate` 搬進 engine）；移除 `wsld start`／`wsld use`、GUI「設為主要」「啟動引擎」
 - [x] 啟動即啟動：GUI 開啟自動帶起（首次建立 `wsld-engine`）、Supervise 持續拉起並退避；CLI 需要 Docker 的指令自動帶起
 - [ ] 真實 WSL 實測（`/mnt/wsl` socket、保活、client context、首次自動建立、Supervise）
 - [x] `wsld migrate`：把 client 內舊的 image／具名 volume 複製到 engine（不刪來源、不搬容器；停用本機 dockerd 由使用者確認後自行執行）；待實機驗證
@@ -459,7 +387,7 @@ Extra ≠ 0.5／v2.0 完成條件
 2. 本機 TCP（23750+，每 managed machine 一埠）
 3. 0.5 = Phase 5；TDD + Playwright
 4. 之後 v2.0 = Rust core + WinUI3（Phase 6a–6f）
-5. Extra 有需求再排（不擋主線；含 Setup／k3s／npiperelay 等）
+5. Extra 有需求再排（不擋主線；含 Setup／npiperelay 等）
 6. 只綁 127.0.0.1
 7. GUI／CLI 共用 core
 
@@ -493,7 +421,7 @@ Extra ≠ 0.5／v2.0 完成條件
 | 0     | 前置 |
 | 1–4   | 基底就緒（曾稱 v1.0 驗收；現改 0.5 定義開放） |
 | 5     | **0.5 主線** |
-| Extra | Setup 一鍵、本機 Kubernetes（k3s）、npiperelay、自動更新、arm64、隔離旗標 |
+| Extra | Setup 一鍵、npiperelay、自動更新、arm64、隔離旗標 |
 | 6a–6b | Rust core／CLI／橋接 server 並行開發（不影響現行發布） |
 | 6c    | go/no-go 關卡：純 Rust WinUI3（`windows-rs`）可行性 |
 | 6d–6e | WinUI3 殼與功能對等 |

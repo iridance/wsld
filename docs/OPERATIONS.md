@@ -142,7 +142,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
   - **殘留**：來源 distro 被 `wsl --terminate` 或自行閒置停止後，掛載會殘留在其他 distro（磁碟仍被接著）。Supervise 與 `wsld doctor`（`expose_stale`）會偵測並清掉；絕不使用遞迴或 lazy 的卸載。
   - **已停止的容器**：重啟時路徑必須存在，所以引用曝露路徑的容器（即使已停止）會讓曝露一直保留；從 GUI 啟動這類容器前 wsld 會先補曝露（來源 distro 已停止則回 409，不會替你喚醒它）。`restart: always` 的容器在 WSL 重啟後可能先於曝露啟動，之後在 client 內執行一次 compose 或 `docker start` 即可。
 - **安全**：共用 socket 為 0666，同一 VM 內任何 distro 的任何使用者都等同 root；loopback TCP 本來就是如此。
-- **從舊版升級**：舊設定（各 distro 自帶 dockerd）載入時，原有已 init 的 distro 全部變成 client、資料原封不動，並新增專用的 `wsld-engine`，啟動 wsld 時自動 `wsl --install` 建立。舊機器上的 k3s 不再由 wsld 管理（旗標被清掉，叢集仍留在該 distro）；要用 k8s 請在 engine 上 `wsld k8s on`。接著用下面的 `wsld migrate` 把舊資料搬進 engine。
+- **從舊版升級**：舊設定（各 distro 自帶 dockerd）載入時，原有已 init 的 distro 全部變成 client、資料原封不動，並新增專用的 `wsld-engine`，啟動 wsld 時自動 `wsl --install` 建立。接著用下面的 `wsld migrate` 把舊資料搬進 engine。
 - **遷移**：`wsld migrate [--distro <client>] [--images=false] [--volumes=false] [--dry-run]` 把 client 內舊的本機 dockerd 資料複製到 engine：有 tag 的 image 以 `docker save | docker load`、具名 volume 以 alpine 的 `tar` 串流複製，全部在 client distro 內經 docker context（`default` → `wsld`）完成，不經 Windows。不刪來源、不搬容器；沒 tag 的 image、匿名 volume 會列為略過。本機 dockerd 沒在跑會先嘗試啟動。確認資料無誤後再 `wsl -d <client> -u root -- systemctl disable --now docker docker.socket`（指令結尾會提示）。先用 `--dry-run` 看清單。
 - **磁碟**：所有 image 都在 engine 的 VHD，調整大小／釋放空間針對 engine（Machines 頁）。
 - 尚未在真實 WSL 長期驗證（`/mnt/wsl` 共用 socket 行為、保活）；遇到問題請先 `wsld doctor`。
@@ -171,11 +171,11 @@ wsld resize-disk --shutdown Ubuntu-26.04 60   # 需要關閉 WSL 時，確認後
 vhdx 是動態成長的：刪掉 Linux 裡的檔案後，Windows 上的檔案不會自動變小。機器卡片的「釋放磁碟空間」鈕（縮小箭頭圖示）或 CLI：
 
 ```powershell
-wsld compact-disk Ubuntu-k3s-poc              # 磁碟沒被 WSL 占用時直接壓縮
+wsld compact-disk Ubuntu              # 磁碟沒被 WSL 占用時直接壓縮
 wsld compact-disk --shutdown Ubuntu-26.04     # 需要關閉 WSL 時，確認後加 --shutdown
 ```
 
-與調整大小相同：壓縮需要 VHD 沒掛在 WSL VM 上。執行中（或停止但仍被占用）的機器要 `wsl --shutdown`，GUI 會列出會被停止的機器並確認，完成後把原本執行中的機器開回來；從 `\\wsl.localhost\…` 執行 wsld 時會拒絕。完成後顯示釋放了多少、Windows 上現在佔用多少。實測 k3s-poc：4.71 GB → 3.71 GB（2 秒）。
+與調整大小相同：壓縮需要 VHD 沒掛在 WSL VM 上。執行中（或停止但仍被占用）的機器要 `wsl --shutdown`，GUI 會列出會被停止的機器並確認，完成後把原本執行中的機器開回來；從 `\\wsl.localhost\…` 執行 wsld 時會拒絕。完成後顯示釋放了多少、Windows 上現在佔用多少。實測：4.71 GB → 3.71 GB（2 秒）。
 - **要比下限更小**：只能匯出再匯入成新的、較小的磁碟，例如 `wsl --export <d> d.tar` → `wsl --unregister <d>` → 在 `%UserProfile%\.wslconfig` 的 `[wsl2]` 設 `defaultVhdSize=60GB` 後 `wsl --import <d> <目錄> d.tar`（此流程未在本機實測；unregister 會刪除原磁碟，務必先確認 tar 完整）。
 - 等同的 WSL 指令：新增 `wsl --install -d Ubuntu --vhd-size 60GB`；調整 `wsl --manage <distro> --resize 60GB`；全域預設可在 `%UserProfile%\.wslconfig` 的 `[wsl2]` 加 `defaultVhdSize=60GB`（影響之後所有新建的發行版）。
 
