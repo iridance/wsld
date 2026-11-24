@@ -413,6 +413,8 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		// VHDSizeGB：虛擬磁碟容量上限（GB）；0／省略 = WSL 預設（1 TB）。
 		VHDSizeGB int `json:"vhd_size_gb"`
+		// JoinEngine：建立後是否直接加入共用 engine（省略 = 是；已有 engine 時才有意義）。
+		JoinEngine *bool `json:"join_engine"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "usage", err)
@@ -464,10 +466,26 @@ func (s *Server) handleMachineInstall(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	// 建立後直接加入共用 engine（成為 client：裝 docker CLI、docker context、曝露工具）。
+	// 加入失敗不影響已安裝好的 distro：回報原因，使用者可在卡片上按「共用 engine」重試。
+	joined, joinErr := false, ""
+	if _, has := s.cfg().EngineMachine(); has && (body.JoinEngine == nil || *body.JoinEngine) {
+		s.installs().setJoining()
+		if _, rerr := s.applyRole(r.Context(), local, config.RoleClient); rerr != nil {
+			joinErr = rerr.Error()
+		} else {
+			joined = true
+		}
+	}
+	res := map[string]any{
 		"ok": true, "name": local, "distribution": dist,
 		"user": user, "password_set": user != "" && body.Password != "",
-	})
+		"joined": joined,
+	}
+	if joinErr != "" {
+		res["join_error"] = joinErr
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleInstallDefaults 提供新增機器對話框的預設值（Linux 使用者名稱依目前 Windows 使用者、磁碟上限）。
@@ -480,39 +498,32 @@ func (s *Server) handleInstallDefaults(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleMachineRole 把 distro 設為專用 engine 或 client（跑對應的 bootstrap），成功後寫回設定。
+// roleError 帶 HTTP 狀態碼的角色設定錯誤（handler 與新增機器流程共用 applyRole）。
+type roleError struct {
+	Status int
+	Code   string
+	Err    error
+}
+
+func (e *roleError) Error() string { return e.Err.Error() }
+
+// applyRole 把 distro 設為專用 engine 或 client（跑對應的 bootstrap），成功後寫回設定並回傳新設定。
 // engine：整個系統只有一台 dockerd；client：只裝 docker CLI，經共用 socket 連 engine（需先有 engine）。
-func (s *Server) handleMachineRole(w http.ResponseWriter, r *http.Request) {
-	d, ok := s.findDistro(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Role string `json:"role"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Role != config.RoleEngine && body.Role != config.RoleClient {
-		writeErr(w, http.StatusBadRequest, "usage", errors.New("role must be engine or client"))
-		return
-	}
+func (s *Server) applyRole(ctx context.Context, name, role string) (config.Config, *roleError) {
 	if s.SaveConfig == nil {
-		writeErr(w, http.StatusInternalServerError, "error", errors.New("config not writable"))
-		return
+		return config.Config{}, &roleError{http.StatusInternalServerError, "error", errors.New("config not writable")}
 	}
 	cfg := s.cfg()
-	if eng, has := cfg.EngineMachine(); has && !strings.EqualFold(eng.Distro, d.Name) && body.Role == config.RoleEngine {
-		writeErr(w, http.StatusConflict, "conflict", fmt.Errorf("engine is already %q", eng.Distro))
-		return
+	if eng, has := cfg.EngineMachine(); has && !strings.EqualFold(eng.Distro, name) && role == config.RoleEngine {
+		return config.Config{}, &roleError{http.StatusConflict, "conflict", fmt.Errorf("engine is already %q", eng.Distro)}
 	}
-	if _, has := cfg.EngineMachine(); !has && body.Role == config.RoleClient {
-		writeErr(w, http.StatusConflict, "conflict", errors.New("set up the engine first"))
-		return
+	if _, has := cfg.EngineMachine(); !has && role == config.RoleClient {
+		return config.Config{}, &roleError{http.StatusConflict, "conflict", errors.New("set up the engine first")}
 	}
 	s.startMu.Lock()
 	if s.starting {
 		s.startMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", errors.New("another start is in progress"))
-		return
+		return config.Config{}, &roleError{http.StatusConflict, "conflict", errors.New("another start is in progress")}
 	}
 	s.starting = true
 	s.startMu.Unlock()
@@ -526,49 +537,67 @@ func (s *Server) handleMachineRole(w http.ResponseWriter, r *http.Request) {
 	switch life := s.life().(type) {
 	case *FakeLifecycle:
 		_ = life
-		if pm, ok := cfg.FindMachine(d.Name); !ok {
+		if pm, ok := cfg.FindMachine(name); !ok {
 			ep := cfg.APIEndpoint
-			if body.Role == config.RoleEngine || ep == "" {
+			if role == config.RoleEngine || ep == "" {
 				ep = nextMachineEndpoint(cfg)
 			}
-			cfg.UpsertMachine(config.Machine{Distro: d.Name, User: "testuser", APIEndpoint: ep})
-		} else if body.Role == config.RoleClient {
-			cfg.UpsertMachine(config.Machine{Distro: d.Name, User: pm.User, APIEndpoint: cfg.APIEndpoint})
+			cfg.UpsertMachine(config.Machine{Distro: name, User: "testuser", APIEndpoint: ep})
+		} else if role == config.RoleClient {
+			cfg.UpsertMachine(config.Machine{Distro: name, User: pm.User, APIEndpoint: cfg.APIEndpoint})
 		}
 		var err error
-		if body.Role == config.RoleEngine {
-			err = cfg.SetEngine(d.Name)
+		if role == config.RoleEngine {
+			err = cfg.SetEngine(name)
 			if err == nil {
-				_ = cfg.SetActive(d.Name)
+				_ = cfg.SetActive(name)
 			}
 		} else {
-			err = cfg.SetClient(d.Name)
+			err = cfg.SetClient(name)
 		}
 		if err != nil {
-			writeErr(w, http.StatusConflict, "conflict", err)
-			return
+			return config.Config{}, &roleError{http.StatusConflict, "conflict", err}
 		}
 		newCfg = cfg
 	case *lifecycle.Manager:
 		life.Cfg = cfg
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ictx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
-		got, err := life.Init(ctx, lifecycle.InitOptions{Distro: d.Name, Role: body.Role})
+		got, err := life.Init(ictx, lifecycle.InitOptions{Distro: name, Role: role})
 		if err != nil {
-			writeEngineErr(w, err)
-			return
+			return config.Config{}, &roleError{engineErrStatus(err), engineErrCode(err), err}
 		}
 		newCfg = got
 	default:
-		writeErr(w, http.StatusNotImplemented, "error", errors.New("lifecycle unavailable"))
-		return
+		return config.Config{}, &roleError{http.StatusNotImplemented, "error", errors.New("lifecycle unavailable")}
 	}
 	if err := s.SaveConfig(newCfg); err != nil {
-		writeErr(w, http.StatusInternalServerError, "error", err)
-		return
+		return config.Config{}, &roleError{http.StatusInternalServerError, "error", err}
 	}
 	s.BindActive(newCfg)
 	s.holdPrimary() // engine 一律保活
+	return newCfg, nil
+}
+
+// handleMachineRole POST /api/machines/{name}/role：設為專用 engine 或 client。
+func (s *Server) handleMachineRole(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.findDistro(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Role string `json:"role"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Role != config.RoleEngine && body.Role != config.RoleClient {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("role must be engine or client"))
+		return
+	}
+	newCfg, rerr := s.applyRole(r.Context(), d.Name, body.Role)
+	if rerr != nil {
+		writeErr(w, rerr.Status, rerr.Code, rerr.Err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"name": d.Name, "role": body.Role, "active": newCfg.Active})
 }
 

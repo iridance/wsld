@@ -298,25 +298,42 @@ func writeErr(w http.ResponseWriter, status int, code string, err error) {
 
 // writeEngineErr 把後端錯誤對應到 HTTP 狀態與錯誤碼（對齊 CLI 退出碼分類）。
 func writeEngineErr(w http.ResponseWriter, err error) {
+	writeErr(w, engineErrStatus(err), engineErrCode(err), err)
+}
+
+func engineErrStatus(err error) int {
 	switch {
 	case errors.Is(err, lifecycle.ErrNotReady):
-		writeErr(w, http.StatusServiceUnavailable, "not_ready", err)
+		return http.StatusServiceUnavailable
 	case errors.Is(err, lifecycle.ErrAPI), errors.Is(err, dockerapi.ErrUnreachable):
-		writeErr(w, http.StatusBadGateway, "api", err)
+		return http.StatusBadGateway
 	case dockerapi.IsNotFound(err):
-		writeErr(w, http.StatusNotFound, "not_found", err)
-	default:
-		var ae *dockerapi.APIError
-		if errors.As(err, &ae) {
-			if ae.Status == http.StatusConflict || ae.Status == http.StatusForbidden {
-				writeErr(w, http.StatusConflict, "conflict", err)
-				return
-			}
-			writeErr(w, http.StatusBadRequest, "error", err)
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, "error", err)
+		return http.StatusNotFound
 	}
+	var ae *dockerapi.APIError
+	if errors.As(err, &ae) {
+		if ae.Status == http.StatusConflict || ae.Status == http.StatusForbidden {
+			return http.StatusConflict
+		}
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
+func engineErrCode(err error) string {
+	switch {
+	case errors.Is(err, lifecycle.ErrNotReady):
+		return "not_ready"
+	case errors.Is(err, lifecycle.ErrAPI), errors.Is(err, dockerapi.ErrUnreachable):
+		return "api"
+	case dockerapi.IsNotFound(err):
+		return "not_found"
+	}
+	var ae *dockerapi.APIError
+	if errors.As(err, &ae) && (ae.Status == http.StatusConflict || ae.Status == http.StatusForbidden) {
+		return "conflict"
+	}
+	return "error"
 }
 
 func (s *Server) cfg() config.Config {

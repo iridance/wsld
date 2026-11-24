@@ -302,7 +302,10 @@ test("Machines: Add machine lists online distributions and installs the chosen o
   await expect(page.getByTestId("notice")).toContainText("Debian1 installed");
   await expect(page.getByTestId("notice")).not.toContainText("wsl -d");
   await expect(page.getByTestId("notice")).not.toContainText("no password");
-  await expect(page.getByTestId("notice")).toContainText("Use shared engine");
+  await expect(page.getByTestId("notice")).toContainText("joined the shared engine");
+  // 建立後直接加入共用 engine：卡片是 Client，不再需要按「共用 engine」
+  await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]').getByTestId("machine-flag-client")).toBeVisible();
+  await expect(page.getByTestId("btn-machine-role-Debian1")).toHaveCount(0);
   await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]')).toBeVisible();
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
   const acct = await (await request.get("/__test/wsl/account?distro=Debian1&user=irice")).json();

@@ -148,7 +148,7 @@ export interface InstallProgress {
   active: boolean;
   distribution?: string;
   name?: string;
-  phase?: "preparing" | "downloading" | "installing";
+  phase?: "preparing" | "downloading" | "installing" | "joining";
   downloaded: number;
   total: number;
   bytes_per_sec: number;
@@ -546,7 +546,7 @@ export const api = {
   installDefaults: () => call<InstallDefaults>("GET", "/api/machines/install/defaults"),
   /** vhdSizeGB：磁碟上限（GB）；0 = WSL 預設 */
   installMachine: (distribution: string, name: string, user: string, password: string, vhdSizeGB = 0) =>
-    call<{ ok: boolean; name: string; distribution: string; user: string; password_set: boolean }>(
+    call<{ ok: boolean; name: string; distribution: string; user: string; password_set: boolean; joined?: boolean; join_error?: string }>(
       "POST",
       "/api/machines/install",
       { distribution, name, user, password, vhd_size_gb: vhdSizeGB },

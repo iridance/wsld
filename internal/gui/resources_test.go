@@ -1027,3 +1027,88 @@ func TestEngineCannotBeStoppedUnmanagedOrUnregistered(t *testing.T) {
 		t.Fatal("WSL must not be touched")
 	}
 }
+
+// ---- 新增機器：建立後直接加入共用 engine ----
+
+func installBody(extra string) string {
+	return `{"distribution":"Debian","name":"Debian1","user":"irice","password":"pw"` + extra + `}`
+}
+
+func TestInstallJoinsTheSharedEngineAsAClient(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	resp, b := e.req(t, http.MethodPost, "/api/machines/install", installBody(""))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("install = %d %s", resp.StatusCode, b)
+	}
+	var body struct {
+		OK        bool   `json:"ok"`
+		Joined    bool   `json:"joined"`
+		JoinError string `json:"join_error"`
+	}
+	_ = json.Unmarshal(b, &body)
+	if !body.OK || !body.Joined || body.JoinError != "" {
+		t.Fatalf("response = %s", b)
+	}
+	c, _ := e.s.LoadConfig()
+	m, ok := c.FindMachine("Debian1")
+	if !ok || m.Role != config.RoleClient || !m.Ready() {
+		t.Fatalf("Debian1 must be a ready client: %+v %v", m, ok)
+	}
+	if eng, _ := c.EngineMachine(); eng.Distro != "Ubuntu-26.04" {
+		t.Fatalf("the engine must not change: %+v", eng)
+	}
+}
+
+func TestInstallCanOptOutOfJoiningTheEngine(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	resp, b := e.req(t, http.MethodPost, "/api/machines/install", installBody(`,"join_engine":false`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("install = %d %s", resp.StatusCode, b)
+	}
+	if strings.Contains(string(b), `"joined":true`) {
+		t.Fatalf("response = %s", b)
+	}
+	c, _ := e.s.LoadConfig()
+	if _, ok := c.FindMachine("Debian1"); ok {
+		t.Fatal("an opted-out machine must not be added to the config")
+	}
+}
+
+func TestInstallWithoutAnEngineJustInstalls(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	if err := config.Save(e.cfgP, config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	resp, b := e.req(t, http.MethodPost, "/api/machines/install", installBody(""))
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"ok":true`) || strings.Contains(string(b), `"joined":true`) || strings.Contains(string(b), "join_error") {
+		t.Fatalf("install = %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestInstallKeepsTheNewDistroWhenJoiningFails(t *testing.T) {
+	e := newEnv(t, "")
+	fw := NewFakeWSL()
+	e.s.WSL = fw
+	e.s.startMu.Lock()
+	e.s.starting = true // 另一個啟動進行中：加入 engine 會被擋下
+	e.s.startMu.Unlock()
+	resp, b := e.req(t, http.MethodPost, "/api/machines/install", installBody(""))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("install must still succeed: %d %s", resp.StatusCode, b)
+	}
+	var body struct {
+		OK        bool   `json:"ok"`
+		Joined    bool   `json:"joined"`
+		JoinError string `json:"join_error"`
+	}
+	_ = json.Unmarshal(b, &body)
+	if !body.OK || body.Joined || body.JoinError == "" {
+		t.Fatalf("response = %s", b)
+	}
+	if got := fw.Installed(); len(got) != 1 || got[0] != "Debian1" {
+		t.Fatalf("the distro must stay installed: %v", got)
+	}
+}

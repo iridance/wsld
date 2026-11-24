@@ -51,8 +51,9 @@ id "$WSLD_USER" >/dev/null 2>&1 || die "使用者不存在: $WSLD_USER" 2
 log "distro=$DISTRO_ID family=$FAMILY user=$WSLD_USER role=${WSLD_ROLE:-standalone} start-port=$WSLD_PORT compose=$WSLD_INSTALL_COMPOSE dry-run=$WSLD_DRY_RUN"
 
 # ---------------------------------------------------------------- 1. wsl.conf systemd
+# client 只裝 docker CLI 與曝露工具，不跑 daemon，不需要 systemd：新建的 distro 不必為此 wsl --shutdown 重開。
 NEED_WSL_RESTART=0
-if ! wsld_wsl_conf_has_systemd /etc/wsl.conf; then
+if [ "$WSLD_ROLE" != "client" ] && ! wsld_wsl_conf_has_systemd /etc/wsl.conf; then
   log "啟用 /etc/wsl.conf [boot] systemd=true"
   if [ "$WSLD_DRY_RUN" = "1" ]; then
     printf '[dry-run] ensure systemd=true in /etc/wsl.conf\n'
@@ -79,7 +80,7 @@ if [ "$WSLD_ROLE" = "engine" ]; then
   fi
 fi
 
-if [ "$NEED_WSL_RESTART" = "1" ] || ! [ -d /run/systemd/system ]; then
+if [ "$WSLD_ROLE" != "client" ] && { [ "$NEED_WSL_RESTART" = "1" ] || ! [ -d /run/systemd/system ]; }; then
   warn "systemd 尚未在此 session 生效。請在 Windows 執行：wsl --shutdown，重新開啟此發行版後再跑一次本腳本。"
   [ "$WSLD_DRY_RUN" = "1" ] || exit 3
 fi

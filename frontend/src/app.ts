@@ -2468,10 +2468,17 @@ export class App {
         pw.value = "";
         pw2.value = "";
         d.close();
+        const noPw = !!res.user && !res.password_set;
+        // 已有共用 engine 時，後端建立後會直接把它加入為 client；加入失敗不影響已安裝的 distro，提示在卡片上重試
         this.notify(
-          res.user && !res.password_set
-            ? fmt(t("gui.machines.installed_no_password"), nm, res.user)
-            : fmt(t("gui.machines.installed"), nm),
+          res.joined
+            ? fmt(t(noPw ? "gui.machines.installed_joined_no_password" : "gui.machines.installed_joined"), nm, ...(noPw ? [res.user] : []))
+            : res.join_error
+              ? fmt(t("gui.machines.installed_join_failed"), nm, res.join_error)
+              : noPw
+                ? fmt(t("gui.machines.installed_no_password"), nm, res.user)
+                : fmt(t("gui.machines.installed"), nm),
+          { sticky: !!res.join_error },
         );
         await this.refresh();
       } catch (e) {

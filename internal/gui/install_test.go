@@ -187,3 +187,22 @@ func TestInstallProgressEndpoint(t *testing.T) {
 		t.Fatalf("progress should be inactive after install: %s", b)
 	}
 }
+
+func TestInstallProgressShowsJoiningOnceTheDistroIsInstalled(t *testing.T) {
+	tr := &installTracker{}
+	if !tr.begin("Debian", "Debian1") {
+		t.Fatal("begin")
+	}
+	if got := tr.snapshot().Phase; got == "joining" {
+		t.Fatalf("not joining yet: %s", got)
+	}
+	tr.setJoining()
+	p := tr.snapshot()
+	if !p.Active || p.Phase != "joining" {
+		t.Fatalf("snapshot = %+v", p)
+	}
+	tr.end()
+	if tr.snapshot().Active {
+		t.Fatal("must be inactive after end")
+	}
+}
