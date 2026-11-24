@@ -20,7 +20,7 @@ func TestDefaultValues(t *testing.T) {
 	}
 }
 
-func TestLoadMigratesFlatConfigToMachines(t *testing.T) {
+func TestLoadMigratesFlatConfigToClientPlusDedicatedEngine(t *testing.T) {
 	p := writeTemp(t, `
 distro = "Ubuntu-26.04"
 user = "irice"
@@ -31,21 +31,19 @@ lang = "zh-TW"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Active != "Ubuntu-26.04" {
-		t.Fatalf("Active = %q", c.Active)
+	if c.Lang != "zh-TW" {
+		t.Fatalf("lang = %q", c.Lang)
 	}
-	if len(c.Machines) != 1 {
-		t.Fatalf("Machines = %+v", c.Machines)
+	m, ok := c.FindMachine("Ubuntu-26.04")
+	if !ok || m.User != "irice" || m.APIEndpoint != "tcp://127.0.0.1:23751" || m.Role != RoleClient || !m.Ready() {
+		t.Fatalf("legacy machine must survive as a ready client: %+v %v", m, ok)
 	}
-	m := c.Machines[0]
-	if m.Distro != "Ubuntu-26.04" || m.User != "irice" || m.APIEndpoint != "tcp://127.0.0.1:23751" {
-		t.Fatalf("machine = %+v", m)
+	e, ok := c.EngineMachine()
+	if !ok || e.Distro != DefaultEngineDistro || e.Ready() {
+		t.Fatalf("a not-yet-created dedicated engine placeholder is expected, got %+v %v", e, ok)
 	}
-	if c.Distro != m.Distro || c.User != m.User || c.APIEndpoint != m.APIEndpoint {
-		t.Fatalf("derived not synced: %+v", c)
-	}
-	if !m.Ready() {
-		t.Fatal("migrated machine should be Ready")
+	if c.Active != DefaultEngineDistro || c.Distro != DefaultEngineDistro {
+		t.Fatalf("Active = %q Distro = %q", c.Active, c.Distro)
 	}
 }
 
@@ -64,6 +62,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 distro = "Ubuntu-22.04"
 user = "bob"
 api_endpoint = "tcp://127.0.0.1:23751"
+role = "engine"
 `)
 	c, err := Load(p)
 	if err != nil {
@@ -100,6 +99,7 @@ func TestSetActiveAndSaveWritesNewFormatOnly(t *testing.T) {
 	c := Default()
 	c.UpsertMachine(Machine{Distro: "A", User: "u1", APIEndpoint: "tcp://127.0.0.1:23750"})
 	c.UpsertMachine(Machine{Distro: "B", User: "u2", APIEndpoint: "tcp://127.0.0.1:23751"})
+	_ = c.SetEngine("A")
 	if err := c.SetActive("B"); err != nil {
 		t.Fatal(err)
 	}
@@ -145,9 +145,12 @@ func TestUpsertMachineUpdatesExisting(t *testing.T) {
 
 func TestLoadAppliesDefaultsForMissingOptionalFields(t *testing.T) {
 	p := writeTemp(t, `
+active = "Ubuntu-26.04"
+[[machines]]
 distro = "Ubuntu-26.04"
 user = "irice"
 api_endpoint = "tcp://127.0.0.1:23751"
+role = "engine"
 `)
 	c, err := Load(p)
 	if err != nil {
@@ -246,6 +249,7 @@ func TestSaveRoundTripAndCreatesDir(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "config.toml")
 	c := Default()
 	c.UpsertMachine(Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: "tcp://127.0.0.1:23752"})
+	_ = c.SetEngine("Ubuntu-26.04")
 	_ = c.SetActive("Ubuntu-26.04")
 	c.ExecShell = "fish"
 	c.Theme = "dark"
@@ -455,6 +459,7 @@ func TestK8sRoundTripAndOmitWhenOff(t *testing.T) {
 	c := Default()
 	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", K8s: true})
 	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	_ = c.SetEngine("A")
 	c.EnsureActive(c.Machines[0])
 	if err := Save(p, c); err != nil {
 		t.Fatal(err)
@@ -724,7 +729,7 @@ func writeCfg(t *testing.T, body string) string {
 	return p
 }
 
-func TestLoadMigratesActiveMachineToEngineAndOthersToClients(t *testing.T) {
+func TestLoadMigratesEveryReadyMachineToAClientAndAddsADedicatedEngine(t *testing.T) {
 	p := writeCfg(t, `active = "B"
 [[machines]]
 distro = "A"
@@ -741,19 +746,27 @@ distro = "Placeholder"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "B" {
-		t.Fatalf("active machine must become the engine, got %+v %v", e, ok)
+	e, ok := c.EngineMachine()
+	if !ok || e.Distro != "wsld-engine" || e.Ready() {
+		t.Fatalf("a dedicated, not-yet-created engine is expected, got %+v %v", e, ok)
 	}
-	a, _ := c.FindMachine("A")
-	if a.Role != RoleClient || a.APIEndpoint != "tcp://127.0.0.1:23751" {
-		t.Fatalf("ready non-active machine becomes a client sharing the engine endpoint: %+v", a)
+	for _, n := range []string{"A", "B"} {
+		if m, _ := c.FindMachine(n); m.Role != RoleClient {
+			t.Fatalf("%s must become a client: %+v", n, m)
+		}
 	}
 	if ph, _ := c.FindMachine("Placeholder"); ph.Role != "" {
 		t.Fatalf("never-initialised placeholder keeps no role: %+v", ph)
 	}
+	if c.Active != "wsld-engine" {
+		t.Fatalf("Active = %q", c.Active)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func TestLoadMigrationPrefersK8sMachineAsEngine(t *testing.T) {
+func TestLoadMigrationClearsK8sFlagsBecauseK3sMustLiveOnTheEngine(t *testing.T) {
 	p := writeCfg(t, `active = "A"
 [[machines]]
 distro = "A"
@@ -769,22 +782,37 @@ k8s = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, _ := c.EngineMachine(); e.Distro != "K" {
-		t.Fatalf("k3s --docker must stay beside its dockerd: engine = %q", e.Distro)
+	if _, on := c.K8sMachine(); on {
+		t.Fatal("k8s flags must be cleared during migration")
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestLoadFlatLegacyConfigBecomesEngine(t *testing.T) {
-	p := writeCfg(t, "distro = \"Ubuntu\"\nuser = \"irice\"\napi_endpoint = \"tcp://127.0.0.1:23750\"\n")
+func TestLoadMigrationReusesAnExistingWsldEngineMachine(t *testing.T) {
+	p := writeCfg(t, `active = "A"
+[[machines]]
+distro = "A"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23750"
+[[machines]]
+distro = "wsld-engine"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23751"
+`)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "Ubuntu" {
-		t.Fatalf("flat config → engine, got %+v %v", e, ok)
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "wsld-engine" || !e.Ready() {
+		t.Fatalf("an existing wsld-engine must be reused: %+v %v", e, ok)
+	}
+	if n := len(c.Machines); n != 2 {
+		t.Fatalf("no duplicate profile expected, got %d", n)
+	}
+	if a, _ := c.FindMachine("A"); a.Role != RoleClient {
+		t.Fatalf("A = %+v", a)
 	}
 }
 

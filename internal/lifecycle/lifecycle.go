@@ -446,6 +446,13 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		if err := cfg.SetEngine(d.Name); err != nil {
 			return cfg, err
 		}
+		// client 一律共用 engine 的 endpoint（engine 埠變動或剛遷移完時要跟著改）
+		eng, _ := cfg.EngineMachine()
+		for i := range cfg.Machines {
+			if cfg.Machines[i].Role == config.RoleClient {
+				cfg.Machines[i].APIEndpoint = eng.APIEndpoint
+			}
+		}
 	}
 	return cfg, nil
 }
@@ -477,7 +484,7 @@ func shellQuote(s string) string {
 }
 
 // DefaultEngineDistro 是首次使用時自動建立的專用 engine distro 名稱。
-const DefaultEngineDistro = "wsld-engine"
+const DefaultEngineDistro = config.DefaultEngineDistro
 
 // EnsureEngine 確保有一個已 init 的 engine：已就緒就原樣回傳（不碰 WSL）；
 // 否則沿用 engine profile（或既有的 wsld-engine distro）跑 bootstrap；兩者都沒有就先 wsl --install 一個 wsld-engine。

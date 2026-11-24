@@ -163,6 +163,7 @@ GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看�
 
 - **bind mount**：`docker run -v /home/u/proj:/app`（或 compose 的 `./`）在 engine 解析，client 的 distro 內路徑 engine 看不到。可用 `/mnt/c/...` 與 named volume；`docker build .` 正常（context 經 API 傳送）。
 - **安全**：共用 socket 為 0666，同一 VM 內任何 distro 的任何使用者都等同 root；loopback TCP 本來就是如此。
+- **從舊版升級**：舊設定（各 distro 自帶 dockerd）載入時，原有已 init 的 distro 全部變成 client、資料原封不動，並新增專用的 `wsld-engine`，啟動 wsld 時自動 `wsl --install` 建立。舊機器上的 k3s 不再由 wsld 管理（旗標被清掉，叢集仍留在該 distro）；要用 k8s 請在 engine 上 `wsld k8s on`。接著用下面的 `wsld migrate` 把舊資料搬進 engine。
 - **遷移**：`wsld migrate [--distro <client>] [--images=false] [--volumes=false] [--dry-run]` 把 client 內舊的本機 dockerd 資料複製到 engine：有 tag 的 image 以 `docker save | docker load`、具名 volume 以 alpine 的 `tar` 串流複製，全部在 client distro 內經 docker context（`default` → `wsld`）完成，不經 Windows。不刪來源、不搬容器；沒 tag 的 image、匿名 volume 會列為略過。本機 dockerd 沒在跑會先嘗試啟動。確認資料無誤後再 `wsl -d <client> -u root -- systemctl disable --now docker docker.socket`（指令結尾會提示）。先用 `--dry-run` 看清單。
 - **磁碟**：所有 image 都在 engine 的 VHD，調整大小／釋放空間針對 engine（Machines 頁）。
 - 尚未在真實 WSL 長期驗證（`/mnt/wsl` 共用 socket 行為、保活）；遇到問題請先 `wsld doctor`。

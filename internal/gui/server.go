@@ -563,7 +563,10 @@ func (s *Server) bringUpActive(ctx context.Context) (lifecycle.Status, error) {
 // ensureActiveInitialized：補齊 active profile（Init），並在 API 不通時重選可用 endpoint。
 func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 	cfg := s.cfg()
-	if _, has := cfg.EngineMachine(); !has {
+	// 沒有 engine，或遷移舊設定留下的尚未 init 的 engine 占位（真實環境要先建立 distro）：走 EnsureEngine。
+	eng, has := cfg.EngineMachine()
+	_, isManager := s.life().(*lifecycle.Manager)
+	if !has || (!eng.Ready() && isManager) {
 		if err := s.createEngine(ctx, &cfg); err != nil {
 			return err
 		}

@@ -51,7 +51,9 @@ func main() {
 	defer wsl.BypassSampleSleepForTest()()
 	reset := func() {
 		c := config.Default()
-		c.Distro, c.User = "Ubuntu-26.04", "irice"
+		c.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: config.EndpointForPort(config.DefaultPort)})
+		_ = c.SetEngine("Ubuntu-26.04") // 這台就是共用 engine
+		_ = c.SetActive("Ubuntu-26.04")
 		if err := config.Save(*cfgPath, c); err != nil {
 			log.Fatal(err)
 		}

@@ -35,7 +35,9 @@ func newEnv(t *testing.T, token string) *env {
 	e := &env{engine: NewFakeEngine(), auto: &FakeAutostart{}, token: token, cfgP: filepath.Join(t.TempDir(), "config.toml")}
 	e.life = &FakeLifecycle{Engine: e.engine, Distro: "Ubuntu-26.04", Endpoint: "tcp://127.0.0.1:23750"}
 	c := config.Default()
-	c.Distro, c.User = "Ubuntu-26.04", "irice"
+	c.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: config.EndpointForPort(config.DefaultPort)})
+	_ = c.SetEngine("Ubuntu-26.04") // 這台就是共用 engine
+	_ = c.SetActive("Ubuntu-26.04")
 	if err := config.Save(e.cfgP, c); err != nil {
 		t.Fatal(err)
 	}

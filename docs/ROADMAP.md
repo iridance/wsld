@@ -297,7 +297,7 @@ Extra ≠ 0.5／v2.0 完成條件
 - [x] k8s 預設／限定在 engine
 - [x] doctor：`engine_socket`、`client_<distro>`
 - [x] GUI Machines：Engine／Client 標籤與設定按鈕
-- [x] 只剩單一 engine：舊設定載入時遷移（k8s 機器／active → engine，其餘 → client）；移除 `wsld start`／`wsld use`、GUI「設為主要」「啟動引擎」與 k8s 機器間切換
+- [x] 只剩單一 engine：舊設定載入時遷移（一律新增專用 `wsld-engine` 並於啟動時自動建立；原有已 init 的 distro 全部變 client、資料保留，再以 `wsld migrate` 搬進 engine；舊機器的 k8s 旗標清除）；移除 `wsld start`／`wsld use`、GUI「設為主要」「啟動引擎」與 k8s 機器間切換
 - [x] 啟動即啟動：GUI 開啟自動帶起（首次建立 `wsld-engine`）、Supervise 持續拉起並退避；CLI 需要 Docker 的指令自動帶起
 - [ ] 真實 WSL 實測（`/mnt/wsl` socket、保活、client context、首次自動建立、Supervise）
 - [x] `wsld migrate`：把 client 內舊的 image／具名 volume 複製到 engine（不刪來源、不搬容器；停用本機 dockerd 由使用者確認後自行執行）；待實機驗證

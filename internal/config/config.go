@@ -179,9 +179,14 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// migrateToEngine 把舊設定（各 distro 自帶 dockerd、可切換 active）遷移成「一個 engine + 多個 client」：
-// 已有 engine 就不動；否則 k8s 所在機器（k3s --docker 必須與 dockerd 同 distro）優先，其次 active，再其次第一台已 init 的。
-// 其餘已 init 的機器成為 client，endpoint 改為 engine 的。從未 init 的占位 profile 不加角色。
+// DefaultEngineDistro 是專用 engine distro 的名稱（首次使用或遷移舊設定時建立）。
+const DefaultEngineDistro = "wsld-engine"
+
+// migrateToEngine 把舊設定（各 distro 自帶 dockerd、可切換 active）遷移成「專用 engine + 多個 client」：
+// 已有 engine 就不動；否則一律改用專用的 wsld-engine（已存在就沿用，否則加一個尚未 init 的占位，啟動時自動建立），
+// 原本已 init 的機器全部變成 client（資料保留，之後用 wsld migrate 搬進 engine）。
+// k3s 只能在 engine 上，所以舊機器的 k8s 旗標會被清掉（舊 k3s 仍留在該 distro，只是不再由 wsld 管理）。
+// 從未 init 的占位 profile 不加角色。沒有任何已 init 的機器（全新或空設定）時不動。
 func (c *Config) migrateToEngine() {
 	if len(c.Machines) == 0 {
 		return
@@ -189,38 +194,37 @@ func (c *Config) migrateToEngine() {
 	if _, ok := c.EngineMachine(); ok {
 		return
 	}
-	pick := -1
-	for i, m := range c.Machines {
-		if m.K8s && m.Ready() {
-			pick = i
+	anyReady := false
+	for _, m := range c.Machines {
+		if m.Ready() {
+			anyReady = true
 			break
 		}
 	}
-	if pick < 0 {
-		for i, m := range c.Machines {
-			if strings.EqualFold(m.Distro, c.Active) && m.Ready() {
-				pick = i
-				break
-			}
-		}
-	}
-	if pick < 0 {
-		for i, m := range c.Machines {
-			if m.Ready() {
-				pick = i
-				break
-			}
-		}
-	}
-	if pick < 0 {
+	if !anyReady {
 		return
 	}
-	c.Machines[pick].Role = RoleEngine
-	c.Active = c.Machines[pick].Distro
+	idx := -1
+	for i, m := range c.Machines {
+		if strings.EqualFold(m.Distro, DefaultEngineDistro) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		c.Machines = append(c.Machines, Machine{Distro: DefaultEngineDistro})
+		idx = len(c.Machines) - 1
+	}
+	c.Machines[idx].Role = RoleEngine
+	c.Machines[idx].K8s = false
+	c.Active = c.Machines[idx].Distro
 	for i := range c.Machines {
-		if i != pick && c.Machines[i].Ready() && c.Machines[i].Role == "" {
+		if i == idx {
+			continue
+		}
+		c.Machines[i].K8s = false
+		if c.Machines[i].Ready() && c.Machines[i].Role == "" {
 			c.Machines[i].Role = RoleClient
-			c.Machines[i].APIEndpoint = c.Machines[pick].APIEndpoint
 		}
 	}
 }
