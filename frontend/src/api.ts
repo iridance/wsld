@@ -266,6 +266,46 @@ export interface K8sDeployResult {
   port_changed?: boolean;
 }
 
+export interface StackEnv { name: string; value: string }
+export interface StackVolume { name: string; mount_path: string; size?: string }
+export interface StackService {
+  name: string;
+  image: string;
+  port?: number;
+  replicas?: number;
+  expose?: "none" | "nodeport" | "loadbalancer";
+  host_port?: number;
+  env?: StackEnv[];
+  volumes?: StackVolume[];
+  depends_on?: string[];
+  stateful?: boolean;
+  command?: string[];
+  args?: string[];
+}
+export interface StackSpec { name: string; namespace?: string; services: StackService[] }
+
+export interface FileEntry { name: string; dir: boolean; size?: number }
+export interface FileSources { drives: string[]; wsl: { name: string; running: boolean }[]; owner?: string }
+export interface FileListing { path: string; parent: string; entries: FileEntry[] }
+export interface ComposePreviewRequest {
+  kind: string;
+  name: string;
+  path: string;
+  start?: boolean;
+  stack_name?: string;
+  namespace?: string;
+}
+export interface ComposePreview {
+  kind: "compose" | "manifest";
+  default_name: string;
+  spec?: StackSpec;
+  yaml?: string;
+  order?: string[];
+  warnings: string[];
+  read_files: string[];
+  manifest?: string;
+}
+
 export interface K8sInfo {
   /** 目前開啟 k8s 的 machine；沒有人開啟時為按啟動會使用的 primary machine */
   machine: string;
@@ -575,6 +615,13 @@ export const api = {
     call<void>("POST", `/api/k8s/deployments/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/scale`, { replicas }),
   k8sDeploy: (req: K8sDeployRequest) => call<K8sDeployResult>("POST", "/api/k8s/deploy", req),
   k8sExpose: (req: K8sExposeRequest) => call<K8sDeployResult>("POST", "/api/k8s/expose", req),
+  k8sStack: (spec: StackSpec) => call<{ namespace: string; name: string; services: K8sDeployResult[] }>("POST", "/api/k8s/stack", spec),
+  k8sStackDelete: (ns: string, name: string, pvc: boolean) =>
+    call<void>("DELETE", `/api/k8s/stack/${encodeURIComponent(ns)}/${encodeURIComponent(name)}${pvc ? "?pvc=1" : ""}`),
+  fsSources: () => call<FileSources>("GET", "/api/fs/sources"),
+  fsList: (kind: string, name: string, path = "", start = false) =>
+    call<FileListing>("GET", `/api/fs/list?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}${start ? "&start=1" : ""}`),
+  composePreview: (req: ComposePreviewRequest) => call<ComposePreview>("POST", "/api/k8s/compose/preview", req),
   k8sApply: (manifest: string) => call<{ output: string }>("POST", "/api/k8s/apply", manifest),
   k8sOpen: (port: number) => call<{ url: string }>("POST", "/api/k8s/open", { port }),
   k8sLogsUrl: (ns: string, pod: string, tail = 100) =>

@@ -38,6 +38,8 @@ type K8s interface {
 	Deploy(ctx context.Context, spec k8s.DeploySpec) (k8s.DeployResult, error)
 	Expose(ctx context.Context, spec k8s.ExposeSpec) (k8s.DeployResult, error)
 	Apply(ctx context.Context, manifest []byte) (string, error)
+	DeployStack(ctx context.Context, spec k8s.StackSpec) (k8s.StackResult, error)
+	DeleteStack(ctx context.Context, ns, name string, withPVC bool) error
 }
 
 // CommandStream 在 distro 內執行單一指令並回傳雙向連線（kubectl logs／exec）。
@@ -798,4 +800,45 @@ func (s *Server) handleK8sApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimSpace(out)})
+}
+
+// handleK8sStack 一次部署一組服務（POST /api/k8s/stack）。
+func (s *Server) handleK8sStack(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	var req k8s.StackSpec
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<18)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid JSON body"))
+		return
+	}
+	if _, err := req.Normalize(); err != nil {
+		writeErr(w, http.StatusBadRequest, "usage", err)
+		return
+	}
+	res, err := mgr.DeployStack(r.Context(), req)
+	if err != nil {
+		k8sErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleK8sStackDelete 刪除整個 stack；?pvc=1 時連 PVC 一起刪。
+func (s *Server) handleK8sStackDelete(w http.ResponseWriter, r *http.Request) {
+	mgr, _, ok := s.k8sOwner(w)
+	if !ok {
+		return
+	}
+	ns, name := r.PathValue("ns"), r.PathValue("name")
+	if !k8s.ValidName(ns) || !k8s.ValidName(name) {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid name"))
+		return
+	}
+	if err := mgr.DeleteStack(r.Context(), ns, name, r.URL.Query().Get("pvc") == "1"); err != nil {
+		k8sErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

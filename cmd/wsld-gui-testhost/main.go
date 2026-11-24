@@ -100,6 +100,7 @@ func main() {
 
 	srv := &gui.Server{
 		Engine: engine, Life: life, Autostart: auto, Version: "testhost", WSL: fwsl,
+		Files:           gui.NewFakeFileHost(),
 		DistroDisk:      fwsl.VHDXSize,
 		DistroDiskLimit: fwsl.VHDXLimit,
 		DiskCacheTTL:    -1, // /__test/reset 等直接改 fake 狀態，不能吃到快取

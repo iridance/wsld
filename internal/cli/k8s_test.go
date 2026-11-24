@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -281,5 +283,41 @@ func TestStartLeavesK3sAloneWhenOff(t *testing.T) {
 		if strings.Contains(c, "k3s") {
 			t.Fatalf("k3s must not be touched when off: %s", c)
 		}
+	}
+}
+
+func TestK8sStackDryRun(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "stack.json")
+	if err := os.WriteFile(f, []byte(`{"name":"shop","services":[{"name":"api","image":"x/api:1","port":8080,"depends_on":["db"]},{"name":"db","image":"postgres:16","port":5432}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a := &App{Stdout: &out, Stderr: &bytes.Buffer{}}
+	if err := a.cmdK8s(context.Background(), []string{"stack", "-f", f, "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "DB_HOST") || !strings.Contains(out.String(), `"kind": "List"`) {
+		t.Fatalf("out = %s", out.String())
+	}
+	if err := a.cmdK8s(context.Background(), []string{"stack"}); err == nil {
+		t.Fatal("missing -f must fail")
+	}
+}
+
+func TestK8sComposeDryRunReadsDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: ${PW}\n    env_file: ../escape.env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("PW=hunter2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	a := &App{Stdout: &out, Stderr: &errb}
+	if err := a.cmdK8s(context.Background(), []string{"compose", "-f", filepath.Join(dir, "docker-compose.yml"), "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "hunter2") || !strings.Contains(errb.String(), "inside the compose file's folder") {
+		t.Fatalf("out=%s err=%s", out.String(), errb.String())
 	}
 }

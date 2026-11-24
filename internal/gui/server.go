@@ -78,6 +78,8 @@ type Server struct {
 	OnDistroAction func(action string) error
 	// OnOpenURL 以系統瀏覽器開啟 URL（例如 footer GitHub）；nil 則僅回成功（測試主機）。
 	OnOpenURL func(url string) error
+	// Files 提供 Import 對話框瀏覽的檔案來源（nil＝預設：Windows 本機與以 WSL 讀取的 distro）。
+	Files FileHost
 	// Shell 開啟 Machines 列表內嵌 terminal（nil → 501）。
 	Shell DistroShell
 	// OnLangChange 於設定頁切換語系後呼叫（Tray 選單文字需重建）。
@@ -212,6 +214,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/k8s/deploy", s.handleK8sDeploy)
 	mux.HandleFunc("POST /api/k8s/expose", s.handleK8sExpose)
 	mux.HandleFunc("POST /api/k8s/apply", s.handleK8sApply)
+	mux.HandleFunc("POST /api/k8s/stack", s.handleK8sStack)
+	mux.HandleFunc("POST /api/k8s/compose/preview", s.handleComposePreview)
+	mux.HandleFunc("GET /api/fs/sources", s.handleFSSources)
+	mux.HandleFunc("GET /api/fs/list", s.handleFSList)
+	mux.HandleFunc("DELETE /api/k8s/stack/{ns}/{name}", s.handleK8sStackDelete)
 	mux.HandleFunc("GET /api/k8s/namespaces", s.handleK8sNamespaces)
 	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("GET /api/k8s/deployments", s.handleK8sDeployments)

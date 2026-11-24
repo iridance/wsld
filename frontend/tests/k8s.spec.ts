@@ -816,3 +816,76 @@ test("Delete app removes the Deployment and the Service that points at it, after
   await page.getByTestId("k8s-view-namespaces").click();
   await expect(page.getByTestId("k8s-ns-card-default").getByTestId("k8s-ns-node-services")).toHaveText("1"); // 只剩內建的 kubernetes Service
 });
+
+test("Import: pick WSL, browse to a Compose file, preview shows services, warnings and masked env, then Deploy", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await page.getByTestId("btn-k8s-import").click();
+  const dlg = page.getByTestId("import-dialog");
+  await expect(dlg).toBeVisible();
+  // 預設 WSL＋第一台 distro，從家目錄開始
+  await expect(dlg.getByTestId("import-kind")).toContainText("WSL");
+  await expect(dlg.getByTestId("import-source")).toContainText("Ubuntu-26.04");
+  await expect(dlg.getByTestId("import-owner-hint")).toContainText("Kubernetes runs in Ubuntu-26.04");
+  await expect(dlg.getByTestId("import-path")).toHaveText("/home/irice");
+  await dlg.getByTestId("import-item-projects").click();
+  await dlg.getByTestId("import-item-shop").click();
+  // 隱藏檔（.env）不列出，只有資料夾與 yaml
+  await expect(dlg.getByTestId("import-item-.env")).toHaveCount(0);
+  await expect(dlg.getByTestId("import-item-api")).toBeVisible();
+  await expect(dlg.getByTestId("import-next")).toBeDisabled();
+  await dlg.getByTestId("import-item-docker-compose.yml").click();
+  await dlg.getByTestId("import-next").click();
+
+  await expect(dlg.getByTestId("import-stack-name")).toHaveValue("shop");
+  await expect(dlg.getByTestId("import-read")).toContainText(".env");
+  await expect(dlg.getByTestId("import-order")).toContainText("db → api → web");
+  await expect(dlg.getByTestId("import-svc-web")).toContainText("localhost:3000");
+  await expect(dlg.getByTestId("import-svc-db")).toContainText("2 volume");
+  await expect(dlg.getByTestId("import-warnings")).toContainText("healthcheck");
+  await expect(dlg.getByTestId("import-warnings")).toContainText("bind mount ~/cache"); // ~ 無法對應；./init 則轉成 hostPath
+  await expect(dlg.getByTestId("import-plain-env")).toBeVisible();
+  await dlg.getByTestId("import-view-yaml").click();
+  await expect(dlg.getByTestId("import-yaml")).toContainText("POSTGRES_PASSWORD");
+  await expect(dlg.getByTestId("import-yaml")).not.toContainText("s3cret"); // 機密值遮蔽
+  await expect(dlg.getByTestId("import-yaml")).toContainText('"path": "/home/irice/projects/shop/init"'); // bind mount → hostPath
+  await expect(dlg.getByTestId("import-yaml")).toContainText('"workingDir": "/app"');
+
+  // 改 namespace 會重新轉換
+  await dlg.getByTestId("import-namespace").fill("shop-dev");
+  await dlg.getByTestId("import-namespace").blur();
+  await expect(dlg.getByTestId("import-yaml")).toContainText('"namespace": "shop-dev"');
+
+  await dlg.getByTestId("import-submit").click();
+  await expect(dlg).toBeHidden();
+  await expect(page.getByTestId("notice")).toContainText("Stack shop deployed (3 services)");
+  await expect(page.getByTestId("notice")).toContainText("web → http://localhost:3000");
+  await page.getByTestId("k8s-view-namespaces").click();
+  await expect(page.getByTestId("k8s-ns-card-shop-dev")).toBeVisible();
+});
+
+test("Import: a Kubernetes manifest is applied instead of converted; Windows is a separate location with drives", async ({ page }) => {
+  await goK8s(page);
+  await startCluster(page);
+  await page.getByTestId("btn-k8s-import").click();
+  const dlg = page.getByTestId("import-dialog");
+  await dlg.getByTestId("import-item-projects").click();
+  await dlg.getByTestId("import-item-shop").click();
+  await dlg.getByTestId("import-item-k8s-extra.yaml").dblclick(); // 雙擊檔案等同下一步
+  await expect(dlg.getByTestId("import-manifest")).toBeVisible();
+  await expect(dlg.getByTestId("import-stack-name")).toBeHidden();
+  await dlg.getByTestId("import-back").click();
+
+  await dlg.getByTestId("import-kind").click();
+  await page.getByTestId("import-kind-list").getByText("Windows").click();
+  await expect(dlg.getByTestId("import-source")).toContainText("C:\\");
+  await expect(dlg.getByTestId("import-path")).toHaveText("C:\\Users\\irice");
+  await dlg.getByTestId("import-item-projects").click();
+  await expect(dlg.getByTestId("import-path")).toHaveText("C:\\Users\\irice\\projects");
+  await dlg.getByTestId("import-up").click();
+  await expect(dlg.getByTestId("import-path")).toHaveText("C:\\Users\\irice");
+  // 下次開啟記住上次的位置
+  await dlg.getByTestId("import-cancel").click();
+  await page.getByTestId("btn-k8s-import").click();
+  await expect(dlg.getByTestId("import-kind")).toContainText("Windows");
+});

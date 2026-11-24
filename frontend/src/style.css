@@ -950,3 +950,26 @@ dialog.deploy-dialog .dialog-head { margin-bottom: 10px; }
 .app-pod { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.8fr) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12px; }
 .k8s-apps > .k8s-deploy-empty { margin: 0; padding: 40px 20px; background: var(--surface); border-style: dashed; }
 .k8s-apps > .k8s-deploy-empty h3 { color: var(--fg); }
+
+/* Import 對話框 */
+dialog.import-dialog { width: min(720px, calc(100vw - 32px)); }
+.import-step { display: flex; flex-direction: column; gap: 10px; }
+.import-step[hidden] { display: none; }
+.import-path { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; max-height: 280px; min-height: 120px; overflow-y: auto; }
+.import-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--border); background: transparent; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.import-item:last-child { border-bottom: 0; }
+.import-item:hover { background: var(--surface-hover, rgba(127,127,127,.08)); }
+.import-item.on { background: var(--accent-soft, rgba(80,140,255,.15)); }
+.import-item.dim { color: var(--muted); }
+.import-item small { margin-left: auto; color: var(--muted); font-size: 12px; }
+.import-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.import-stopped { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.import-read, .import-order { font-size: 12px; color: var(--muted); }
+.import-services { display: flex; flex-direction: column; gap: 6px; }
+.import-svc { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.import-svc span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-svc small { font-size: 12px; color: var(--muted); }
+.import-warn { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: 1.6; }
+.import-manifest { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.import-yaml { max-height: 240px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }

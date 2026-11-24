@@ -787,3 +787,32 @@ func TestK8sOpenAllowsLoadBalancerPorts(t *testing.T) {
 		t.Fatalf("opened = %v", opened)
 	}
 }
+
+func TestK8sStackDeployAndDelete(t *testing.T) {
+	k := newK8sEnv(t)
+	k.enable(t)
+	body := `{"name":"shop","services":[{"name":"web","image":"shop/web:1","port":80,"expose":"loadbalancer","depends_on":["db"]},{"name":"db","image":"postgres:16","port":5432,"stateful":true}]}`
+	if resp, _ := k.req(t, "POST", "/api/k8s/stack", `{"name":"shop","services":[{"name":"a","image":"x","depends_on":["a"]}]}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("self dependency = %d", resp.StatusCode)
+	}
+	resp, b := k.req(t, "POST", "/api/k8s/stack", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("deploy = %d %s", resp.StatusCode, b)
+	}
+	var res k8s.StackResult
+	_ = json.Unmarshal(b, &res)
+	if len(res.Services) != 2 || res.Services[0].Name != "db" || res.Services[1].HostPort != 80 {
+		t.Fatalf("result = %s", b)
+	}
+	_, b = k.req(t, "GET", "/api/k8s/deployments?ns=shop", "")
+	if !strings.Contains(string(b), `"web"`) || !strings.Contains(string(b), `"db"`) {
+		t.Fatalf("deployments = %s", b)
+	}
+	if resp, _ := k.req(t, "DELETE", "/api/k8s/stack/shop/shop?pvc=1", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete = %d", resp.StatusCode)
+	}
+	_, b = k.req(t, "GET", "/api/k8s/deployments?ns=shop", "")
+	if strings.Contains(string(b), `"web"`) {
+		t.Fatalf("stack not removed: %s", b)
+	}
+}

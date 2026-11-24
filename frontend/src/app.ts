@@ -1,7 +1,10 @@
 import {
   api,
   ApiError,
+  type ComposePreview,
   type Container,
+  type FileEntry,
+  type FileSources,
   type DiskInfo,
   type InstallDefaults,
   type MachineConfig,
@@ -199,6 +202,7 @@ const textField = (input: HTMLInputElement, ...extra: (Node | string)[]): HTMLEl
  *  鍵盤：Enter／Space／↑↓ 展開，↑↓／Home／End 移動，Enter／Space 選取，Esc／Tab 關閉。
  *  目前值不在選項內時顯示 placeholder（淡色）；setOptions 可換選項（例如非同步載入），setDisabled 停用。
  *  注意：不要包在 <label> 裡（點清單項目會被 label 轉成再點一次按鈕），標題用 aria-labelledby。 */
+type ImportDialog = HTMLDialogElement & { begin(): Promise<void> };
 type DropdownOption = readonly [value: string, label: string];
 interface Dropdown {
   el: HTMLElement;
@@ -847,6 +851,7 @@ export class App {
       this.buildAddMachineDialog(),
       this.buildResizeDialog(),
       this.buildDeployDialog(),
+      this.buildImportDialog(),
       this.buildExposeDialog(),
     );
     this.renderNav();
@@ -3004,12 +3009,14 @@ export class App {
     const ready = !!k && k.enabled && state === "ready" && !busyOp;
     const deploy = btn({ "data-testid": "btn-k8s-deploy" }, "plus", t("gui.k8s.deploy"));
     deploy.onclick = () => void this.openDeploy();
+    const stack = btn({ "data-testid": "btn-k8s-import" }, "layers", t("gui.k8s.import"));
+    stack.onclick = () => void this.openImport();
     const copyCtx = btn({ "data-testid": "btn-k8s-copy-context" }, "kubernetes", t("gui.k8s.copy_context"));
     copyCtx.title = k?.status.context ?? "";
     copyCtx.onclick = () => void this.k8sCopyContext();
     bar.replaceChildren(
       el("span", { class: "spacer" }),
-      ...(ready ? [deploy, copyCtx] : []),
+      ...(ready ? [deploy, stack, copyCtx] : []),
       kube,
       reset,
       ...(heroMode ? [] : [toggle]),
@@ -3148,10 +3155,12 @@ export class App {
     deploy.onclick = () => void this.openDeploy();
     const apply = btn({ "data-testid": "btn-k8s-apply-yaml" }, "download", t("gui.k8s.apply_yaml"));
     apply.onclick = () => this.k8sPickYaml();
+    const stack = btn({ "data-testid": "btn-k8s-import-first" }, "layers", t("gui.k8s.import"));
+    stack.onclick = () => void this.openImport();
     return el("section", { class: "k8s-deploy-empty", "data-testid": "k8s-deploy-empty" },
       el("h3", { text: t("gui.k8s.deploy.title") }),
       el("p", { text: t("gui.k8s.deploy.body") }),
-      el("div", { class: "row" }, deploy, apply),
+      el("div", { class: "row" }, deploy, stack, apply),
     );
   }
 
@@ -3312,6 +3321,281 @@ export class App {
     syncExpose();
     d.append(el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.deploy.dialog") })), form);
     return d;
+  }
+
+  /** Import：先選來源（Windows 或 WSL distro）與檔案，再預覽 Compose 轉換結果與警告，最後 Deploy。
+   *  選到 k8s manifest（沒有 services）時改走 kubectl apply。檔案瀏覽與讀取都在後端（含同資料夾的 .env）。 */
+  private buildImportDialog(): ImportDialog {
+    const d = el("dialog", { class: "deploy-dialog import-dialog", "data-testid": "import-dialog" }) as ImportDialog;
+    const SRC_KEY = "wsld.import.src";
+    let sources: FileSources = { drives: [], wsl: [] };
+    let kind = "wsl";
+    let source = "";
+    let dir = "";
+    let parent = "";
+    let selected = "";
+    let preview: ComposePreview | undefined;
+    let seq = 0;
+    const sep = () => (kind === "windows" ? "\\" : "/");
+    const join = (base: string, name: string) => base.replace(/[\\/]+$/, "") + sep() + name;
+    const mk = (testid: string) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid }) as HTMLInputElement;
+    const errBox = el("div", { class: "field-error", "data-testid": "import-error", hidden: "" });
+    const showErr = (m: string) => {
+      errBox.textContent = m;
+      errBox.hidden = !m;
+    };
+    const msg = (e: unknown) => (e instanceof ApiError ? e.message : String(e));
+
+    // ---- 步驟 1：來源與檔案
+    const kindLabel = el("span", { class: "field-label", id: "import-kind-label", text: t("gui.k8s.import.kind") });
+    const srcLabel = el("span", { class: "field-label", id: "import-source-label" });
+    const kindDd = dropdown({ testid: "import-kind", labelledby: "import-kind-label" }, [], kind, (v) => {
+      kind = v;
+      source = "";
+      fillSources();
+      void load("");
+    });
+    const srcDd = dropdown({ testid: "import-source", labelledby: "import-source-label" }, [], "", (v) => {
+      source = v;
+      void load("");
+    });
+    const ownerHint = el("p", { class: "field-hint", "data-testid": "import-owner-hint", hidden: "" });
+    const crumb = el("div", { class: "import-path mono", "data-testid": "import-path" });
+    const list = el("div", { class: "import-list", "data-testid": "import-list" });
+    const stoppedBtn = btn({ type: "button", "data-testid": "import-start" }, "play", t("gui.k8s.import.start_browse"));
+    const stopped = el("div", { class: "import-stopped", "data-testid": "import-stopped", hidden: "" }, el("span", { text: t("gui.k8s.import.stopped_note") }), stoppedBtn);
+    const step1 = el("div", { class: "import-step" },
+      el("div", { class: "deploy-grid" }, el("div", { class: "field" }, kindLabel, kindDd.el), el("div", { class: "field" }, srcLabel, srcDd.el)),
+      ownerHint, crumb, list, stopped,
+      el("p", { class: "field-hint", text: t("gui.k8s.import.hint") }),
+    );
+
+    const fillSources = () => {
+      const opts: DropdownOption[] = kind === "wsl"
+        ? sources.wsl.map((x): DropdownOption => [x.name, x.running ? x.name : `${x.name} (${t("gui.k8s.import.stopped_tag")})`])
+        : sources.drives.map((x): DropdownOption => [x, x]);
+      if (!opts.some(([v]) => v === source)) source = opts[0]?.[0] ?? "";
+      srcDd.setOptions(opts, source, t("gui.k8s.import.no_source"));
+      srcLabel.textContent = kind === "wsl" ? t("gui.k8s.import.distro") : t("gui.k8s.import.drive");
+      ownerHint.hidden = !(kind === "wsl" && sources.owner);
+      ownerHint.textContent = sources.owner ? fmt(t("gui.k8s.import.owner_hint"), sources.owner) : "";
+    };
+
+    const renderList = (entries: FileEntry[]) => {
+      const rows: HTMLElement[] = [];
+      if (parent) {
+        const up = el("button", { type: "button", class: "import-item dim", "data-testid": "import-up" }, icon("chevron-left"), el("span", { text: t("gui.k8s.import.up") }));
+        up.onclick = () => void load(parent);
+        rows.push(up);
+      }
+      for (const e of entries) {
+        const full = join(dir, e.name);
+        const row = el("button", { type: "button", class: `import-item${full === selected ? " on" : ""}`, "data-testid": `import-item-${e.name}`, "data-kind": e.dir ? "dir" : "file" },
+          icon(e.dir ? "folder" : "file"), el("span", { text: e.name }), el("small", { text: e.dir ? "" : humanSize(e.size ?? 0) }));
+        row.onclick = () => {
+          if (e.dir) return void load(full);
+          selected = full;
+          list.querySelectorAll(".import-item.on").forEach((x) => x.classList.remove("on"));
+          row.classList.add("on");
+          crumb.textContent = full;
+          syncButtons();
+        };
+        row.ondblclick = () => {
+          if (!e.dir) void toPreview();
+        };
+        rows.push(row);
+      }
+      if (!entries.length) rows.push(el("div", { class: "import-empty", text: t("gui.k8s.import.empty") }));
+      list.replaceChildren(...rows);
+    };
+
+    const load = async (path: string, start = false) => {
+      const mine = ++seq;
+      stopped.hidden = true;
+      showErr("");
+      selected = "";
+      syncButtons();
+      if (!source) {
+        list.replaceChildren(el("div", { class: "import-empty", text: t("gui.k8s.import.no_source") }));
+        crumb.textContent = "";
+        return;
+      }
+      try {
+        const r = await api.fsList(kind, source, path, start);
+        if (mine !== seq) return;
+        dir = r.path;
+        parent = r.parent;
+        crumb.textContent = dir;
+        renderList(r.entries);
+        saveJSON(SRC_KEY, { kind, source });
+      } catch (e) {
+        if (mine !== seq) return;
+        list.replaceChildren();
+        if (e instanceof ApiError && e.code === "stopped") stopped.hidden = false;
+        else showErr(msg(e));
+      }
+    };
+    stoppedBtn.onclick = () => {
+      void api.fsSources().then((s) => (sources = s)).catch(() => undefined);
+      void load("", true);
+    };
+
+    // ---- 步驟 2：預覽
+    const nameIn = mk("import-stack-name");
+    const nsIn = mk("import-namespace");
+    const readLine = el("div", { class: "import-read", "data-testid": "import-read" });
+    const svcBox = el("div", { class: "import-services", "data-testid": "import-services" });
+    const warnBox = el("div", { class: "import-warn", "data-testid": "import-warnings", hidden: "" });
+    const plainNote = el("p", { class: "field-hint", "data-testid": "import-plain-env", text: t("gui.k8s.import.plain_env") });
+    const orderLine = el("div", { class: "import-order", "data-testid": "import-order" });
+    const yamlBox = el("pre", { class: "import-yaml mono", "data-testid": "import-yaml", hidden: "" });
+    const manifestNote = el("p", { class: "import-manifest", "data-testid": "import-manifest", text: t("gui.k8s.import.manifest_note"), hidden: "" });
+    const composeParts = el("div", { class: "import-step" },
+      el("div", { class: "deploy-grid" },
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.import.stack_name") }), textField(nameIn)),
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.import.namespace") }), textField(nsIn))),
+      readLine, el("div", { class: "field-label", text: t("gui.k8s.import.services") }), svcBox, orderLine, warnBox, plainNote, yamlBox);
+    const step2 = el("div", { class: "import-step" }, manifestNote, composeParts);
+
+    const mask = (y: string) => y.replace(/("name": "[^"]*(?:PASSWORD|SECRET|TOKEN|KEY)[^"]*",\s*"value": )"[^"]*"/gi, '$1"••••"');
+    const renderPreview = () => {
+      const p = preview!;
+      manifestNote.hidden = p.kind !== "manifest";
+      composeParts.hidden = p.kind !== "compose";
+      if (p.kind !== "compose" || !p.spec) return;
+      readLine.textContent = fmt(t("gui.k8s.import.read"), [selectedName(), ...p.read_files].join(", "));
+      const byName = new Map(p.spec.services.map((s) => [s.name, s]));
+      svcBox.replaceChildren(...(p.order ?? []).map((n) => {
+        const s = byName.get(n)!;
+        const bits = [s.image];
+        if (s.depends_on?.length) bits.push(fmt(t("gui.k8s.import.depends"), s.depends_on.join(", ")));
+        if (s.env?.length) bits.push(fmt(t("gui.k8s.import.env_n"), String(s.env.length)));
+        if (s.volumes?.length) bits.push(fmt(t("gui.k8s.import.volumes_n"), String(s.volumes.length)));
+        if ((s.replicas ?? 1) > 1) bits.push(`replicas ${s.replicas}`);
+        const exposure = s.expose === "loadbalancer" ? `localhost:${s.host_port}` : s.expose === "nodeport" ? "NodePort" : s.port ? `${t("gui.k8s.import.cluster_only")} :${s.port}` : t("gui.k8s.import.cluster_only");
+        return el("div", { class: "import-svc", "data-testid": `import-svc-${n}` }, el("b", { text: n }), el("span", { text: bits.join(" · ") }), el("small", { text: exposure }));
+      }));
+      orderLine.textContent = `${t("gui.k8s.import.order")}: ${(p.order ?? []).join(" → ")}`;
+      warnBox.hidden = p.warnings.length === 0;
+      warnBox.replaceChildren(el("b", { text: fmt(t("gui.k8s.import.warnings"), String(p.warnings.length)) }), ...p.warnings.map((w) => el("div", { text: w })));
+      plainNote.hidden = !p.spec.services.some((s) => s.env?.length);
+      yamlBox.textContent = mask(p.yaml ?? "");
+    };
+    const selectedName = () => selected.split(/[\\/]/).pop() ?? selected;
+
+    // ---- 流程
+    const cancel = btn({ type: "button", "data-testid": "import-cancel" }, "close", t("gui.cancel"));
+    const next = btn({ class: "primary", type: "button", "data-testid": "import-next" }, "chevron-right", t("gui.k8s.import.next"));
+    const back = btn({ type: "button", "data-testid": "import-back" }, "chevron-left", t("gui.k8s.import.back"));
+    const yamlToggle = btn({ type: "button", "data-testid": "import-view-yaml" }, "file", t("gui.k8s.import.view_yaml"));
+    const submit = btn({ class: "primary", type: "button", "data-testid": "import-submit" }, "play", t("gui.k8s.import.deploy"));
+    let step: 1 | 2 = 1;
+    const syncButtons = () => {
+      step1.hidden = step !== 1;
+      step2.hidden = step !== 2;
+      next.hidden = step !== 1;
+      next.disabled = !selected;
+      back.hidden = step !== 2;
+      submit.hidden = step !== 2;
+      yamlToggle.hidden = step !== 2 || preview?.kind !== "compose";
+      submit.querySelector(".label")!.textContent = preview?.kind === "manifest" ? t("gui.k8s.import.apply") : t("gui.k8s.import.deploy");
+    };
+    const fetchPreview = async () => {
+      showErr("");
+      try {
+        const r = await api.composePreview({ kind, name: source, path: selected, stack_name: nameIn.value.trim() || undefined, namespace: nsIn.value.trim() || undefined });
+        preview = r;
+        if (r.kind === "compose" && r.spec) {
+          nameIn.value = r.spec.name;
+          nsIn.value = r.spec.namespace ?? r.spec.name;
+        }
+        renderPreview();
+        return true;
+      } catch (e) {
+        showErr(msg(e));
+        return false;
+      }
+    };
+    const toPreview = async () => {
+      if (!selected) return;
+      nameIn.value = "";
+      nsIn.value = "";
+      if (!(await fetchPreview())) return;
+      step = 2;
+      syncButtons();
+    };
+    next.onclick = () => void toPreview();
+    back.onclick = () => {
+      step = 1;
+      showErr("");
+      syncButtons();
+    };
+    cancel.onclick = () => d.close();
+    nameIn.onchange = () => void fetchPreview();
+    nsIn.onchange = () => void fetchPreview();
+    yamlToggle.onclick = () => {
+      yamlBox.hidden = !yamlBox.hidden;
+      yamlToggle.querySelector(".label")!.textContent = yamlBox.hidden ? t("gui.k8s.import.view_yaml") : t("gui.k8s.import.hide_yaml");
+    };
+    submit.onclick = async () => {
+      if (!preview) return;
+      submit.disabled = true;
+      const label = submit.querySelector(".label")!;
+      const prev = label.textContent;
+      label.textContent = t("gui.k8s.import.deploying");
+      try {
+        if (preview.kind === "manifest") {
+          const r = await api.k8sApply(preview.manifest ?? "");
+          d.close();
+          this.notify(fmt(t("gui.k8s.apply_done"), r.output.split("\n").join("; ")));
+        } else {
+          const res = await api.k8sStack(preview.spec!);
+          d.close();
+          const urls = res.services.map((r) => (r.host_port ? `${r.name} → http://localhost:${r.host_port}` : r.node_port ? `${r.name} → http://localhost:${r.node_port}` : "")).filter(Boolean);
+          this.notify([fmt(t("gui.k8s.import.done"), res.name, String(res.services.length)), ...urls].join("; "), { sticky: true });
+        }
+        await this.refresh();
+      } catch (e) {
+        showErr(msg(e));
+      } finally {
+        submit.disabled = false;
+        label.textContent = prev;
+      }
+    };
+
+    d.begin = async () => {
+      step = 1;
+      preview = undefined;
+      selected = "";
+      showErr("");
+      try {
+        sources = await api.fsSources();
+      } catch (e) {
+        sources = { drives: [], wsl: [] };
+        showErr(msg(e));
+      }
+      const kinds: DropdownOption[] = [];
+      if (sources.wsl.length) kinds.push(["wsl", "WSL"]);
+      if (sources.drives.length) kinds.push(["windows", "Windows"]);
+      const last = loadJSON<{ kind: string; source: string }>(SRC_KEY, { kind: "", source: "" });
+      kind = kinds.some(([v]) => v === last.kind) ? last.kind : (kinds[0]?.[0] ?? "wsl");
+      source = last.kind === kind ? last.source : "";
+      kindDd.setOptions(kinds, kind, t("gui.k8s.import.no_source"));
+      fillSources();
+      syncButtons();
+      d.showModal();
+      await load("");
+    };
+    d.append(
+      el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.import.title") })),
+      el("div", { class: "add-machine-form" }, step1, step2, errBox, el("div", { class: "row" }, yamlToggle, el("span", { class: "spacer" }), cancel, back, next, submit)),
+    );
+    syncButtons();
+    return d;
+  }
+
+  private async openImport(): Promise<void> {
+    await this.root.querySelector<ImportDialog>('[data-testid="import-dialog"]')!.begin();
   }
 
   private async openDeploy(): Promise<void> {

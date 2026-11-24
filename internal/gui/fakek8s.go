@@ -638,3 +638,56 @@ func (f *FakeK8s) Apply(_ context.Context, manifest []byte) (string, error) {
 	f.c.Calls = append(f.c.Calls, fmt.Sprintf("apply:%d", len(manifest)))
 	return "deployment.apps/applied created\n", nil
 }
+
+// DeployStack 實作 K8s：依相依順序逐一以 Deploy 建立（每個服務一個 Deployment＋有埠時的 Service）。
+func (f *FakeK8s) DeployStack(ctx context.Context, spec k8s.StackSpec) (k8s.StackResult, error) {
+	s, err := spec.Normalize()
+	if err != nil {
+		return k8s.StackResult{}, err
+	}
+	order, _ := s.Order()
+	res := k8s.StackResult{Namespace: s.Namespace, Name: s.Name}
+	f.c.mu.Lock()
+	f.c.Calls = append(f.c.Calls, fmt.Sprintf("stack:%s/%s", s.Namespace, s.Name))
+	f.c.mu.Unlock()
+	for _, sv := range order {
+		r, err := f.Deploy(ctx, k8s.DeploySpec{Image: sv.Image, Name: sv.Name, Namespace: s.Namespace, Port: sv.Port, Expose: sv.Expose, HostPort: sv.HostPort, Replicas: sv.Replicas})
+		if err != nil {
+			return res, err
+		}
+		res.Services = append(res.Services, r)
+	}
+	return res, nil
+}
+
+// DeleteStack 實作 K8s：刪除該 namespace 內名稱屬於 stack 的 Deployment（假叢集不記 label，故以 Calls 記錄並清空 namespace 內的工作負載）。
+func (f *FakeK8s) DeleteStack(_ context.Context, ns, name string, withPVC bool) error {
+	f.c.mu.Lock()
+	defer f.c.mu.Unlock()
+	if err := f.requireRunning(); err != nil {
+		return err
+	}
+	f.c.Calls = append(f.c.Calls, fmt.Sprintf("delete-stack:%s/%s pvc=%v", ns, name, withPVC))
+	keepD := f.c.deploys[:0:0]
+	for _, d := range f.c.deploys {
+		if d.Namespace != ns {
+			keepD = append(keepD, d)
+		}
+	}
+	f.c.deploys = keepD
+	keepP := f.c.pods[:0:0]
+	for _, p := range f.c.pods {
+		if p.Namespace != ns {
+			keepP = append(keepP, p)
+		}
+	}
+	f.c.pods = keepP
+	keepS := f.c.services[:0:0]
+	for _, sv := range f.c.services {
+		if sv.Namespace != ns {
+			keepS = append(keepS, sv)
+		}
+	}
+	f.c.services = keepS
+	return nil
+}
