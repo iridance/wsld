@@ -34,6 +34,7 @@ type FakeEngine struct {
 	listHoldArmed   bool
 	listHoldWaiting bool
 
+	mounts   map[string][]dockerapi.ContainerMount // 容器 id → inspect 的 Mounts（測 bind 曝露用）
 	images   []dockerapi.Image
 	volumes  map[string]*fakeVolume
 	networks []dockerapi.Network
@@ -112,6 +113,7 @@ func (f *FakeEngine) Reset() {
 	}
 	f.Down = false
 	f.containers = map[string]*dockerapi.Container{}
+	f.mounts = nil
 	f.logs = map[string][]string{}
 	f.subs = map[string][]chan string{}
 	f.execEcho = true
@@ -364,6 +366,24 @@ func (f *FakeEngine) PruneNetworks(context.Context) (dockerapi.PruneReport, erro
 	return rep, nil
 }
 
+// SetBinds 讓名為 name 的容器帶有指定來源的 bind 掛載（inspect 的 Mounts）。
+func (f *FakeEngine) SetBinds(name string, sources ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := f.findLocked(name)
+	if id == "" {
+		return
+	}
+	if f.mounts == nil {
+		f.mounts = map[string][]dockerapi.ContainerMount{}
+	}
+	var ms []dockerapi.ContainerMount
+	for i, src := range sources {
+		ms = append(ms, dockerapi.ContainerMount{Type: "bind", Source: src, Destination: fmt.Sprintf("/mnt%d", i), RW: true})
+	}
+	f.mounts[id] = ms
+}
+
 func (f *FakeEngine) idFor(name string) string {
 	return fmt.Sprintf("%-64s", "id-"+name)[:64]
 }
@@ -606,6 +626,9 @@ func (f *FakeEngine) Inspect(_ context.Context, id string) (dockerapi.ContainerD
 		}
 	}
 	d.Mounts = []dockerapi.ContainerMount{{Type: "bind", Source: "/home/irice/app", Destination: "/app", Mode: "rw", RW: true}}
+	if ms, ok := f.mounts[c.ID]; ok {
+		d.Mounts = ms // SetBinds 指定的掛載（測曝露用）
+	}
 	return d, nil
 }
 

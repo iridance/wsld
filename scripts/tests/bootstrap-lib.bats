@@ -464,3 +464,258 @@ SCRIPT
   run wsld_k3s_installed "$TMPD/k3s"
   [ "$status" -eq 0 ]
 }
+
+# ---------- shared engine（專用 dockerd distro）----------
+
+@test "parse_args role defaults to empty (legacy self-contained docker)" {
+  wsld_parse_args
+  [ -z "$WSLD_ROLE" ]
+}
+
+@test "parse_args accepts --role engine and client" {
+  wsld_parse_args --role engine
+  [ "$WSLD_ROLE" = "engine" ]
+  wsld_parse_args --role client
+  [ "$WSLD_ROLE" = "client" ]
+}
+
+@test "parse_args rejects unknown role" {
+  run wsld_parse_args --role bogus
+  [ "$status" -eq 2 ]
+}
+
+@test "daemon_json with shared socket lists unix, shared socket and loopback tcp" {
+  run wsld_render_daemon_json 23750 /mnt/wsl/wsld/docker.sock
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"unix:///var/run/docker.sock", "unix:///mnt/wsl/wsld/docker.sock", "tcp://127.0.0.1:23750"'* ]]
+  run wsld_validate_loopback_hosts "$output"
+  [ "$status" -eq 0 ]
+}
+
+@test "daemon_json without shared socket is unchanged" {
+  run wsld_render_daemon_json 23750
+  [[ "$output" != *"/mnt/wsl"* ]]
+}
+
+@test "engine override prepares the shared socket dir and opens its mode" {
+  run wsld_render_engine_override debian /mnt/wsl/wsld/docker.sock
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock"* ]]
+  [[ "$output" == *"ExecStartPre=/bin/mkdir -p /mnt/wsl/wsld"* ]]
+  [[ "$output" == *"ExecStartPre=/bin/rm -f /mnt/wsl/wsld/docker.sock"* ]]
+  [[ "$output" == *"ExecStartPost=/bin/chmod 0666 /mnt/wsl/wsld/docker.sock"* ]]
+}
+
+@test "engine override for suse lets dockerd manage containerd" {
+  run wsld_render_engine_override suse /mnt/wsl/wsld/docker.sock
+  [[ "$output" == *"ExecStart=/usr/bin/dockerd"* ]]
+  [[ "$output" != *"--containerd"* ]]
+}
+
+@test "ensure_ini_key creates section and key when file is absent" {
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  grep -q '^\[interop\]' "$TMPD/wsl.conf"
+  grep -q '^enabled=false' "$TMPD/wsl.conf"
+}
+
+@test "ensure_ini_key replaces an existing value and is idempotent" {
+  printf '[interop]\nenabled = true\nappendWindowsPath=true\n[user]\ndefault=irice\n' > "$TMPD/wsl.conf"
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  [ "$(grep -c '^enabled=false' "$TMPD/wsl.conf")" -eq 1 ]
+  ! grep -q 'enabled = true' "$TMPD/wsl.conf"
+  grep -q '^appendWindowsPath=true' "$TMPD/wsl.conf"
+  grep -q '^default=irice' "$TMPD/wsl.conf"
+}
+
+@test "ensure_ini_key adds a key to an existing section without touching other sections" {
+  printf '[boot]\nsystemd=true\n[interop]\nappendWindowsPath=true\n' > "$TMPD/wsl.conf"
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  awk '/^\[/{s=$0} s=="[interop]" && /^enabled=false/{f=1} END{exit f?0:1}' "$TMPD/wsl.conf"
+  grep -q '^systemd=true' "$TMPD/wsl.conf"
+}
+
+@test "ensure_ini_key does not match the same key in another section" {
+  printf '[boot]\nenabled=true\n' > "$TMPD/wsl.conf"
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  grep -q '^enabled=true' "$TMPD/wsl.conf"
+  awk '/^\[/{s=$0} s=="[interop]" && /^enabled=false/{f=1} END{exit f?0:1}' "$TMPD/wsl.conf"
+}
+
+@test "client_packages debian installs only cli and plugins" {
+  run wsld_client_packages debian 1
+  [ "$output" = "docker-ce-cli docker-buildx-plugin docker-compose-plugin" ]
+  run wsld_client_packages debian 0
+  [ "$output" = "docker-ce-cli docker-buildx-plugin" ]
+}
+
+@test "client_packages arch and suse use the distro docker package" {
+  run wsld_client_packages arch 1
+  [[ "$output" == "docker "* ]] && [[ "$output" == *docker-compose* ]]
+  run wsld_client_packages suse 1
+  [[ "$output" == "docker "* ]] && [[ "$output" == *docker-compose* ]]
+}
+
+@test "client_packages rejects unknown family" {
+  run wsld_client_packages plan9 1
+  [ "$status" -ne 0 ]
+}
+
+@test "engine socket constant points under /mnt/wsl" {
+  [ "$WSLD_ENGINE_SOCK" = "/mnt/wsl/wsld/docker.sock" ]
+}
+
+# ---------- expose：專用路徑 /mnt/wsl/distro/<名稱> ----------
+
+@test "map_path puts a distro path under the dedicated exposure root" {
+  run wsld_map_path Ubuntu-26.04 /home/irice/Projects/moto-wander
+  [ "$status" -eq 0 ]
+  [ "$output" = "/mnt/wsl/distro/Ubuntu-26.04/home/irice/Projects/moto-wander" ]
+}
+
+@test "map_path maps the root itself" {
+  run wsld_map_path Debian1 /
+  [ "$status" -eq 0 ]
+  [ "$output" = "/mnt/wsl/distro/Debian1" ]
+}
+
+@test "map_path honours an alternative root (tests)" {
+  run wsld_map_path Debian1 /srv/app /tmp/xroot
+  [ "$output" = "/tmp/xroot/Debian1/srv/app" ]
+}
+
+@test "map_path refuses windows mounts, shared mounts and already-mapped paths" {
+  run wsld_map_path Debian1 /mnt/c/Users/me/proj;                       [ "$status" -ne 0 ]
+  run wsld_map_path Debian1 /mnt/d;                                     [ "$status" -ne 0 ]
+  run wsld_map_path Debian1 /mnt/wsl/anything;                          [ "$status" -ne 0 ]
+  run wsld_map_path Debian1 /mnt/wsl/distro/Debian1/home/x;             [ "$status" -ne 0 ]
+}
+
+@test "map_path refuses relative paths and unsafe distro names" {
+  run wsld_map_path Debian1 relative/dir;      [ "$status" -ne 0 ]
+  run wsld_map_path 'bad name' /home/x;        [ "$status" -ne 0 ]
+  run wsld_map_path '../x' /home/x;            [ "$status" -ne 0 ]
+  run wsld_map_path '' /home/x;                [ "$status" -ne 0 ]
+}
+
+@test "shim_needs_expose: subcommands that can bind-mount" {
+  for args in "compose up -d" "compose up" "compose run web sh" "compose create" "compose start" "compose restart" \
+              "run --rm alpine" "run -v ./a:/a alpine" "create alpine" "container run alpine" "container create alpine" \
+              "compose -f docker-compose.yml up" "compose --project-name p -f a.yml -f b.yml up -d" \
+              "--context wsld run alpine" "-H unix:///x.sock compose up" "--config /tmp/c compose up"; do
+    run wsld_shim_needs_expose $args
+    [ "$status" -eq 0 ] || { echo "should need expose: $args"; return 1; }
+  done
+}
+
+@test "shim_needs_expose: everything else passes through" {
+  for args in "" "ps" "ps -a" "images" "logs web" "exec web sh" "build ." "version" "--version" "info" "context show" \
+              "compose" "compose ps" "compose logs" "compose down" "compose build" "compose config" "compose pull" \
+              "container ls" "volume ls" "-H unix:///x.sock ps"; do
+    run wsld_shim_needs_expose $args
+    [ "$status" -ne 0 ] || { echo "should not need expose: $args"; return 1; }
+  done
+}
+
+@test "render_expose_script bakes the distro, binds non-recursively and parses" {
+  run wsld_render_expose_script Ubuntu-26.04
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DISTRO='Ubuntu-26.04'"* ]]
+  [[ "$output" == *"mount --bind / "* ]]
+  [[ "$output" != *"--rbind"* ]]
+  [[ "$output" != *"umount -R"* ]]
+  [[ "$output" != *"umount -l"* ]]
+  printf '%s\n' "$output" > "$TMPD/expose.sh"
+  bash -n "$TMPD/expose.sh"
+}
+
+@test "render_expose_script rejects unsafe distro names" {
+  run wsld_render_expose_script 'x; rm -rf /'
+  [ "$status" -ne 0 ]
+  run wsld_render_expose_script ''
+  [ "$status" -ne 0 ]
+}
+
+@test "render_sudoers allows only the three fixed wsld-expose commands" {
+  run wsld_render_sudoers irice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"irice ALL=(root) NOPASSWD: /usr/local/sbin/wsld-expose expose, /usr/local/sbin/wsld-expose release, /usr/local/sbin/wsld-expose status"* ]]
+  [ "$(printf '%s\n' "$output" | grep -c NOPASSWD)" -eq 1 ]
+  run wsld_render_sudoers 'bad user'
+  [ "$status" -ne 0 ]
+  run wsld_render_sudoers 'root'
+  [ "$status" -ne 0 ]
+}
+
+# 以假 docker／假 expose 指令驗證 shim 行為
+shim_setup() {
+  mkdir -p "$TMPD/bin" "$TMPD/home/.docker" "$TMPD/root/Test$TMPD/proj" "$TMPD/proj"
+  printf '#!/bin/sh\necho "DOCKER args=[$*] cwd=$PWD"\n' > "$TMPD/bin/realdocker"
+  printf '#!/bin/sh\necho "$*" >> "%s/expose.log"\n' "$TMPD" > "$TMPD/bin/fakeexpose"
+  chmod +x "$TMPD/bin/realdocker" "$TMPD/bin/fakeexpose"
+  wsld_render_shim Test "$TMPD/bin/realdocker" > "$TMPD/docker"
+  chmod +x "$TMPD/docker"
+  export HOME="$TMPD/home" WSL_DISTRO_NAME=Test WSLD_EXPOSE_ROOT="$TMPD/root" WSLD_EXPOSE_CMD="$TMPD/bin/fakeexpose"
+  unset WSLD_NO_SHIM DOCKER_CONTEXT DOCKER_CONFIG
+  printf '{"currentContext":"wsld"}\n' > "$HOME/.docker/config.json"
+}
+
+@test "render_shim output is valid bash" {
+  shim_setup
+  bash -n "$TMPD/docker"
+}
+
+@test "shim exposes and enters the mapped path for compose up under the wsld context" {
+  shim_setup
+  cd "$TMPD/proj"
+  run "$TMPD/docker" compose up -d
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"args=[compose up -d]"* ]]
+  [[ "$output" == *"cwd=$TMPD/root/Test$(pwd -P)"* ]]
+  grep -qx "expose" "$TMPD/expose.log"
+}
+
+@test "shim leaves non-bind commands alone and never exposes" {
+  shim_setup
+  cd "$TMPD/proj"
+  run "$TMPD/docker" ps
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cwd=$(pwd -P)"* ]]
+  [ ! -e "$TMPD/expose.log" ]
+}
+
+@test "shim passes through when WSLD_NO_SHIM=1" {
+  shim_setup
+  cd "$TMPD/proj"
+  WSLD_NO_SHIM=1 run "$TMPD/docker" compose up
+  [[ "$output" == *"cwd=$(pwd -P)"* ]]
+  [ ! -e "$TMPD/expose.log" ]
+}
+
+@test "shim passes through when the context is not wsld" {
+  shim_setup
+  printf '{"currentContext":"default"}\n' > "$HOME/.docker/config.json"
+  cd "$TMPD/proj"
+  run "$TMPD/docker" compose up
+  [[ "$output" == *"cwd=$(pwd -P)"* ]]
+  [ ! -e "$TMPD/expose.log" ]
+  DOCKER_CONTEXT=wsld run "$TMPD/docker" compose up
+  [[ "$output" == *"cwd=$TMPD/root/Test"* ]]
+}
+
+@test "shim does not map windows paths and keeps going when expose fails" {
+  shim_setup
+  printf '#!/bin/sh\nexit 1\n' > "$TMPD/bin/fakeexpose"
+  cd "$TMPD/proj"
+  run "$TMPD/docker" compose up
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wsld:"* ]]
+  [[ "$output" == *"cwd=$(pwd -P)"* ]]
+}
+
+@test "parse_args: shim is installed by default and --no-shim turns it off" {
+  wsld_parse_args
+  [ "$WSLD_INSTALL_SHIM" = "1" ]
+  wsld_parse_args --no-shim
+  [ "$WSLD_INSTALL_SHIM" = "0" ]
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ type FakeWSL struct {
 	resizes     []string // "<distro> <size> <state> <attached|detached>"
 	// attached：VHD 仍掛在 WSL VM 上的 distro。啟動即掛上；--terminate 不會卸下（與實機相同），只有 --shutdown 會。
 	attached map[string]bool
+	exposed  map[string]bool // /mnt/wsl/distro/<名稱> 目前是否掛著（曝露）
 	calls    []string
 	// fsMinBlocks：根檔案系統能縮到的最小 4 KiB 區塊數（resize2fs -P；缺 = 2 GiB）
 	fsMinBlocks map[string]int64
@@ -109,6 +111,77 @@ func (f *FakeWSL) SetConf(distro, conf string) {
 }
 
 // Shutdowns 回傳 wsl --shutdown 的次數。
+// SetExposed 直接設定某 distro 的曝露掛載（測試佈置用）。
+func (f *FakeWSL) SetExposed(name string, on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.exposed == nil {
+		f.exposed = map[string]bool{}
+	}
+	if on {
+		f.exposed[name] = true
+	} else {
+		delete(f.exposed, name)
+	}
+}
+
+// Exposed 回傳目前曝露中的 distro（排序）。
+func (f *FakeWSL) Exposed() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{}
+	for n := range f.exposed {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SetState 直接設定 distro 狀態（Running／Stopped）。
+func (f *FakeWSL) SetState(name, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.distros {
+		if strings.EqualFold(f.distros[i].Name, name) {
+			f.distros[i].State = state
+			if state != "Running" {
+				f.endProcs(f.distros[i].Name)
+			}
+		}
+	}
+}
+
+// State 回傳 distro 狀態。
+func (f *FakeWSL) State(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.distros {
+		if strings.EqualFold(d.Name, name) {
+			return d.State
+		}
+	}
+	return ""
+}
+
+// CallIndex 回傳第一個包含 sub 的 wsl.exe 呼叫的序號（-1 = 沒有）。
+func (f *FakeWSL) CallIndex(sub string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, c := range f.calls {
+		if strings.Contains(c, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// AddDistro 新增一個假 distro（測試專用，例如 engine）。
+func (f *FakeWSL) AddDistro(name, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.distros = append(f.distros, wsl.Distro{Name: name, State: state, Version: 2})
+}
+
 func (f *FakeWSL) Shutdowns() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -127,6 +200,7 @@ func (f *FakeWSL) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shutdowns = 0
+	f.exposed = map[string]bool{}
 	f.distros = []wsl.Distro{
 		{Name: "Ubuntu-26.04", State: "Running", Version: 2, Default: true},
 		{Name: "docker-desktop", State: "Stopped", Version: 2},
@@ -532,6 +606,35 @@ func (f *FakeWSL) Run(ctx context.Context, stdin io.Reader, args ...string) ([]b
 				f.passwords[name] = map[string]string{}
 			}
 			f.passwords[name][u] = pw
+			return nil, nil, nil
+		}
+		// 曝露（/mnt/wsl/distro/<名稱>）：engine 內 findmnt 看得到；umount／helper 會改變它
+		if strings.HasSuffix(joined, "-- findmnt -rn -o TARGET") {
+			var b strings.Builder
+			b.WriteString("/\n/mnt/c\n/mnt/wsl\n")
+			names := make([]string, 0, len(f.exposed))
+			for n := range f.exposed {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				fmt.Fprintf(&b, "/mnt/wsl/distro/%s\n/mnt/wsl/distro/%s/proc\n", n, n)
+			}
+			return []byte(b.String()), nil, nil
+		}
+		if i := strings.Index(joined, "-- umount /mnt/wsl/distro/"); i >= 0 {
+			delete(f.exposed, joined[i+len("-- umount /mnt/wsl/distro/"):])
+			return nil, nil, nil
+		}
+		if strings.HasSuffix(joined, "-- /usr/local/sbin/wsld-expose expose") {
+			if f.exposed == nil {
+				f.exposed = map[string]bool{}
+			}
+			f.exposed[name] = true
+			return nil, nil, nil
+		}
+		if strings.HasSuffix(joined, "-- /usr/local/sbin/wsld-expose release") {
+			delete(f.exposed, name)
 			return nil, nil, nil
 		}
 		// systemctl stop docker 等 best-effort 命令

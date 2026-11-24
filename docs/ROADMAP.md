@@ -283,7 +283,36 @@ Extra ≠ 0.5／v2.0 完成條件
 - [ ] `wsld import`：從 Docker Desktop 把映像檔、volume、容器搬進 wsld 引擎（參考 Kiri 的 `kiri import`）
 - [ ] Local domains：每個容器 `http://<name>.wsld.local`、Compose 為 `<service>.<project>.wsld.local`，可選 HTTPS（自家 CA）（參考 Kiri 的 `.kiri.local`）
 - [ ] arm64 正式支援
-- [ ] 專用隔離 distro 旗標
+- [ ] 專用隔離 distro 旗標（由下方「共用 engine」取代）
+
+### 共用 engine（專用 dockerd distro）
+
+動機：每個 distro 各裝 dockerd 造成 image／volume 重複。設計：一個 engine distro 跑 dockerd（與 k3s），其餘 client 只裝 CLI，經 `/mnt/wsl/wsld/docker.sock`（WSL2 所有 distro 共用的 tmpfs）連線；WSL2 共用 network namespace，published ports 在所有 distro 與 Windows 都可達。
+
+階段 1（分支 `feat/shared-engine-distro`，尚未發版）：
+
+- [x] `Machine.Role`（engine／client）與設定驗證：最多一台 engine、k8s 只能在 engine
+- [x] bootstrap `--role engine|client`、`wsld init --role`
+- [x] engine 保活（wsld-gui）
+- [x] k8s 預設／限定在 engine
+- [x] doctor：`engine_socket`、`client_<distro>`
+- [x] GUI Machines：Engine／Client 標籤與設定按鈕
+- [x] 只剩單一 engine：舊設定載入時遷移（一律新增專用 `wsld-engine` 並於啟動時自動建立；原有已 init 的 distro 全部變 client、資料保留，再以 `wsld migrate` 搬進 engine；舊機器的 k8s 旗標清除）；移除 `wsld start`／`wsld use`、GUI「設為主要」「啟動引擎」與 k8s 機器間切換
+- [x] 啟動即啟動：GUI 開啟自動帶起（首次建立 `wsld-engine`）、Supervise 持續拉起並退避；CLI 需要 Docker 的指令自動帶起
+- [ ] 真實 WSL 實測（`/mnt/wsl` socket、保活、client context、首次自動建立、Supervise）
+- [x] `wsld migrate`：把 client 內舊的 image／具名 volume 複製到 engine（不刪來源、不搬容器；停用本機 dockerd 由使用者確認後自行執行）；待實機驗證
+- [ ] 實測：把既有已裝 docker 的 machine 直接設為 engine（bootstrap 沿用既有安裝並補共用 socket）
+- [ ] 角色改回獨立／client 改回（GUI 目前沒有「取消角色」）
+- [ ] 獨立 data VHD（`wsl --mount --vhd`），engine 重建時 image 不丟
+- [ ] CLI 的 engine 保活（目前只有 wsld-gui）
+
+階段 2（已改為「專用路徑曝露」，取代 proxy）：client 以非遞迴 `mount --bind /` 把根目錄曝露在共用的 `/mnt/wsl/distro/<名稱>`（只在執行 docker 時才曝露），client 內 docker shim 在 wsld context 下對 `run`／`create`／`compose up|run|create|start|restart` 先曝露並 `cd` 到對應的曝露路徑，engine 以相同絕對路徑解析 bind mount；不需要 proxy、同步或共用 VHD。實測依據：`/mnt/c`（virtiofs）小檔案慢 50–270 倍且 inotify 不跨掛載、`\\wsl.localhost` 掛載再慢約 7 倍，故不採用。
+
+- [x] `wsld-expose`（root helper）＋ sudoers（只限 expose／release／status）＋ docker shim（`WSLD_NO_SHIM=1` 可關）
+- [x] `internal/expose`：Report／Release／GC／StopUsers／EnsureFor；Supervise 節流 GC（30 秒）、停止／刪除前釋放、GUI 啟動舊容器前補曝露
+- [x] `wsld expose status|release|gc`、doctor（`expose_stale`、`expose_tools_<distro>`）、Machines 卡片「已曝露」標籤與釋放按鈕
+- [ ] 真實 WSL 長期驗證（moto-wander compose、壓縮／調整大小、`wsl --terminate` 後殘留清除）
+- [ ] 絕對路徑 `-v /home/...` 的改寫（目前不處理，只在文件說明）
 
 **退出條件**：各項自訂；**不**阻擋 Phase 5／6 結案。
 

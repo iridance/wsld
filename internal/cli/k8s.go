@@ -84,6 +84,8 @@ func (a *App) k8sOn(ctx context.Context, cfg config.Config, machine string) erro
 			return fail(ExitError, errors.New(i18n.T("cli.k8s.unknown_machine", machine)))
 		}
 		target = m
+	} else if e, ok := cfg.EngineMachine(); ok {
+		target = e // 有 engine 時 k3s 一律裝在 engine（--docker 需與 dockerd 同 distro）
 	} else {
 		m, err := a.requireActive(cfg)
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iridance/wsld/internal/config"
+	"github.com/iridance/wsld/internal/expose"
 	"github.com/iridance/wsld/internal/i18n"
 	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
@@ -130,6 +131,10 @@ func (c *checker) runIn(ctx context.Context, user string, cmd ...string) (string
 }
 
 func (c *checker) run(ctx context.Context) {
+	// 有專用 engine 時，dockerd／systemd／linger／API 等主檢查都針對 engine（client 沒有 daemon）。
+	if e, ok := c.d.Cfg.EngineMachine(); ok {
+		_ = c.d.Cfg.SetActive(e.Distro)
+	}
 	cfg := c.d.Cfg
 
 	// 1. wsl
@@ -234,9 +239,81 @@ func (c *checker) run(ctx context.Context) {
 	c.checkDesktop(ctx, list)
 	// 10. 區網存取（僅已啟用時）
 	c.checkLAN(ctx)
-	// 11. k3s（僅有 machine 開啟 k8s 時）
+	// 11. 專用 engine：共用 socket 與各 client
+	c.checkEngine(ctx, list)
+	// 12. k3s（僅有 machine 開啟 k8s 時）
 	c.checkK8s(ctx)
 	c.infoChecks()
+}
+
+// checkEngine：已設定專用 engine 時，檢查共用 socket 與每台 client。問題一律只警告（主檢查已涵蓋 engine 本身）。
+// 停止中的 client 不叫醒它（wsl -d 會喚醒 distro），只回報 Info。
+func (c *checker) checkEngine(ctx context.Context, list []wsl.Distro) {
+	eng, ok := c.d.Cfg.EngineMachine()
+	if !ok {
+		return
+	}
+	const sock = "/mnt/wsl/wsld/docker.sock"
+	if _, err := c.runIn(ctx, "", "test", "-S", sock); err != nil {
+		c.add(Result{ID: "engine_socket", Title: i18n.T("doctor.engine_socket.title"), Level: Warn,
+			Detail: i18n.T("doctor.engine_socket.missing", sock, eng.Distro), Hint: "wsld start"})
+	} else {
+		c.add(Result{ID: "engine_socket", Title: i18n.T("doctor.engine_socket.title"), Level: OK, Detail: sock})
+	}
+	for _, m := range c.d.Cfg.Machines {
+		if m.Role != config.RoleClient {
+			continue
+		}
+		id, title := "client_"+m.Distro, i18n.T("doctor.client.title", m.Distro)
+		if d, found := wsl.FindDistro(list, m.Distro); !found || !strings.EqualFold(d.State, "Running") {
+			c.add(Result{ID: id, Title: title, Level: Info, Detail: i18n.T("doctor.client.stopped")})
+			continue
+		}
+		out, _, _ := wsl.RunIn(ctx, c.d.WSL, m.Distro, m.User, nil, "docker", "context", "show")
+		if ctxName := strings.TrimSpace(wsl.DecodeOutput(out)); ctxName != "wsld" {
+			c.add(Result{ID: id, Title: title, Level: Warn, Detail: i18n.T("doctor.client.context", ctxName),
+				Hint: "wsld init --distro " + m.Distro + " --role client"})
+			continue
+		}
+		// 曝露工具：wsld-expose（root helper）與 docker shim 都要在，docker compose 的 bind mount 才會自動曝露
+		_, _, errTool := wsl.RunIn(ctx, c.d.WSL, m.Distro, "", nil, "test", "-x", "/usr/local/sbin/wsld-expose")
+		_, _, errShim := wsl.RunIn(ctx, c.d.WSL, m.Distro, "", nil, "grep", "-q", "DISTRO_DEFAULT", "/usr/local/bin/docker")
+		toolsID, toolsTitle := "expose_tools_"+m.Distro, i18n.T("doctor.expose_tools.title", m.Distro)
+		if errTool != nil || errShim != nil {
+			c.add(Result{ID: toolsID, Title: toolsTitle, Level: Warn, Detail: i18n.T("doctor.expose_tools.missing"),
+				Hint: "wsld init --distro " + m.Distro + " --role client"})
+		} else {
+			c.add(Result{ID: toolsID, Title: toolsTitle, Level: OK})
+		}
+		out, _, _ = wsl.RunIn(ctx, c.d.WSL, m.Distro, "", nil, "systemctl", "is-active", "docker")
+		if strings.TrimSpace(wsl.DecodeOutput(out)) == "active" {
+			c.add(Result{ID: id, Title: title, Level: Warn, Detail: i18n.T("doctor.client.local_dockerd"),
+				Hint: "wsl -d " + m.Distro + " -u root -- systemctl disable --now docker docker.socket"})
+			continue
+		}
+		c.add(Result{ID: id, Title: title, Level: OK})
+	}
+	c.checkStaleExposure(ctx, eng, list)
+}
+
+// checkStaleExposure：掛載還在、來源 distro 卻不在 Running，代表那份 VHD 仍被接著（再壓縮／調整大小會變成同一份被接兩次）。
+// 讀不到掛載清單（engine 內 findmnt 失敗）就不報。
+func (c *checker) checkStaleExposure(ctx context.Context, eng config.Machine, list []wsl.Distro) {
+	m := &expose.Manager{WSL: c.d.WSL, EngineDistro: eng.Distro}
+	mounted, err := m.Mounted(ctx)
+	if err != nil {
+		return
+	}
+	var stale []string
+	for _, n := range mounted {
+		if d, ok := wsl.FindDistro(list, n); !ok || !strings.EqualFold(d.State, "Running") {
+			stale = append(stale, n)
+		}
+	}
+	if len(stale) > 0 {
+		c.add(Result{ID: "expose_stale", Title: i18n.T("doctor.expose_stale.title"), Level: Warn,
+			Detail: i18n.T("doctor.expose_stale.detail", strings.Join(stale, ", ")), Hint: "wsld expose gc"})
+	}
 }
 
 // checkLAN：區網存取開啟時列出（由 wsld-gui 轉發）；偵測到 mirrored 模式（0.9.0 遺留）時警告，

@@ -119,6 +119,16 @@ func (k *KeepAlive) holdLocked(distro string) error {
 	return nil
 }
 
+// Paused 表示使用者明確停止過該 distro（自動保活／自動帶起都不該把它重新叫醒）。
+func (k *KeepAlive) Paused(distro string) bool {
+	if k == nil {
+		return false
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.paused[keepKey(distro)]
+}
+
 // Release 放掉 distro 的保活 session。pause 為 true 時，Ensure 之後不會自動重掛（使用者明確停止）。
 func (k *KeepAlive) Release(distro string, pause bool) {
 	if k == nil {
@@ -169,17 +179,28 @@ func (k *KeepAlive) Held() []string {
 	return out
 }
 
-// HoldOnly 保活 distro，並放掉其他所有 session（「設為主要」換手用）。
-func (k *KeepAlive) HoldOnly(distro string) error {
+// HoldOnly 保活指定的 distro（可多個），並放掉其他所有 session（「設為主要」換手用；
+// engine 也在名單內，所以換主要機器不會放掉 engine）。不帶名稱＝全部放掉。
+func (k *KeepAlive) HoldOnly(distros ...string) error {
 	if k == nil {
 		return nil
 	}
+	keep := map[string]bool{}
+	for _, d := range distros {
+		keep[keepKey(d)] = true
+	}
 	k.mu.Lock()
 	for key := range k.procs {
-		if key != keepKey(distro) {
+		if !keep[key] {
 			k.releaseLocked(key)
 		}
 	}
 	k.mu.Unlock()
-	return k.Hold(distro)
+	var first error
+	for _, d := range distros {
+		if err := k.Hold(d); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }

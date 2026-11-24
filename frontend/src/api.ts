@@ -96,6 +96,10 @@ export interface Machine {
   managed?: boolean;
   ready?: boolean;
   api_endpoint?: string;
+  /** engine = 專用共用 dockerd；client = 只裝 docker CLI、連 engine；省略 = 獨立 */
+  role?: "engine" | "client";
+  /** 根目錄目前曝露給 engine（/mnt/wsl/distro/<名稱>） */
+  exposed?: boolean;
   disk_bytes?: number; // ext4.vhdx 在 Windows 上的大小；取不到則省略
   disk_limit_bytes?: number; // 虛擬磁碟容量上限（VHDX 標頭）；取不到則省略
 }
@@ -162,6 +166,8 @@ export interface Status {
   APIError: string;
   ready: boolean;
   starting: boolean;
+  /** 自動帶起 engine 最近一次失敗的原因（成功後省略） */
+  start_error?: string;
 }
 
 export interface Settings {
@@ -522,7 +528,6 @@ function nsQuery(ns: string): string {
 export const api = {
   meta: () => call<Meta>("GET", "/api/meta"),
   status: (signal?: AbortSignal) => call<Status>("GET", "/api/status", undefined, false, signal),
-  startEngine: () => call<Status>("POST", "/api/engine/start"),
   containers: (signal?: AbortSignal) => call<Container[]>("GET", "/api/containers?all=1", undefined, false, signal),
   images: (signal?: AbortSignal) => call<Image[]>("GET", "/api/images", undefined, false, signal),
   removeImage: (ref: string, force = false) => call<void>("DELETE", `/api/images/${encodeURIComponent(ref)}${force ? "?force=1" : ""}`),
@@ -563,12 +568,15 @@ export const api = {
       `/api/machines/${encodeURIComponent(name)}/resize`,
       { size_gb: sizeGB, shutdown },
     ),
-  useMachine: (name: string) => call<{ active: string; ready: boolean }>("POST", `/api/machines/${encodeURIComponent(name)}/use`),
+  setMachineRole: (name: string, role: "engine" | "client") =>
+    call<{ name: string; role: string; active: string }>("POST", `/api/machines/${encodeURIComponent(name)}/role`, { role }),
   startMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/start`),
-  stopMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/stop`),
+  /** release：確認「先停止用到它的容器並釋放曝露」；未帶且仍有執行中容器時伺服器回 409 in_use（detail.containers）。 */
+  stopMachine: (name: string, release = false) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/stop${release ? "?release=1" : ""}`),
+  releaseExposure: (name: string, stop = false) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/expose/release${stop ? "?stop=1" : ""}`),
   unmanageMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unmanage`),
-  unregisterMachine: (name: string, confirm: string) =>
-    call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unregister`, { confirm }),
+  unregisterMachine: (name: string, confirm: string, release = false) =>
+    call<void>("POST", `/api/machines/${encodeURIComponent(name)}/unregister${release ? "?release=1" : ""}`, { confirm }),
   startContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/start`),
   stopContainer: (id: string) => call<void>("POST", `/api/containers/${encodeURIComponent(id)}/stop`),
   removeContainer: (id: string, force = true) =>
@@ -589,11 +597,10 @@ export const api = {
   distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),
   k8s: (signal?: AbortSignal) => call<K8sInfo>("GET", "/api/k8s", undefined, false, signal),
-  k8sOn: (opts: { machine?: string; switch?: boolean; addContext?: boolean } = {}) => {
+  k8sOn: (opts: { machine?: string; addContext?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (opts.addContext) q.set("add_context", "1");
     if (opts.machine) q.set("machine", opts.machine);
-    if (opts.switch) q.set("switch", "1");
     const qs = q.toString();
     return call<K8sInfo>("POST", `/api/k8s/on${qs ? `?${qs}` : ""}`);
   },

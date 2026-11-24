@@ -253,6 +253,9 @@ func (s *Server) handleK8sOn(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("machine")
 	if target == "" {
 		target = cfg.Active
+		if t, ok := cfg.K8sTarget(); ok {
+			target = t.Distro // 有 engine 時 k3s 一律裝在 engine
+		}
 	}
 	m, ok := cfg.FindMachine(target)
 	if !ok {
@@ -263,26 +266,19 @@ func (s *Server) handleK8sOn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "not_ready", fmt.Errorf("machine %q is not initialised yet", m.Distro))
 		return
 	}
+	if eng, has := cfg.EngineMachine(); has && !strings.EqualFold(eng.Distro, m.Distro) {
+		writeErr(w, http.StatusConflict, "conflict",
+			fmt.Errorf("k8s must run on the engine %q (k3s --docker has to sit beside dockerd)", eng.Distro))
+		return
+	}
 	owner, hasOwner := cfg.K8sMachine()
-	if hasOwner && !strings.EqualFold(owner.Distro, m.Distro) && r.URL.Query().Get("switch") != "1" {
+	if hasOwner && !strings.EqualFold(owner.Distro, m.Distro) {
 		writeErr(w, http.StatusConflict, "conflict",
 			fmt.Errorf("k8s is already enabled on %q (all WSL2 distros share one network namespace); turn it off there first", owner.Distro))
 		return
 	}
 	addContext := r.URL.Query().Get("add_context") == "1"
-	switchFrom := ""
-	if hasOwner && !strings.EqualFold(owner.Distro, m.Distro) {
-		switchFrom = owner.Distro
-	}
 	if !s.startK8sOp("starting", func(ctx context.Context) (string, error) {
-		if switchFrom != "" {
-			if err := s.k8sMgr(switchFrom).Stop(ctx); err != nil {
-				return "", err
-			}
-			if err := s.saveK8sFlag(switchFrom, false); err != nil {
-				return "", err
-			}
-		}
 		mgr := s.k8sMgr(m.Distro)
 		if err := mgr.Start(ctx); err != nil {
 			return "", err

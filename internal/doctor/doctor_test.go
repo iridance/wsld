@@ -372,3 +372,176 @@ func TestK8sPorts80And443AreInformational(t *testing.T) {
 		t.Fatalf("k8s_ports = %+v", x)
 	}
 }
+
+// ---- 專用 engine / client ----
+
+const engSock = "/mnt/wsl/wsld/docker.sock"
+
+// engineEnv：engine = wsld-engine（active），client = Debian1（Running 或 Stopped）。
+func engineEnv(clientState string) (map[string]kv, Deps) {
+	r := map[string]kv{
+		"--list --verbose":                                                     {out: utf16("  NAME STATE VERSION\r\n* wsld-engine Running 2\r\n  Debian1 " + clientState + " 2\r\n")},
+		"-d wsld-engine -- true":                                               {},
+		"-d wsld-engine -- systemctl is-system-running":                        {out: "running\n"},
+		"-d wsld-engine -- systemctl is-active docker":                         {out: "active\n"},
+		"-d wsld-engine -- ss -Hltn":                                           {out: "LISTEN 0 4096 127.0.0.1:23750 0.0.0.0:*\n"},
+		"-d wsld-engine -- cat /etc/docker/daemon.json":                        {out: `{"hosts":["unix:///var/run/docker.sock","unix://` + engSock + `","tcp://127.0.0.1:23750"]}`},
+		"-d wsld-engine -- loginctl show-user irice --property=Linger --value": {out: "yes\n"},
+		"-d wsld-engine -- test -S " + engSock:                                 {},
+	}
+	cfg := config.Default()
+	cfg.UpsertMachine(config.Machine{Distro: "wsld-engine", User: "irice", APIEndpoint: "tcp://127.0.0.1:23750"})
+	cfg.UpsertMachine(config.Machine{Distro: "Debian1", User: "bob", APIEndpoint: "tcp://127.0.0.1:23750"})
+	_ = cfg.SetEngine("wsld-engine")
+	_ = cfg.SetClient("Debian1")
+	_ = cfg.SetActive("wsld-engine")
+	return r, Deps{WSL: &fakeRunner{resp: r}, Cfg: cfg, API: fakePinger{},
+		Dial: func(context.Context, string) error { return errors.New("refused") }}
+}
+
+func TestNoEngineMeansNoEngineChecks(t *testing.T) {
+	rep := Run(context.Background(), deps(healthy(), nil, nil))
+	for _, r := range rep.Results {
+		if r.ID == "engine_socket" || strings.HasPrefix(r.ID, "client_") {
+			t.Fatalf("unexpected %s", r.ID)
+		}
+	}
+}
+
+func TestEngineSocketPresentIsOK(t *testing.T) {
+	_, d := engineEnv("Stopped")
+	rep := Run(context.Background(), d)
+	if r := find(rep, "engine_socket"); r.ID != "engine_socket" || r.Level != OK {
+		t.Fatalf("engine_socket = %+v", r)
+	}
+	if rep.ExitCode() != 0 {
+		t.Fatalf("exit = %d", rep.ExitCode())
+	}
+}
+
+func TestEngineSocketMissingWarns(t *testing.T) {
+	r, d := engineEnv("Stopped")
+	r["-d wsld-engine -- test -S "+engSock] = kv{err: errors.New("exit 1")}
+	rep := Run(context.Background(), d)
+	got := find(rep, "engine_socket")
+	if got.Level != Warn || !strings.Contains(got.Hint, "wsld") {
+		t.Fatalf("engine_socket = %+v", got)
+	}
+}
+
+func TestMainChecksTargetEngineEvenIfActiveIsClient(t *testing.T) {
+	_, d := engineEnv("Stopped")
+	_ = d.Cfg.SetActive("Debian1")
+	rep := Run(context.Background(), d)
+	if r := find(rep, "docker_service"); r.Level != OK {
+		t.Fatalf("docker_service must be checked on the engine: %+v", r)
+	}
+}
+
+func TestClientWithContextAndNoLocalDockerIsOK(t *testing.T) {
+	r, d := engineEnv("Running")
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "wsld\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "inactive\n", err: errors.New("exit 3")}
+	rep := Run(context.Background(), d)
+	if got := find(rep, "client_Debian1"); got.ID != "client_Debian1" || got.Level != OK {
+		t.Fatalf("client = %+v", got)
+	}
+}
+
+func TestClientWrongContextWarns(t *testing.T) {
+	r, d := engineEnv("Running")
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "default\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "inactive\n", err: errors.New("exit 3")}
+	got := find(Run(context.Background(), d), "client_Debian1")
+	if got.Level != Warn || !strings.Contains(got.Hint, "--role client") {
+		t.Fatalf("client = %+v", got)
+	}
+}
+
+func TestClientWithLocalDockerdRunningWarns(t *testing.T) {
+	r, d := engineEnv("Running")
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "wsld\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "active\n"}
+	got := find(Run(context.Background(), d), "client_Debian1")
+	if got.Level != Warn || !strings.Contains(got.Hint, "disable") {
+		t.Fatalf("client = %+v", got)
+	}
+}
+
+func TestStoppedClientIsNotWoken(t *testing.T) {
+	_, d := engineEnv("Stopped") // fakeRunner 對未知指令回錯誤：任何 -d Debian1 呼叫都會讓測試察覺
+	got := find(Run(context.Background(), d), "client_Debian1")
+	if got.Level != Info {
+		t.Fatalf("stopped client must be Info, got %+v", got)
+	}
+}
+
+// ---- 曝露（/mnt/wsl/distro/<名稱>）----
+
+const (
+	dFindmnt = "-d wsld-engine -- findmnt -rn -o TARGET"
+	dTools   = "-d Debian1 -- test -x /usr/local/sbin/wsld-expose"
+	dShim    = "-d Debian1 -- grep -q DISTRO_DEFAULT /usr/local/bin/docker"
+)
+
+func TestStaleExposureIsReported(t *testing.T) {
+	r, d := engineEnv("Stopped")
+	r[dFindmnt] = kv{out: "/\n/mnt/wsl/distro/Debian1\n/mnt/wsl/distro/Debian1/proc\n"}
+	got := find(Run(context.Background(), d), "expose_stale")
+	if got.ID != "expose_stale" || got.Level != Warn || !strings.Contains(got.Hint, "wsld expose gc") || !strings.Contains(got.Detail, "Debian1") {
+		t.Fatalf("expose_stale = %+v", got)
+	}
+}
+
+func TestExposureOfARunningClientIsNotStale(t *testing.T) {
+	r, d := engineEnv("Running")
+	r[dFindmnt] = kv{out: "/\n/mnt/wsl/distro/Debian1\n"}
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "wsld\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "inactive\n", err: errors.New("exit 3")}
+	if got := find(Run(context.Background(), d), "expose_stale"); got.ID == "expose_stale" {
+		t.Fatalf("a running client's exposure is normal: %+v", got)
+	}
+}
+
+func TestNoExposureChecksWhenFindmntIsUnavailable(t *testing.T) {
+	_, d := engineEnv("Stopped")
+	if got := find(Run(context.Background(), d), "expose_stale"); got.ID == "expose_stale" {
+		t.Fatalf("unexpected %+v", got)
+	}
+}
+
+func TestExposureToolsPresentOnARunningClientIsOK(t *testing.T) {
+	r, d := engineEnv("Running")
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "wsld\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "inactive\n", err: errors.New("exit 3")}
+	r[dTools], r[dShim] = kv{}, kv{}
+	got := find(Run(context.Background(), d), "expose_tools_Debian1")
+	if got.ID != "expose_tools_Debian1" || got.Level != OK {
+		t.Fatalf("tools = %+v", got)
+	}
+}
+
+func TestMissingExposureToolsWarnWithTheReinitHint(t *testing.T) {
+	r, d := engineEnv("Running")
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "wsld\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "inactive\n", err: errors.New("exit 3")}
+	r[dTools] = kv{err: errors.New("exit 1")}
+	got := find(Run(context.Background(), d), "expose_tools_Debian1")
+	if got.Level != Warn || !strings.Contains(got.Hint, "--role client") {
+		t.Fatalf("tools = %+v", got)
+	}
+}
+
+func TestExposureToolsAreCheckedEvenWhileALocalDockerdStillRuns(t *testing.T) {
+	r, d := engineEnv("Running")
+	r["-d Debian1 -u bob -- docker context show"] = kv{out: "wsld\n"}
+	r["-d Debian1 -- systemctl is-active docker"] = kv{out: "active\n"} // 本機 dockerd 仍在跑 → client_ 警告
+	r[dTools], r[dShim] = kv{}, kv{}
+	rep := Run(context.Background(), d)
+	if got := find(rep, "client_Debian1"); got.Level != Warn {
+		t.Fatalf("client = %+v", got)
+	}
+	if got := find(rep, "expose_tools_Debian1"); got.ID != "expose_tools_Debian1" || got.Level != OK {
+		t.Fatalf("the tools check must not be skipped by the local dockerd warning: %+v", got)
+	}
+}

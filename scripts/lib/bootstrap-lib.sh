@@ -17,12 +17,23 @@ wsld_parse_args() {
   WSLD_DRY_RUN=0
   WSLD_HELP=0
   WSLD_BUSY_PORTS=""
+  WSLD_ROLE=""
+  WSLD_INSTALL_SHIM=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) shift; WSLD_PORT="${1:?--port needs a value}" ;;
       --busy-ports) shift; WSLD_BUSY_PORTS="${1:?--busy-ports needs a value}" ;;
       --user) shift; WSLD_USER="${1:?--user needs a value}" ;;
       --no-compose) WSLD_INSTALL_COMPOSE=0 ;;
+      --no-shim) WSLD_INSTALL_SHIM=0 ;;
+      --role)
+        shift
+        WSLD_ROLE="${1:?--role needs a value}"
+        case "$WSLD_ROLE" in
+          engine|client) ;;
+          *) echo "unknown role: $WSLD_ROLE (engine|client)" >&2; return 2 ;;
+        esac
+        ;;
       --dry-run) WSLD_DRY_RUN=1 ;;
       -h|--help) WSLD_HELP=1; wsld_usage; return 0 ;;
       *) echo "unknown argument: $1" >&2; wsld_usage >&2; return 2 ;;
@@ -34,11 +45,12 @@ wsld_parse_args() {
 
 wsld_usage() {
   printf '%s\n' \
-    '用法: 02-bootstrap-docker.sh [--port N] [--busy-ports CSV] [--user NAME] [--no-compose] [--dry-run]' \
+    '用法: 02-bootstrap-docker.sh [--port N] [--busy-ports CSV] [--user NAME] [--no-compose] [--no-shim] [--role engine|client] [--dry-run]' \
     '  --port N         Docker API 起始埠（只綁 127.0.0.1；占用時自動遞增），預設 23750' \
     '  --busy-ports CSV 額外視為占用的埠（例如其他 machine 已登記的 api_endpoint）' \
     '  --user NAME      要加入 docker 群組並啟用 linger 的使用者，預設目前使用者' \
     '  --no-compose     不安裝 docker-compose-plugin' \
+    '  --role ROLE      engine = 專用 dockerd distro（共用 socket 放 /mnt/wsl）；client = 只裝 docker CLI 並連到 engine；省略 = 自帶 dockerd' \
     '  --dry-run        只印出將執行的動作'
 }
 
@@ -274,10 +286,12 @@ wsld_pick_free_port() {
 
 # $1 = port
 # 注意：不可用 cat <<EOF——bundle 以 `bash -s`（stdin=腳本）執行時 heredoc 會吞掉後續腳本。
+# $2（可選）= 共用 unix socket 路徑（engine 模式，放在跨 distro 共用的 /mnt/wsl tmpfs）。
 wsld_render_daemon_json() {
-  local port="$1"
+  local port="$1" shared="${2:-}" hosts='"unix:///var/run/docker.sock"'
+  [ -n "$shared" ] && hosts="$hosts, \"unix://$shared\""
   printf '%s\n' '{'
-  printf '  "hosts": ["unix:///var/run/docker.sock", "tcp://127.0.0.1:%s"]\n' "$port"
+  printf '  "hosts": [%s, "tcp://127.0.0.1:%s"]\n' "$hosts" "$port"
   printf '%s\n' '}'
 }
 
@@ -308,6 +322,46 @@ wsld_render_systemd_override() {
     '[Service]' \
     'ExecStart=' \
     "ExecStart=$exec"
+}
+
+# --- 共用 engine（專用 dockerd distro）-----------------------------------
+
+# /mnt/wsl 是所有 WSL2 distro 共用的 tmpfs；engine 在此放 socket，client 的 docker context 指向它。
+WSLD_ENGINE_SOCK="/mnt/wsl/wsld/docker.sock"
+
+# engine 的 docker.service drop-in：沿用 wsld_render_systemd_override，另在啟動前建立共用目錄、
+# 清掉殘留 socket（tmpfs 於 VM 重啟後清空），啟動後開放 0666（各 distro 的 docker GID 不同）。
+# $1 = family、$2 = 共用 socket 路徑。
+wsld_render_engine_override() {
+  local family="${1:-}" sock="${2:-$WSLD_ENGINE_SOCK}" dir
+  dir="$(dirname "$sock")"
+  wsld_render_systemd_override "$family"
+  printf '%s\n' \
+    "ExecStartPre=/bin/mkdir -p $dir" \
+    "ExecStartPre=/bin/rm -f $sock" \
+    "ExecStartPost=/bin/chmod 0666 $sock"
+}
+
+# client 要安裝的套件（只要 CLI 與 plugin，不裝 daemon）。$1 = family、$2 = 1 則含 compose。
+# Arch／openSUSE 沒有獨立 CLI 套件：裝完整 docker，但不 enable 服務。
+wsld_client_packages() {
+  local family="$1" compose="${2:-1}" pkgs
+  case "$family" in
+    debian)
+      pkgs="docker-ce-cli docker-buildx-plugin"
+      [ "$compose" = "1" ] && pkgs="$pkgs docker-compose-plugin"
+      ;;
+    arch)
+      pkgs="docker docker-buildx"
+      [ "$compose" = "1" ] && pkgs="$pkgs docker-compose"
+      ;;
+    suse)
+      pkgs="docker docker-buildx"
+      [ "$compose" = "1" ] && pkgs="$pkgs docker-compose"
+      ;;
+    *) echo "unsupported family: $family" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$pkgs"
 }
 
 # --- wsl.conf ------------------------------------------------------------
@@ -341,6 +395,169 @@ wsld_ensure_wsl_conf_systemd() {
     if [ -s "$f" ]; then prefix=$'\n'; fi
     printf '%s[boot]\nsystemd=true\n' "$prefix" >> "$f"
   fi
+}
+
+# $1 = ini 路徑、$2 = section、$3 = key、$4 = value。冪等；保留其他區段；key 只在指定 section 內比對。
+wsld_ensure_ini_key() {
+  local f="$1" sec="$2" key="$3" val="$4" tmp
+  [ -f "$f" ] || : > "$f"
+  tmp="$(mktemp)"
+  awk -v sec="[$sec]" -v key="$key" -v val="$val" '
+    function flush() { if (cur == sec && !done) { print key "=" val; done = 1 } }
+    /^[[:space:]]*\[/ { flush(); cur = $0; gsub(/[[:space:]]/, "", cur); seen = seen || (cur == sec) }
+    cur == sec && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { if (!done) { print key "=" val; done = 1 } ; next }
+    { print }
+    END {
+      flush()
+      if (!seen) { if (NR > 0) print ""; print sec; print key "=" val }
+    }
+  ' "$f" > "$tmp"
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
+# --- 曝露（expose）：讓 engine 以相同路徑存取 client 的檔案 ------------------
+# client 把自己的根目錄以「非遞迴」bind 掛到共用 tmpfs 的 /mnt/wsl/distro/<名稱>，掛載會傳播到所有 distro；
+# 在那條實體路徑底下執行 docker compose，bind mount 的路徑 engine 也解析得到。
+
+# distro 名稱：只允許安全字元（與 wsl.ValidDistroName 一致的子集，且不得以 . 開頭）。
+wsld_valid_distro_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+}
+
+# $1 = distro、$2 = distro 內的絕對路徑、$3 = 曝露根（預設 /mnt/wsl/distro）。
+# 印出 engine 看得到的同一個檔案；Windows 掛載（/mnt/*）、相對路徑、不安全名稱回傳 1。
+wsld_map_path() {
+  local distro="$1" p="$2" root="${3:-/mnt/wsl/distro}"
+  wsld_valid_distro_name "$distro" || return 1
+  case "$p" in
+    /mnt|/mnt/*) return 1 ;;
+    /) printf '%s/%s\n' "$root" "$distro"; return 0 ;;
+    /*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s/%s%s\n' "$root" "$distro" "$p"
+}
+
+# 回傳 0 = 這組 docker 參數可能用到 bind mount，需要先曝露：run／create／container run|create，
+# 以及 compose up|run|create|start|restart。其餘（ps、logs、build、exec、compose down…）一律直通。
+wsld_shim_needs_expose() {
+  local a sub="" sub2=""
+  # 1) 跳過 docker 的全域旗標，找出子命令
+  while [ $# -gt 0 ]; do
+    a="$1"; shift
+    case "$a" in
+      -H|--host|-c|--context|--config|-l|--log-level|--tlscacert|--tlscert|--tlskey) shift 2>/dev/null || true ;;
+      -*) ;;
+      *) sub="$a"; break ;;
+    esac
+  done
+  case "$sub" in
+    run|create) return 0 ;;
+    container)
+      while [ $# -gt 0 ]; do
+        a="$1"; shift
+        case "$a" in -*) ;; *) sub2="$a"; break ;; esac
+      done
+      case "$sub2" in run|create) return 0 ;; esac
+      return 1
+      ;;
+    compose)
+      while [ $# -gt 0 ]; do
+        a="$1"; shift
+        case "$a" in
+          -f|--file|-p|--project-name|--project-directory|--env-file|--profile|--ansi|--progress|--parallel) shift 2>/dev/null || true ;;
+          -*) ;;
+          *) sub2="$a"; break ;;
+        esac
+      done
+      case "$sub2" in up|run|create|start|restart) return 0 ;; esac
+      return 1
+      ;;
+  esac
+  return 1
+}
+
+# /usr/local/sbin/wsld-expose 的內容（root 執行；以 sudoers 限定只能呼叫 expose／release／status）。
+# 註解刻意避開遞迴／lazy 卸載的字眼：非遞迴 bind 只掛單一檔案系統，卸載就是一般的 umount，
+# 由建立它的 namespace 執行即可乾淨地傳播給所有 peer。
+# $1 = distro 名稱（寫死在腳本內，不信任環境變數，因為 sudo 會清環境）。
+wsld_render_expose_script() {
+  local distro="$1"
+  wsld_valid_distro_name "$distro" || return 1
+  printf '%s\n' \
+    '#!/bin/bash' \
+    '# wsld-expose：把本 distro 的根目錄（單一檔案系統，不含子掛載點）bind 到共用的 /mnt/wsl/distro/<名稱>，' \
+    '# 讓 wsld engine 以相同的絕對路徑存取。由 wsld bootstrap 產生，請勿手動修改。' \
+    'set -eu'
+  printf "DISTRO='%s'\n" "$distro"
+  # shellcheck disable=SC2016  # 單引號是刻意的：輸出的是要寫進檔案的腳本樣板
+  printf '%s\n' \
+    'T="/mnt/wsl/distro/$DISTRO"' \
+    'case "${1-}" in' \
+    '  expose)' \
+    '    mountpoint -q "$T" && exit 0' \
+    '    mkdir -p "$T"' \
+    '    mount --bind / "$T"' \
+    '    ;;' \
+    '  release)' \
+    '    if mountpoint -q "$T"; then umount "$T"; fi' \
+    '    ;;' \
+    '  status)' \
+    '    if mountpoint -q "$T"; then echo exposed; else echo not-exposed; exit 1; fi' \
+    '    ;;' \
+    '  *)' \
+    '    echo "usage: wsld-expose expose|release|status" >&2' \
+    '    exit 2' \
+    '    ;;' \
+    'esac'
+}
+
+# /etc/sudoers.d/wsld-expose 的內容：只允許該使用者免密碼執行固定的三個子命令。$1 = 使用者名稱。
+wsld_render_sudoers() {
+  local user="$1"
+  [[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
+  [ "$user" != "root" ] || return 1
+  printf '%s\n' \
+    '# wsld：讓 docker shim 免密碼曝露／釋放本 distro 的檔案（只限這三個固定命令）' \
+    "$user ALL=(root) NOPASSWD: /usr/local/sbin/wsld-expose expose, /usr/local/sbin/wsld-expose release, /usr/local/sbin/wsld-expose status"
+}
+
+# /usr/local/bin/docker 的內容（排在 /usr/bin/docker 之前）。$1 = distro 名稱、$2 = 真正的 docker 路徑。
+# 純函式以 declare -f 內嵌，確保 shim 與 bats 測的是同一份程式。
+# 可用環境變數覆寫：WSLD_NO_SHIM=1（直通）、WSLD_EXPOSE_ROOT（曝露根）、WSLD_EXPOSE_CMD（曝露指令，測試用）。
+wsld_render_shim() {
+  local distro="$1" real="$2"
+  wsld_valid_distro_name "$distro" || return 1
+  [[ "$real" =~ ^/[A-Za-z0-9._/+-]+$ ]] || return 1
+  printf '%s\n' \
+    '#!'"/usr/bin/env bash" \
+    '# wsld docker shim：在 wsld 共用 engine 的 context 下，需要 bind mount 的命令先曝露本 distro 並切到' \
+    '# /mnt/wsl/distro/<名稱>/… 再執行真正的 docker。WSLD_NO_SHIM=1 可關閉。由 wsld bootstrap 產生。'
+  printf "REAL='%s'\n" "$real"
+  printf "DISTRO_DEFAULT='%s'\n" "$distro"
+  declare -f wsld_valid_distro_name wsld_map_path wsld_shim_needs_expose
+  # shellcheck disable=SC2016  # 單引號是刻意的：輸出的是要寫進檔案的腳本樣板
+  printf '%s\n' \
+    'if [ "${WSLD_NO_SHIM:-}" = 1 ]; then exec "$REAL" "$@"; fi' \
+    'ctx="${DOCKER_CONTEXT:-}"' \
+    'if [ -z "$ctx" ]; then' \
+    '  cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"' \
+    '  if [ -r "$cfg" ]; then' \
+    '    ctx="$(sed -n '"'"'s/.*"currentContext"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'"'"' "$cfg" | head -n 1)"' \
+    '  fi' \
+    'fi' \
+    'if [ "$ctx" = wsld ] && wsld_shim_needs_expose "$@"; then' \
+    '  if mapped="$(wsld_map_path "${WSL_DISTRO_NAME:-$DISTRO_DEFAULT}" "$(pwd -P)" "${WSLD_EXPOSE_ROOT:-/mnt/wsl/distro}")"; then' \
+    '    # shellcheck disable=SC2086' \
+    '    if ${WSLD_EXPOSE_CMD:-sudo -n /usr/local/sbin/wsld-expose} expose >/dev/null 2>&1; then' \
+    '      cd "$mapped" 2>/dev/null || echo "wsld: cannot enter $mapped" >&2' \
+    '    else' \
+    '      echo "wsld: could not expose this distro to the engine (run: wsld doctor); bind mounts of local paths will not work" >&2' \
+    '    fi' \
+    '  fi' \
+    'fi' \
+    'exec "$REAL" "$@"'
 }
 
 # --- k3s -----------------------------------------------------------------

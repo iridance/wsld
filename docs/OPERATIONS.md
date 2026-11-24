@@ -4,19 +4,21 @@
 
 ## 重開機／WSL 關機後
 
-WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後會停止，dockerd 隨之停止。恢復方式任選其一：
+WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後會停止，dockerd 隨之停止。**不用手動啟動**：啟動 wsld 就是啟動引擎。
 
-| 方式 | 操作 |
+| 方式 | 行為 |
 |---|---|
-| CLI | `wsld start`（喚醒 distro → 確認 systemd → `systemctl start docker` → 等 `_ping`；實測約 3 秒） |
-| GUI | 開 `wsld-gui.exe`，按「啟動引擎」；或 Tray 選單「啟動引擎」 |
-| 登入自啟 | 設定 →「開機自啟動」toggle（HKCU Run 值 `wsld`，預設關）。Tray 起來後仍需按一次「啟動引擎」，預設不會自動拉起 dockerd |
+| GUI | 開 `wsld-gui.exe` 就自動帶起 engine（首次使用先建立 `wsld-engine`），之後每 5 秒檢查一次，引擎掉了（WSL 被關、當機）會自動拉起；失敗後退避 30 秒再試，原因顯示在橫幅。沒有「啟動引擎」按鈕 |
+| CLI | 需要 Docker 的指令（`ps`、`logs`、`start-ct`、`stop-ct`、`exec`、`k8s`）會自動喚醒 distro、確認 systemd、啟動 docker 並等到 API；已就緒時不碰 WSL。沒有 `wsld start`／`wsld use` |
+| 登入自啟 | 設定 →「開機自啟動」toggle（HKCU Run 值 `wsld`，預設關）。Tray 起來後會自動帶起引擎 |
+
+在 Machines 頁**停止** engine 是使用者的明確決定：wsld 不會再自動拉起，直到你按「啟動」。
 
 `wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。`wsld status` 與 GUI 的狀態輪詢只在 distro 已執行時才查 systemd／docker，不會把停止中的 distro 叫醒。
 
 `loginctl enable-linger` 已由 bootstrap 開啟，避免最後一個 WSL 終端關閉時 systemd user session 被回收；但 **WSL VM 本身**閒置關機不在此控制範圍，這是 WSL 的行為。
 
-**主要機器不會被閒置回收（0.17.2）**：WSL 在最後一個 `wsl.exe` session 結束後約 20 秒就回收 distro（systemd 服務、dockerd 都不算 session）。wsld-gui（含縮到系統匣）替**主要機器**掛一個常駐的 `wsl -d <distro> -- sleep infinity` session，所以主要機器會一直執行；非主要機器不保活，閒置後仍會被回收。限制：保活 session 屬於 wsld-gui 程序，Tray「結束」、程序被結束或 Windows 重開機後就沒有了（`wsld start` 是一次性命令，也無法保活）；使用者在 Machines 明確停止主要機器後，不會被自動重新喚醒，要再按「啟動」。
+**主要機器不會被閒置回收（0.17.2）**：WSL 在最後一個 `wsl.exe` session 結束後約 20 秒就回收 distro（systemd 服務、dockerd 都不算 session）。wsld-gui（含縮到系統匣）替 **engine** 掛一個常駐的 `wsl -d <distro> -- sleep infinity` session，所以 engine 會一直執行；client 不保活，閒置後仍會被回收。限制：保活 session 屬於 wsld-gui 程序，Tray「結束」、程序被結束或 Windows 重開機後就沒有了（`wsld start` 是一次性命令，也無法保活）；使用者在 Machines 明確停止主要機器後，不會被自動重新喚醒，要再按「啟動」。
 
 ## 與 Docker Desktop 並存
 
@@ -40,7 +42,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 - 自動往上找後寫回 `config.toml` 的 `api_endpoint`。
 - API **只綁 127.0.0.1**（這條規則只針對 Docker API；容器 published 埠要讓內網連入，請見「區網存取」）。`doctor` 的「API 只綁 loopback」會抓到 `0.0.0.0` 誤綁；「Docker API _ping」會抓到「埠有人聽但不是 Docker」。
 - 手動改埠：改 `/etc/docker/daemon.json` 的 `hosts` 與 `config.toml` 的 `api_endpoint` 兩處，然後 `systemctl restart docker`。
-- 若某 machine 已佔到衝突埠：對該 distro 再跑一次 `wsld init -d <name>`（或 GUI 重新設為主要）會改選空閒埠。
+- 若某 machine 已佔到衝突埠：對該 distro 再跑一次 `wsld init -d <name>`會改選空閒埠。
 
 ## 區網存取（讓其他設備連到容器）
 
@@ -76,7 +78,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
     1. 以 UAC 移除 `wsld-lan-tcp`／`wsld-lan-udp` 規則。
     2. 從 `.wslconfig` 移除 `networkingMode`（備份：`.wslconfig.wsld.bak`）。
     3. 確認後執行 `wsl --shutdown`。
-    4. 等 Windows 釋放 API 埠（最多約 2 分鐘），再啟動引擎。
+    4. 等 Windows 釋放 API 埠（最多約 2 分鐘），引擎會由 wsld 自動重新帶起。
   - 手動回復：以系統管理員執行 `Remove-NetFirewallHyperVRule -Name wsld-lan-tcp,wsld-lan-udp`，刪掉 `.wslconfig` 的 `networkingMode` 行，再 `wsl --shutdown`。
 
 ## 本機 Kubernetes（k3s）
@@ -95,7 +97,7 @@ GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看�
 
 - **只有一台 machine 能開**：所有 WSL2 distro 共用同一個網路（API 埠、pod／service 網段、node 名稱＝Windows 主機名）。第二台 `wsld k8s on` 會被拒絕並指出目前開啟者；GUI 的「移到 …」會先停掉原本那台再啟動新的（兩邊是各自獨立的叢集，工作負載不會搬移）。
 - **kubeconfig 以機器內為準，匯出到 Windows 是手動的**：`/etc/rancher/k3s/k3s.yaml` 是正本，啟動 k8s 不會寫 Windows 的檔案（與 docker 一樣，只轉出 loopback 埠）。要在 Windows 使用時按 GUI 的「匯出 kubeconfig」或執行 `wsld k8s kubeconfig`：以 context `wsld-<distro>` 合併進現有檔案，保留其他 context、註解與 current-context（原本沒有 current-context 才採用 wsld 的）。第一次修改前會備份為 `~\.kube\config.wsld-bak`；現有檔案無法解析時一律不動。
-- **重開機／`wsl --shutdown` 之後**：`wsld start`（或 GUI 啟動引擎）會一併啟動 k3s。k3s 必須在 docker 之後啟動（wsld 已在 `k3s.service` 加 drop-in）；若手動改過 unit，開機後 node 一直 NotReady 通常就是這個原因，`systemctl restart k3s` 可恢復。
+- **重開機／`wsl --shutdown` 之後**：自動帶起 engine 時會一併啟動 k3s（CLI 的 `wsld k8s`／GUI）。k3s 必須在 docker 之後啟動（wsld 已在 `k3s.service` 加 drop-in）；若手動改過 unit，開機後 node 一直 NotReady 通常就是這個原因，`systemctl restart k3s` 可恢復。
 - **node IP**：實測 WSL 重啟後 eth0 位址未變；若日後變了，`wsld doctor` 與 `wsld k8s status` 會警告，執行 `wsld k8s off && wsld k8s on` 即可。Windows 側一律連 `127.0.0.1:<API 埠>`，不受影響。
 - **停止**：`wsld k8s off` 會跑 `k3s-killall.sh`，連同 pod 容器一起停掉並釋放記憶體與 API 埠（`--docker` 時 pod 是 dockerd 的容器，單停 service 不會停它們）。Containers 頁把這些 `k8s_*` 容器摺成一個預設收合的群組；請交給 k3s 管理，不要手動刪。
 - **重置**：`wsld k8s reset`（需確認或 `--yes`）清除所有 pod／volume／secret，回到乾淨叢集；若先前匯出過 kubeconfig，會一併更新 Windows 那份（憑證已更新），從未匯出過則不動。**移除**：`wsld k8s uninstall`（執行 `k3s-uninstall.sh`）。
@@ -140,12 +142,35 @@ GUI：頂部 **Kubernetes** 頁的「啟動」鈕做同樣的事；頁面可看�
 ## Machines：管理多個 WSL 發行版
 
 - GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
-- **0.5**：可「設為主要」切換 active（作用於全部功能）；右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
-- 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。之後「設為主要」會 bootstrap（安裝 Docker）、寫入該 machine 的 user＋endpoint 並啟動引擎。支援 Ubuntu/Debian、Arch、openSUSE 系。
+- **單一 engine**：沒有「設為主要」或切換機器；Docker 一律走 engine。Machines 頁把 Engine **單獨分一組放在最上面**，它不能停止、取消管理或刪除（GUI 沒有這些按鈕，API／CLI 回 409／錯誤）；只有它沒在跑時才出現「啟動」，其餘由 wsld 自動維持。右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
+- 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。之後在卡片上按「共用 engine」會 bootstrap（只裝 docker CLI，連到共用 engine）。支援 Ubuntu/Debian、Arch、openSUSE 系。
   - 密碼只經由 stdin 交給發行版內的 `chpasswd`，不會出現在指令參數中，也不會寫入設定檔或 log。
   - 密碼留空則帳號沒有密碼，`sudo` 無法使用；事後可補設：`wsl -d <machine> -u root passwd <帳號>`。
   - CLI `wsld init`（以及 `start`／`use` 觸發的初始化）遇到只有 root 的發行版、需要新建帳號時，會以隱藏輸入詢問密碼（輸入兩次確認，留空略過）；非互動環境可用 `wsld init --distro <name> --password-stdin`，從 stdin 第一行讀取。既有帳號的密碼一律不更動。
-- 「啟動引擎」或「設為主要」失敗時，banner 保留失敗原因直到引擎就緒，不會被輪詢的「無法連線 Docker API」蓋掉。
+- 自動帶起 engine 失敗時，banner 保留失敗原因（`/api/status` 的 `start_error`）直到引擎就緒，不會被輪詢的「無法連線 Docker API」蓋掉。
+
+## 共用 engine（專用 dockerd distro）
+
+預設每個 distro 各自有一個 dockerd，image／volume／container 各存一份。要共用就指定**一個 engine**，其他當 **client**：
+
+- **GUI**：Machines 頁，沒有 engine 時其他機器顯示「設為 engine」；有 engine 後顯示「共用 engine」（設為 client）。卡片上有 Engine／Client 標籤。
+- **CLI**：`wsld init --distro wsld-engine --role engine`，再 `wsld init --distro Debian1 --role client`。建議 engine 用新裝的乾淨 distro，例如 `wsl --install -d Ubuntu --name wsld-engine`（GUI「新增機器」亦可）；也可以把已裝好 docker 的機器直接設為 engine，bootstrap 會沿用既有安裝並補上共用 socket（此路徑尚未實測）。
+- **k8s**：有 engine 後，`wsld k8s on` 一律裝在 engine（不帶 `--machine` 時）；其他機器不能開 k8s。
+- **保活**：engine 由 wsld-gui 掛著 `wsl -d … -- sleep infinity`，避免 WSL 閒置回收。**只在 wsld-gui（含系統匣）執行時有效**；只用 CLI 時 engine 閒置後會被回收，下一個需要 Docker 的指令會自動再帶起。
+- **doctor**：多檢查 `engine_socket`（`/mnt/wsl/wsld/docker.sock` 存在）與各 `client_<distro>`（context 為 `wsld`、沒有本機 dockerd 並存）；停止中的 client 不會被喚醒檢查。
+
+限制：
+
+- **bind mount（曝露）**：在 client 裡照常 `cd ~/Projects/moto-wander && docker compose up`。client 內的 `docker` shim（`/usr/local/bin/docker`，只在 context 為 `wsld` 時作用）看到 `run`／`create`／`compose up|run|create|start|restart` 時，會先呼叫 `sudo -n /usr/local/sbin/wsld-expose expose`（`/etc/sudoers.d/wsld-expose` 只允許 `expose`／`release`／`status` 三個固定子命令），把本 distro 的根目錄（單一檔案系統、非遞迴 bind）掛到 `/mnt/wsl/distro/<名稱>`，再 `cd` 到 `/mnt/wsl/distro/<名稱>$PWD` 才執行真正的 docker，所以相對路徑的 `./app:/app`、`-v ./x:/x` 與 `-f` 都落在 engine 也看得到的路徑。`WSLD_NO_SHIM=1` 可關閉；`ps`、`logs`、`build`、`exec` 等不會曝露。
+  - **限制**：絕對路徑的 `-v /home/u/x:/x` 不會被改寫（要自己寫成 `/mnt/wsl/distro/<名稱>/home/u/x`）；`/mnt/c/...` 與 named volume 本來就能用；若 `/home` 是獨立的掛載點則不在曝露範圍；容器以 root 寫入，client 端檔案擁有者會是 root。
+  - **釋放**：用不到的曝露由 wsld-gui 的 Supervise 每 30 秒 GC（沒有任何容器——含已停止的——引用該路徑就卸載）。停止、取消註冊、壓縮、調整大小一個 client 之前會先釋放；若有**執行中**的容器在用，GUI 會列出容器請你確認，確認後先停容器再釋放（CLI：`wsld expose release <distro> --stop-containers`）。`wsld expose status|release|gc` 可手動查看與處理，Machines 卡片的「已曝露」標籤旁有釋放按鈕。
+  - **殘留**：來源 distro 被 `wsl --terminate` 或自行閒置停止後，掛載會殘留在其他 distro（磁碟仍被接著）。Supervise 與 `wsld doctor`（`expose_stale`）會偵測並清掉；絕不使用遞迴或 lazy 的卸載。
+  - **已停止的容器**：重啟時路徑必須存在，所以引用曝露路徑的容器（即使已停止）會讓曝露一直保留；從 GUI 啟動這類容器前 wsld 會先補曝露（來源 distro 已停止則回 409，不會替你喚醒它）。`restart: always` 的容器在 WSL 重啟後可能先於曝露啟動，之後在 client 內執行一次 compose 或 `docker start` 即可。
+- **安全**：共用 socket 為 0666，同一 VM 內任何 distro 的任何使用者都等同 root；loopback TCP 本來就是如此。
+- **從舊版升級**：舊設定（各 distro 自帶 dockerd）載入時，原有已 init 的 distro 全部變成 client、資料原封不動，並新增專用的 `wsld-engine`，啟動 wsld 時自動 `wsl --install` 建立。舊機器上的 k3s 不再由 wsld 管理（旗標被清掉，叢集仍留在該 distro）；要用 k8s 請在 engine 上 `wsld k8s on`。接著用下面的 `wsld migrate` 把舊資料搬進 engine。
+- **遷移**：`wsld migrate [--distro <client>] [--images=false] [--volumes=false] [--dry-run]` 把 client 內舊的本機 dockerd 資料複製到 engine：有 tag 的 image 以 `docker save | docker load`、具名 volume 以 alpine 的 `tar` 串流複製，全部在 client distro 內經 docker context（`default` → `wsld`）完成，不經 Windows。不刪來源、不搬容器；沒 tag 的 image、匿名 volume 會列為略過。本機 dockerd 沒在跑會先嘗試啟動。確認資料無誤後再 `wsl -d <client> -u root -- systemctl disable --now docker docker.socket`（指令結尾會提示）。先用 `--dry-run` 看清單。
+- **磁碟**：所有 image 都在 engine 的 VHD，調整大小／釋放空間針對 engine（Machines 頁）。
+- 尚未在真實 WSL 長期驗證（`/mnt/wsl` 共用 socket 行為、保活）；遇到問題請先 `wsld doctor`。
 
 ## 機器的磁碟上限
 
@@ -185,8 +210,8 @@ wsld compact-disk --shutdown Ubuntu-26.04     # 需要關閉 WSL 時，確認後
 - **多 distro（0.5）**：多 profile、單一 active；每 managed machine 自有 API 埠；舊扁平 config 載入時自動遷移。
 - **rootful dockerd**：容器以 root 執行 dockerd（bootstrap 有把使用者加入 `docker` 群組）。rootless 不在範圍。
 - **無 npiperelay（Extra）**：Windows 側 `docker.exe` 需以 `DOCKER_HOST=tcp://127.0.0.1:<port>` 連線，不提供 `//./pipe/docker_engine`。
-- **GUI**：Theme（radio：Light／Dark／System）；Settings 在側欄；header 無 tcp 路徑。「開機自啟動」只起 Tray，不自動啟動引擎。
+- **GUI**：Theme（radio：Light／Dark／System）；Settings 在側欄；header 無 tcp 路徑。「開機自啟動」起 Tray，並自動帶起引擎。
 - **自動更新（Extra）**：無；以發布頁下載新版覆蓋。
 - **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。要讓內網連到**容器**，請開啟區網存取（wsld-gui 轉發），不要對外開放 API。
-- **Kubernetes（k3s）**：單節點、同一時間一台 machine、不做 Ingress／NodePort 區網轉發／多叢集；Windows 端需自行安裝 `kubectl`（wsld 只在你手動匯出時合併 kubeconfig）。
+- **Kubernetes（k3s）**：單節點、同一時間一台 machine（有共用 engine 時固定在 engine）、不做 Ingress／NodePort 區網轉發／多叢集；Windows 端需自行安裝 `kubectl`（wsld 只在你手動匯出時合併 kubeconfig）。
 - **區網存取只在 wsld-gui 執行時有效**，且只轉發 TCP；容器看到的來源 IP 是本機。
