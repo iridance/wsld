@@ -68,8 +68,8 @@ test("dark theme: error banner and notice use theme tokens (not light-only paste
 
   await engine(request, "up");
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 10_000 });
-  await page.getByTestId("nav-settings").click();
-  await page.getByTestId("settings-save").click();
+  await page.getByTestId("nav-machines").click();
+  await page.getByTestId("btn-machine-use-docker-desktop").click();
   await expect(page.getByTestId("notice")).toBeVisible();
   const notice = await luminances(page.getByTestId("notice"));
   expect(notice.bg).toBeLessThan(0.45);

@@ -104,6 +104,10 @@ func TestLanRestoreNATWithYes(t *testing.T) {
 	fh := withLAN(h, t)
 	p := writeMirrored(t, fh)
 	fh.PortBusyPolls = 2
+	// 先讓 active 已 init（有 endpoint）
+	if code := h.run("start"); code != 0 {
+		t.Fatalf("start: %d %s", code, h.errb)
+	}
 	h.wsl.calls = nil
 	if code := h.run("lan", "restore-nat", "--yes"); code != 0 {
 		t.Fatalf("code=%d err=%s out=%s", code, h.errb, h.out)

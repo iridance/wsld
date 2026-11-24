@@ -28,7 +28,7 @@
 
 ```
 ┌ top bar ────────────────────────────────────────────────────────────────────────────┐
-│ ▦ wsld v… │ ▣Containers ◈Images ⛁Volumes ⚇Networks │ ▭Machines ··· [● Ubuntu · Connected :2375] │ [📁][>_] ⚙ │
+│ ▦ wsld v… │ ▣Containers ◈Images ⛁Volumes ⚇Networks │ ▭Machines ··· [● Ubuntu · Connected :2375] [⏻ Start engine*] │ [📁][>_] ⚙ │
 ├──────────────────────────────────────────────────────────────┬──────────────────────┤
 │ <頁標題> <摘要> ·························· 工具列（搜尋／篩選／prune／Add／Save） │ info drawer（右）    │
 │ （標題旁：磁碟用量鈕，點開浮出明細）                             │ 容器／compose／      │
@@ -47,7 +47,7 @@
 - **磁碟用量鈕**（`usage-btn`）：Containers／Images／Volumes／Machines 頁標題摘要旁一顆 28px 高的鈕：迷你分段長條（`usage-bar`）＋該頁總量（`usage-total`）＋下拉箭頭，固定一列、不隨項目數變高，不另佔列表上方的高度。點開（`aria-expanded`）浮出明細 `usage-pop`：每項一行（`usage-part`：色塊、名稱、大小、占比），名稱過長截斷並有 title；Esc 收起且焦點回到鈕上，點外面也收起；列表週期刷新與換頁時明細維持／收起。每頁只列自己那一類的每一項：容器頁＝每個 compose 專案（整組加總）與每個未分組容器的可寫層；映像頁＝每個映像；Volume 頁＝每個 volume（未統計者不列）；Machines＝每台機器的 ext4.vhdx。最大的 5 項各一段，其餘併為「其他（N）」；5 項依名稱排序後依序取 `--series-1..5`（dataviz 參考調色盤前 5 槽，light／dark 各一組），長條與明細同一順序，大小些微變動不換色。滑過長條分段有 title（名稱・大小・占比）。視窗 ≤ 1100px 時迷你長條縮為 56px、搜尋欄 220px，≤ 860px 只留總量，避免標題列換行。沒有大小可顯示（引擎未就緒、df 尚未回來）時不顯示。
 - **Images**：分段篩選（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋清除未使用。
 - **容器與 Volume 大小**：Containers 列表有 Size 欄（可寫層；title 顯示含映像的虛擬大小 `SizeRootFs`），compose 群組列顯示該組加總；Volumes 列表有 Size 欄（未統計顯示「–」）。總量在頁標題旁的磁碟用量鈕。大小來自 `GET /api/disk`（Docker `/system/df`）；後端快取 15 秒（`/system/df` 會對 volume 跑 du），刪除／prune／啟停後失效；查詢失敗不影響列表。Networks、Settings 不佔磁碟，不顯示。
-- **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）／**上限**（`machine-disk-limit`，讀 VHDX 標頭的虛擬容量）、Engine 單獨一組置頂（不可停止／刪除）、其他發行版在下一組；Engine／Client 標籤（「設為 engine」「共用 engine」按鈕）；**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止 engine 前會確認（Docker 與容器一併停止，且 wsld 不再自動拉起）。**engine 保活**：wsld-gui 替 engine 掛一個常駐 `wsl -d <name> -- sleep infinity`（0.17.2），避免 WSL 閒置約 20 秒後回收；停止主要機器時放掉，之後不自動重新喚醒。
+- **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）／**上限**（`machine-disk-limit`，讀 VHDX 標頭的虛擬容量）、角色標籤、目前那台顯示 API 端點；設為主要、**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止主要發行版前會確認（Docker 與容器一併停止）。**主要機器保活**：wsld-gui 替主要機器掛一個常駐 `wsl -d <name> -- sleep infinity`（0.17.2），避免 WSL 閒置約 20 秒後回收；停止主要機器時放掉，之後不自動重新喚醒。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
   - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）；不提權。已授權防火牆時 wsld-gui 立即在內網 IP 監聽；`firewall` 為 `missing`／`blocked` 時**不監聽**（避免 Windows 自己跳安全性警訊），並接著開啟防火牆說明對話框。wsld-gui 啟動時不提權。
@@ -66,7 +66,7 @@
   - 容器 Info（`info-lan`）與 compose 群組 Info 的服務清單以文字列出位址。
   - 資料來自 `GET /api/lan/forwards`，隨容器清單一起刷新。
 - **輸入元件**（設計稿「Input controls」）：全部自繪、不用瀏覽器預設外觀。文字欄位外框 `.tf`（34px、底邊較深；焦點＝藍色底線、錯誤＝紅色底線、停用＝灰底）；數字隱藏原生 spinner，改欄內 −／＋ 與單位，超出 min／max 標錯；下拉一律用自繪 `dropdown()`（設定頁語言、Add machine 發行版；combobox＋listbox，外框同 `.tf.select`，展開清單也自繪、不用原生 `<select>` 與 OS 彈出清單，目前值以左側強調條＋勾標示，未選時顯示淡色 placeholder，↑↓／Enter／Esc 可操作，對話框內 Esc 只關清單）；搜尋有清除鈕（Esc 亦可）；核取方塊／選項按鈕 18px 以 CSS 畫勾與點；開關 40×20、左側顯示開／關文字；輸入名稱確認在完全相符時顯示綠色勾。鍵盤焦點：小型控制項 2px 外框、文字欄位用底線。
-- **引擎未就緒**：資源列表改顯示「引擎尚未啟動」卡片（沒有啟動按鈕：wsld 正在自動帶起，失敗原因顯示在卡片與橫幅）＋由 `/api/status` 推得的檢查清單（找到發行版、執行中、systemd、docker.service、API 可連線）。
+- **引擎未就緒**：資源列表改顯示「引擎尚未啟動」卡片：啟動引擎按鈕＋由 `/api/status` 推得的檢查清單（找到發行版、執行中、systemd、docker.service、API 可連線）。
 - **InfoBar**：錯誤／未就緒／動作結果浮在內容欄底部，不擠動列表；結果 8 秒後自動消失。
 - 列表固定顯示全部容器；無手動刷新鈕；列上 actions 無邊框純圖示；**列高／格線與其他欄對齊**。
 
@@ -74,8 +74,8 @@
 
 | 區塊 | 行為 | Playwright 覆蓋 |
 |---|---|---|
-| Tray | 狀態列、開啟主視窗、結束；按 X 縮 Tray | 實機手測 |
-| Top bar | 品牌＋版本、六個視圖分頁（窄時只剩圖示）、發行版晶片（引擎狀態，點擊到 Machines）、有 border 的 folder／terminal、Settings 齒輪；無 tcp | `shell.spec.ts`／`list` |
+| Tray | 狀態列、啟動引擎、開啟主視窗、結束；按 X 縮 Tray | 實機手測 |
+| Top bar | 品牌＋版本、六個視圖分頁（窄時只剩圖示）、發行版晶片（引擎狀態，點擊到 Machines）、需要時才出現的 Start engine、有 border 的 folder／terminal、Settings 齒輪；無 tcp | `shell.spec.ts`／`list` |
 | 頁標題列 | 頁標題＋摘要與工具列同一列 | `shell`／`list` |
 | 輸入元件 | 自繪 checkbox／radio／select／dropdown 清單（滑鼠＋鍵盤）／number（−／＋）／搜尋清除／開關狀態文字／確認勾 | `inputs.spec.ts` |
 | 按鈕圖示 | 列／compose：無邊框純圖示；**header icon：有 border** | `list`／`groups`／`info` |
@@ -87,7 +87,7 @@
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
 | Kubernetes | 頂部導覽（Machines 旁）：**關閉時**頁面中央 hero（Enable Kubernetes、Add context 選項）、**啟用中**步驟清單（Engine／Install k3s／Node Ready／Add context，失敗標出停在哪步並 Retry）、**就緒但沒有使用者 workload** 時空狀態（Deploy 映像／Apply YAML 檔）、就緒時工具列 Deploy、Import…（選 Windows／WSL 來源與檔案 → Compose 轉換預覽 → Deploy，或套用 k8s manifest）與複製 kubectl context；一鍵啟動／停止（背景作業，狀態徽章 Starting…／Ready／Off…，首次含安裝）、重置（確認）、匯出 kubeconfig；叢集資訊卡（版本、node、API、context、記憶體）；另一台持有 k3s 時顯示說明與「移到 …」；資源列表改為 namespace flow card（Ingress → Service → Workloads → Pods 數量、ConfigMap／PVC 數量、有 NodePort 時標出對外埠；沒有 Ingress 就不顯示該節點）；點卡片在右側開 50% 寬的側欄，分頁 Architecture（架構圖：Ingress → Service → Deployment／StatefulSet → Pods，ConfigMap／PVC 以虛線掛載；NodePort Service 標為對外入口）／Pods（搜尋、狀態篩選、owner、logs 串流／exec 終端 在底部 panel、刪除）／Workloads（Deployment 卡片：副本數 −/＋ 後按套用、rollout restart、刪除；StatefulSet 唯讀）／Services（endpoints、目標 workload、Ingress routes、NodePort 開瀏覽器、刪除；內建 kubernetes 服務不可刪）／Config（ConfigMap）／Storage（PVC）；點 Deployment 進詳情（Replicas／Strategy／Image、rollout 歷史、Pods、Events）；分頁選擇記住 | `k8s.spec.ts` |
 | Containers › k3s 群組 | `k8s_*`（含 `io.kubernetes.pod.name` 標籤）的容器摺成預設收合的「Kubernetes (k3s)」群組（無整組 Start／Stop；展開／收合記住） | `k8s.spec.ts` |
-| Machines | Engine／Client 標籤與「設為 engine」「共用 engine」、**啟動／停止**（play／stop；停止 engine 需確認，停止後 wsld 不會自動拉起）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
+| Machines | 設為主要、**啟動／停止**（play／stop；停止主要需確認）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`（停止中不讀——`wsl -d` 會把機器開起來——改顯示「啟動機器後才能查看」，且停止中不輪詢用量；啟動／停止後自動更新）、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）、**磁碟上限**＋調整鈕（對話框：GB；需要關閉 WSL 時列出會被停止的機器、按鈕改為「關閉 WSL 並套用」——目標執行中時一開始就顯示，已停止但 VHD 仍被占用時於第一次套用後顯示；執行中顯示「最小可設約 N GB」（`resize-info`）並擋下更小的值，伺服器回 `too_small` 時也記住最小值；縮小時的備份提醒；wsl 錯誤與「從 WSL 內執行」的拒絕訊息留在對話框；調整期間暫停 Info 輪詢）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts`；上限 `vhd.spec.ts` |
 | Machines › 釋放磁碟空間 | 卡片的縮小箭頭鈕（`btn-machine-compact-<name>`）：磁碟未被占用直接壓縮；執行中先確認（列出會被停止的機器，「關閉 WSL 並釋放空間」），停止但仍被占用則於第一次嘗試後確認；完成通知釋放量與 Windows 上的佔用；調整大小成功後也會一併壓縮並在通知中報告。這兩種結果通知**不自動消失**（作業常要將近一分鐘，使用者可能已切走），按右側 ✕ 關閉；其他通知仍 8 秒後消失 | `vhd.spec.ts` |
 | Add machine › 磁碟上限 | 與自訂名稱同列的 GB 欄（預設 60；留空＝WSL 預設 1 TB；8–16384 以外顯示錯誤且不能安裝） | `vhd.spec.ts` |
@@ -107,7 +107,7 @@
 
 | 端點 | 說明 |
 |---|---|
-| `GET /api/meta`／`GET /api/status` | 版本、語系訊息、設定；引擎狀態（含自動帶起的 `start_error`） |
+| `GET /api/meta`／`GET /api/status`／`POST /api/engine/start` | 版本、語系訊息、設定；引擎狀態；啟動引擎 |
 | `GET /api/machines/{name}/exec` | Machines 底部 xterm（WSL `script` PTY → login bash／user home） |
 | `POST /api/distro/{open-folder\|open-terminal}` | Header：開啟 active distro 的 user home 或外部終端 |
 | `GET /api/containers?all=1`、`POST …/start|stop`、`DELETE …`（Remove）、`GET …/logs[/stream]`、`GET …/exec` | 容器 |
@@ -177,7 +177,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 1. `dist\wsld-gui.exe` 開啟後標題列「已連線」，列表顯示容器；頂部分頁切視圖。
 2. 按 X → 縮 Tray；Tray「開啟主視窗」可還原；`--tray`／「結束」行為同既有。
 3. Settings（頂部齒輪）→「開機自啟動」toggle → HKCU Run；Theme radio 切換可見。
-4. Machines：設為 engine／client、Info（tcp／wsl 設定）、folder／terminal；unregister 需打名稱（0.5）。
+4. Machines：設為主要、Info（tcp／wsl 設定）、folder／terminal；unregister 需打名稱（0.5）。
 
 ## 圖示與 Windows 資源
 
@@ -195,7 +195,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 
 ## 0.5 實機抽樣驗收
 
-1. 單一 engine：沒有切換；**首次啟動自動建立 wsld-engine、init、start 後連線**；其他 distro 以 client 共用。
+1. 多 distro：`wsld use`／GUI「設為主要」切換；不停舊引擎；Logs／Terminal／Info 硬切；**首次設為主要自動 init + start 後連線**。
 2. Unregister：需輸入發行版名稱確認；profile 刪除。
 3. Containers：Remove running（確認後刪除）；Info summary 欄位齊全。
 4. Settings 側欄 Theme；header 無 Settings／tcp；folder／terminal 有 border。

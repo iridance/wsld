@@ -15,7 +15,6 @@ import (
 
 	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/i18n"
-	"github.com/iridance/wsld/internal/wsl"
 )
 
 type env struct {
@@ -35,9 +34,7 @@ func newEnv(t *testing.T, token string) *env {
 	e := &env{engine: NewFakeEngine(), auto: &FakeAutostart{}, token: token, cfgP: filepath.Join(t.TempDir(), "config.toml")}
 	e.life = &FakeLifecycle{Engine: e.engine, Distro: "Ubuntu-26.04", Endpoint: "tcp://127.0.0.1:23750"}
 	c := config.Default()
-	c.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: config.EndpointForPort(config.DefaultPort)})
-	_ = c.SetEngine("Ubuntu-26.04") // 這台就是共用 engine
-	_ = c.SetActive("Ubuntu-26.04")
+	c.Distro, c.User = "Ubuntu-26.04", "irice"
 	if err := config.Save(e.cfgP, c); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +145,7 @@ func TestCORSPreflight(t *testing.T) {
 	}
 }
 
-func TestStatusReportsDownThenAutoStartBringsItUp(t *testing.T) {
+func TestStatusAndEngineStart(t *testing.T) {
 	e := newEnv(t, "")
 	e.engine.SetDown(true)
 	_, b := e.req(t, "GET", "/api/status", "")
@@ -157,66 +154,91 @@ func TestStatusReportsDownThenAutoStartBringsItUp(t *testing.T) {
 	if st.Ready || st.APIReachable {
 		t.Fatalf("expected down: %+v", st)
 	}
-	if err := e.s.AutoStart(); err != nil {
-		t.Fatal(err)
+	resp, b := e.req(t, "POST", "/api/engine/start", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("start → %d %s", resp.StatusCode, b)
 	}
-	_, b = e.req(t, "GET", "/api/status", "")
-	st = StatusResponse{}
 	_ = json.Unmarshal(b, &st)
 	if !st.Ready || e.life.Starts() != 1 {
-		t.Fatalf("after auto start: %+v starts=%d", st, e.life.Starts())
+		t.Fatalf("after start: %+v starts=%d", st, e.life.Starts())
 	}
 }
 
-// 引擎 profile 還是占位（沒有 user／endpoint）：自動帶起時補齊 init。
-func TestAutoStartInitsAPlaceholderEngine(t *testing.T) {
+func TestEngineStartNotReadyMapsTo503(t *testing.T) {
+	e := newEnv(t, "")
+	e.life.Broken = true
+	resp, b := e.req(t, "POST", "/api/engine/start", "")
+	var ae apiError
+	_ = json.Unmarshal(b, &ae)
+	if resp.StatusCode != 503 || ae.Code != "not_ready" || !strings.Contains(ae.Error, "systemd") {
+		t.Fatalf("%d %+v", resp.StatusCode, ae)
+	}
+}
+
+func TestEngineStartAutoInitsPlaceholderActive(t *testing.T) {
 	e := newEnv(t, "")
 	e.s.WSL = NewFakeWSL()
-	c := config.Default()
-	c.UpsertMachine(config.Machine{Distro: "docker-desktop"})
-	_ = c.SetEngine("docker-desktop")
-	_ = c.SetActive("docker-desktop")
+	// 手動寫占位 profile（不經 use，驗證 Start 仍會 Init）
+	c, _ := e.s.LoadConfig()
+	c.EnsureActive(config.Machine{Distro: "docker-desktop"})
 	if err := e.s.SaveConfig(c); err != nil {
 		t.Fatal(err)
 	}
 	e.s.BindActive(c)
 	e.engine.SetDown(true)
 
-	if err := e.s.AutoStart(); err != nil {
-		t.Fatal(err)
+	resp, b := e.req(t, "POST", "/api/engine/start", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("start should auto-init: %d %s", resp.StatusCode, b)
 	}
 	c, _ = e.s.LoadConfig()
 	m, ok := c.FindMachine("docker-desktop")
-	if !ok || !m.Ready() || !m.IsEngine() {
-		t.Fatalf("placeholder engine should be initialised: ok=%v m=%+v", ok, m)
+	if !ok || !m.Ready() {
+		t.Fatalf("profile should be filled after start: ok=%v m=%+v", ok, m)
 	}
-	_, b := e.req(t, "GET", "/api/meta", "")
+	if c.Active != "docker-desktop" || c.APIEndpoint == "" {
+		t.Fatalf("active cfg = %+v", c)
+	}
+	_, b = e.req(t, "GET", "/api/meta", "")
 	var meta Meta
 	_ = json.Unmarshal(b, &meta)
 	if !meta.ActiveReady || meta.Distro != "docker-desktop" {
 		t.Fatalf("meta after start = %+v", meta)
 	}
+	_, b = e.req(t, "GET", "/api/status", "")
+	var st StatusResponse
+	_ = json.Unmarshal(b, &st)
+	if !st.Ready {
+		t.Fatalf("engine should be up: %+v", st)
+	}
+	if _, ok := c.FindMachine("Ubuntu-26.04"); !ok {
+		t.Fatal("original machine should remain")
+	}
 }
 
-// 沒有 config 開 GUI：第一次啟動就建立 engine，Life 從 ConfigMissingLifecycle 升級。
-func TestAutoStartPromotesConfigMissingLifecycle(t *testing.T) {
+func TestBindActivePromotesConfigMissingLifecycle(t *testing.T) {
 	e := newEnv(t, "")
 	e.s.WSL = NewFakeWSL()
-	if err := config.Save(e.cfgP, config.Default()); err != nil {
-		t.Fatal(err)
-	}
 	e.s.Life = ConfigMissingLifecycle{Path: e.cfgP}
 	e.s.NewLifecycle = func(cfg config.Config) Lifecycle {
 		return &FakeLifecycle{Engine: e.engine, Distro: cfg.Distro, Endpoint: cfg.APIEndpoint}
 	}
 	e.engine.SetDown(true)
-	if err := e.s.AutoStart(); err != nil {
-		t.Fatal(err)
+
+	// 模擬「無 config 開 GUI → 設為主要」：寫入占位後應升級 Life 並 Init+Start
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("use = %d %s", resp.StatusCode, b)
 	}
 	if _, ok := e.s.Life.(ConfigMissingLifecycle); ok {
 		t.Fatal("Life should be promoted off ConfigMissingLifecycle")
 	}
-	_, b := e.req(t, "GET", "/api/status", "")
+	c, _ := e.s.LoadConfig()
+	m, ok := c.FindMachine("docker-desktop")
+	if !ok || !m.Ready() {
+		t.Fatalf("first use should init, got %+v", m)
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
 	var st StatusResponse
 	_ = json.Unmarshal(b, &st)
 	if !st.Ready {
@@ -224,24 +246,98 @@ func TestAutoStartPromotesConfigMissingLifecycle(t *testing.T) {
 	}
 }
 
-// endpoint 已失效（引擎沒回應）：自動帶起會重選可用 endpoint 並恢復。
-func TestAutoStartReInitsWhenAPIUnreachable(t *testing.T) {
+func TestEngineStartFromConfigMissingAfterUse(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	e.s.Life = ConfigMissingLifecycle{Path: e.cfgP}
+	fl := &FakeLifecycle{Engine: e.engine, Distro: "", Endpoint: ""}
+	e.s.NewLifecycle = func(cfg config.Config) Lifecycle {
+		fl.Distro = cfg.Distro
+		fl.Endpoint = cfg.APIEndpoint
+		return fl
+	}
+	// 只寫占位、不經 use 的 bringUp（模擬舊 use 行為後按 Start）
+	c := config.Default()
+	c.EnsureActive(config.Machine{Distro: "docker-desktop"})
+	if err := e.s.SaveConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	e.s.BindActive(c)
+	e.engine.SetDown(true)
+
+	resp, b := e.req(t, "POST", "/api/engine/start", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("start = %d %s", resp.StatusCode, b)
+	}
+	c, _ = e.s.LoadConfig()
+	m, _ := c.FindMachine("docker-desktop")
+	if !m.Ready() {
+		t.Fatalf("start should init placeholder: %+v", m)
+	}
+}
+
+func TestMachineUseFirstTimeInitsAndStarts(t *testing.T) {
 	e := newEnv(t, "")
 	e.s.WSL = NewFakeWSL()
 	e.engine.SetDown(true)
-	if err := e.s.AutoStart(); err != nil {
-		t.Fatal(err)
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("use = %d %s", resp.StatusCode, b)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(b, &body)
+	if body["ready"] != true {
+		t.Fatalf("use response = %s", b)
+	}
+	if ep, _ := body["api_endpoint"].(string); ep == "" {
+		t.Fatalf("use should return api_endpoint: %s", b)
 	}
 	c, _ := e.s.LoadConfig()
-	m, _ := c.FindMachine("Ubuntu-26.04")
-	if !m.Ready() || m.APIEndpoint == "" {
-		t.Fatalf("engine should stay ready: %+v", m)
+	m, ok := c.FindMachine("docker-desktop")
+	if !ok || !m.Ready() {
+		t.Fatalf("first use should init: %+v", m)
 	}
-	_, b := e.req(t, "GET", "/api/status", "")
+	if e.life.Starts() < 1 {
+		t.Fatal("expected Start during use")
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
 	var st StatusResponse
 	_ = json.Unmarshal(b, &st)
 	if !st.Ready {
-		t.Fatalf("engine should be up: %+v", st)
+		t.Fatalf("engine should be up after use: %+v", st)
+	}
+}
+
+func TestMachineUseReInitsWhenAPIUnreachable(t *testing.T) {
+	e := newEnv(t, "")
+	e.s.WSL = NewFakeWSL()
+	// 先 use 成 Ready
+	resp, b := e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("first use = %d %s", resp.StatusCode, b)
+	}
+	c, _ := e.s.LoadConfig()
+	m, _ := c.FindMachine("docker-desktop")
+	oldEP := m.APIEndpoint
+	if oldEP == "" {
+		t.Fatal("expected endpoint after first use")
+	}
+	// 模擬 endpoint 失效
+	e.engine.SetDown(true)
+	resp, b = e.req(t, "POST", "/api/machines/docker-desktop/use", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("re-use = %d %s", resp.StatusCode, b)
+	}
+	c, _ = e.s.LoadConfig()
+	m, _ = c.FindMachine("docker-desktop")
+	if !m.Ready() || m.APIEndpoint == "" {
+		t.Fatalf("re-use should restore ready endpoint: %+v", m)
+	}
+	_, b = e.req(t, "GET", "/api/status", "")
+	var st StatusResponse
+	_ = json.Unmarshal(b, &st)
+	if !st.Ready {
+		t.Fatalf("engine should be up after re-use: %+v", st)
 	}
 }
 
@@ -493,7 +589,7 @@ func TestSettingsLangSwitchPersistsAndChangesMeta(t *testing.T) {
 
 	// 預設英文，settings 帶 lang
 	_, b := e.req(t, "GET", "/api/meta", "")
-	if !strings.Contains(string(b), `"lang":"en"`) || !strings.Contains(string(b), `"Engine not running"`) {
+	if !strings.Contains(string(b), `"lang":"en"`) || !strings.Contains(string(b), `"Start engine"`) {
 		t.Fatalf("default meta should be English: %s", b)
 	}
 	_, b = e.req(t, "GET", "/api/settings", "")
@@ -516,7 +612,7 @@ func TestSettingsLangSwitchPersistsAndChangesMeta(t *testing.T) {
 		t.Fatalf("OnLangChange = %v", notified)
 	}
 	_, b = e.req(t, "GET", "/api/meta", "")
-	if !strings.Contains(string(b), `"lang":"zh-TW"`) || !strings.Contains(string(b), "引擎尚未啟動") {
+	if !strings.Contains(string(b), `"lang":"zh-TW"`) || !strings.Contains(string(b), "啟動引擎") {
 		t.Fatalf("meta should be zh-TW: %s", b)
 	}
 
@@ -647,79 +743,16 @@ func TestAutoStartSkipsStartWhenAlreadyReady(t *testing.T) {
 	}
 }
 
-// 全新安裝（還沒有任何 engine）：啟動即自動建立並帶起 engine，不用使用者按任何鍵。
-func TestAutoStartCreatesTheEngineOnFirstRun(t *testing.T) {
+func TestAutoStartSkipsUninitializedActive(t *testing.T) {
 	e := newEnv(t, "")
-	if err := config.Save(e.cfgP, config.Default()); err != nil {
+	c := config.Default() // 沒有 active machine：全新安裝不自動初始化
+	if err := config.Save(e.cfgP, c); err != nil {
 		t.Fatal(err)
 	}
-	e.engine.SetDown(true)
 	if err := e.s.AutoStart(); err != nil {
 		t.Fatal(err)
 	}
-	if e.life.Starts() != 1 {
-		t.Fatalf("first run must start the engine, starts=%d", e.life.Starts())
-	}
-	c, _ := e.s.LoadConfig()
-	if en, ok := c.EngineMachine(); !ok || !en.Ready() {
-		t.Fatalf("an engine must exist after first run: %+v", c.Machines)
-	}
-}
-
-func TestSuperviseBringsADownEngineUp(t *testing.T) {
-	e := newEnv(t, "")
-	e.engine.SetDown(true)
-	e.s.superviseOnce(time.Now())
-	if e.life.Starts() != 1 {
-		t.Fatalf("starts = %d", e.life.Starts())
-	}
-}
-
-func TestSuperviseLeavesAReadyEngineAlone(t *testing.T) {
-	e := newEnv(t, "")
-	e.s.superviseOnce(time.Now())
 	if e.life.Starts() != 0 {
-		t.Fatalf("starts = %d", e.life.Starts())
-	}
-}
-
-func TestSuperviseRespectsAUserStop(t *testing.T) {
-	e := newEnv(t, "")
-	fw := NewFakeWSL()
-	e.s.WSL = fw
-	e.s.KeepAlive = &wsl.KeepAlive{Spawner: fw}
-	e.s.KeepAlive.Release("Ubuntu-26.04", true) // 使用者在 Machines 頁停止了 engine
-	e.engine.SetDown(true)
-	e.s.superviseOnce(time.Now())
-	if e.life.Starts() != 0 {
-		t.Fatalf("a stopped engine must stay stopped, starts=%d", e.life.Starts())
-	}
-}
-
-func TestSuperviseFailureIsReportedAndBackedOff(t *testing.T) {
-	e := newEnv(t, "")
-	e.life.Broken = true
-	e.engine.SetDown(true)
-	now := time.Now()
-	e.s.superviseOnce(now)
-	e.s.superviseOnce(now.Add(5 * time.Second)) // 退避期間不重試
-	if e.life.Starts() != 1 {
-		t.Fatalf("starts = %d, want 1 (backoff)", e.life.Starts())
-	}
-	_, b := e.req(t, "GET", "/api/status", "")
-	var st struct {
-		StartError string `json:"start_error"`
-	}
-	_ = json.Unmarshal(b, &st)
-	if !strings.Contains(st.StartError, "systemd") {
-		t.Fatalf("status must carry the start error: %s", b)
-	}
-	e.life.Broken = false
-	e.s.superviseOnce(now.Add(time.Minute))
-	_, b = e.req(t, "GET", "/api/status", "")
-	st.StartError = ""
-	_ = json.Unmarshal(b, &st)
-	if st.StartError != "" || e.life.Starts() != 2 {
-		t.Fatalf("recovered: start_error=%q starts=%d", st.StartError, e.life.Starts())
+		t.Fatalf("auto start must not start an uninitialized machine, starts=%d", e.life.Starts())
 	}
 }

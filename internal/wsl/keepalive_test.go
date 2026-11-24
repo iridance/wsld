@@ -159,26 +159,3 @@ func TestKeepAliveNilIsNoop(t *testing.T) {
 		t.Fatal("nil held")
 	}
 }
-
-func TestKeepAliveHoldOnlyAcceptsSeveralAndReleasesTheRest(t *testing.T) {
-	sp := &testSpawner{}
-	k := &KeepAlive{Spawner: sp}
-	_ = k.Hold("A")
-	_ = k.Hold("B")
-	if err := k.HoldOnly("B", "Engine"); err != nil {
-		t.Fatal(err)
-	}
-	waitHeld(t, k, []string{"B", "Engine"})
-	if sp.n() != 3 {
-		t.Fatalf("B must not be re-spawned, spawns = %d", sp.n())
-	}
-}
-
-func TestKeepAliveHoldOnlyWithNoNamesReleasesAll(t *testing.T) {
-	k := &KeepAlive{Spawner: &testSpawner{}}
-	_ = k.Hold("A")
-	if err := k.HoldOnly(); err != nil {
-		t.Fatal(err)
-	}
-	waitHeld(t, k, nil)
-}

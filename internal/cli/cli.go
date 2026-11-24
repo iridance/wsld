@@ -92,12 +92,6 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	}
 	cmd, rest := args[0], args[1:]
 	var err error
-	if needsEngine(cmd) && !wantsHelp(rest) {
-		// 啟動即帶起：需要引擎的指令自動建立（首次）、喚醒並等到 API 就緒，不再有獨立的 start。
-		if err := a.ensureEngine(ctx); err != nil {
-			return a.report(err)
-		}
-	}
 	switch cmd {
 	case "help", "-h", "--help":
 		fmt.Fprintln(a.Stdout, i18n.T("cli.usage", a.ConfigPath))
@@ -105,6 +99,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.Stdout, "wsld %s\n", a.Version)
 	case "init":
 		err = a.cmdInit(ctx, rest)
+	case "start":
+		err = a.cmdStart(ctx, rest)
 	case "status":
 		err = a.cmdStatus(ctx, rest)
 	case "ps":
@@ -119,6 +115,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdExec(ctx, rest)
 	case "doctor":
 		err = a.cmdDoctor(ctx, rest)
+	case "use":
+		err = a.cmdUse(ctx, rest)
 	case "unmanage":
 		err = a.cmdUnmanage(ctx, rest)
 	case "unregister":
@@ -127,8 +125,6 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdResizeDisk(ctx, rest)
 	case "compact-disk":
 		err = a.cmdCompactDisk(ctx, rest)
-	case "migrate":
-		err = a.cmdMigrate(ctx, rest)
 	case "lan":
 		err = a.cmdLan(ctx, rest)
 	case "k8s":
@@ -234,7 +230,6 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	fs.StringVar(&opts.User, "user", "", "Linux user (default: distro default user)")
 	fs.IntVar(&opts.Port, "port", 0, "starting API port (default 23750)")
 	fs.BoolVar(&opts.NoCompose, "no-compose", false, "skip docker-compose-plugin")
-	fs.StringVar(&opts.Role, "role", "", "engine = dedicated shared dockerd distro; client = docker CLI only, uses the engine (default: standalone)")
 	fs.BoolVar(&opts.SkipInstall, "skip-install", false, "do not run wsl --install when no Ubuntu exists")
 	fs.IntVar(&opts.VHDSizeGB, "vhd-size", wsl.DefaultVHDSizeGB, "disk limit in GB when installing Ubuntu (0 = WSL default, 1 TB)")
 	pwStdin := fs.Bool("password-stdin", false, "read the password for a newly created Linux user from stdin (first line)")
@@ -243,9 +238,6 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	}
 	if opts.VHDSizeGB != 0 && !wsl.ValidVHDSizeGB(opts.VHDSizeGB) {
 		return fail(ExitUsage, errors.New(i18n.T("gui.machines.vhd_invalid", wsl.MinVHDSizeGB, wsl.MaxVHDSizeGB)))
-	}
-	if opts.Role != "" && opts.Role != config.RoleEngine && opts.Role != config.RoleClient {
-		return fail(ExitUsage, fmt.Errorf("--role must be %q or %q", config.RoleEngine, config.RoleClient))
 	}
 	opts.Password = a.newUserPassword(*pwStdin)
 	cfg, err := config.Load(a.ConfigPath)
@@ -267,6 +259,27 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintln(a.Stdout, i18n.T("cli.config_saved", a.ConfigPath))
 	fmt.Fprintln(a.Stdout, i18n.T("cli.init_done"))
+	return nil
+}
+
+func (a *App) cmdStart(ctx context.Context, args []string) error {
+	if err := parse(a.newFlags("start"), args); err != nil {
+		return err
+	}
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	if _, err := a.requireActive(cfg); err != nil {
+		return err
+	}
+	st, cfg, err := a.bringUp(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	a.printStatus(st)
+	fmt.Fprintln(a.Stdout, i18n.T("cli.start_done", cfg.APIEndpoint))
+	a.resumeK8s(ctx, cfg)
 	return nil
 }
 
@@ -563,53 +576,6 @@ func (a *App) requireActive(cfg config.Config) (config.Machine, error) {
 	return m, nil
 }
 
-// needsEngine：這些指令一定要用到 Docker 引擎。status／doctor 是診斷、init／unmanage 等是設定，不自動帶起。
-func needsEngine(cmd string) bool {
-	switch cmd {
-	case "ps", "logs", "start-ct", "stop-ct", "exec", "k8s", "migrate":
-		return true
-	}
-	return false
-}
-
-func wantsHelp(args []string) bool {
-	for _, a := range args {
-		if a == "-h" || a == "--help" {
-			return true
-		}
-	}
-	return false
-}
-
-// ensureEngine：沒有 engine 就自動建立 wsld-engine（首次）；engine 已就緒且 API 通就什麼都不做；否則 init／喚醒到 API 就緒。
-func (a *App) ensureEngine(ctx context.Context) error {
-	cfg, err := config.Load(a.ConfigPath)
-	if err != nil {
-		if !config.IsNotFound(err) {
-			return fail(ExitError, errors.New(i18n.T("cli.config_invalid", err)))
-		}
-		cfg = config.Default()
-	}
-	e, has := cfg.EngineMachine()
-	if has && e.Ready() {
-		if api := a.apiFor(cfg); api != nil && api.Ping(ctx) == nil {
-			return nil
-		}
-	}
-	if !has || !e.Ready() {
-		m := a.manager(cfg, a.apiFor(cfg))
-		cfg, err = m.EnsureEngine(ctx, lifecycle.InitOptions{Password: a.newUserPassword(false)})
-		if err != nil {
-			return err
-		}
-	}
-	if _, cfg, err = a.bringUp(ctx, cfg); err != nil {
-		return err
-	}
-	a.resumeK8s(ctx, cfg)
-	return nil
-}
-
 // bringUp：必要時 Init（含 API 不通時重選埠），再 Start；成功後寫回設定。
 func (a *App) bringUp(ctx context.Context, cfg config.Config) (lifecycle.Status, config.Config, error) {
 	m := a.manager(cfg, a.apiFor(cfg))
@@ -625,7 +591,7 @@ func (a *App) bringUp(ctx context.Context, cfg config.Config) (lifecycle.Status,
 	}
 	if needInit {
 		fmt.Fprint(a.Stdout, i18n.T("lc.start_bootstrap", am.Distro))
-		newCfg, err := m.Init(ctx, lifecycle.InitOptions{Distro: am.Distro, Role: am.Role, Password: a.newUserPassword(false)})
+		newCfg, err := m.Init(ctx, lifecycle.InitOptions{Distro: am.Distro, Password: a.newUserPassword(false)})
 		if err != nil {
 			return lifecycle.Status{}, cfg, err
 		}
@@ -646,6 +612,57 @@ func (a *App) bringUp(ctx context.Context, cfg config.Config) (lifecycle.Status,
 	return st, cfg, nil
 }
 
+func (a *App) cmdUse(ctx context.Context, args []string) error {
+	fs := a.newFlags("use")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fail(ExitUsage, errors.New(i18n.T("cli.missing_arg", "distro")))
+	}
+	name := fs.Arg(0)
+	if !wsl.ValidDistroName(name) {
+		return fail(ExitUsage, fmt.Errorf("invalid distro name %q", name))
+	}
+	cfg, err := config.Load(a.ConfigPath)
+	if err != nil {
+		if config.IsNotFound(err) {
+			cfg = config.Default()
+		} else {
+			return fail(ExitError, errors.New(i18n.T("cli.config_invalid", err)))
+		}
+	}
+	if m, ok := cfg.FindMachine(name); ok {
+		_ = cfg.SetActive(m.Distro)
+	} else {
+		cfg.EnsureActive(config.Machine{Distro: name})
+	}
+	if err := config.Save(a.ConfigPath, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.Stdout, i18n.T("cli.use_done", cfg.Active))
+	am, _ := cfg.ActiveMachine()
+	needBringUp := !am.Ready()
+	if !needBringUp {
+		if api := a.apiFor(cfg); api != nil {
+			if err := api.Ping(ctx); err != nil {
+				needBringUp = true
+			}
+		}
+	}
+	if !needBringUp {
+		return nil
+	}
+	// 未 Ready，或 endpoint／API 不通：Init（重選可用埠）+ Start。
+	st, cfg, err := a.bringUp(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	a.printStatus(st)
+	fmt.Fprintln(a.Stdout, i18n.T("cli.start_done", cfg.APIEndpoint))
+	return nil
+}
+
 func (a *App) cmdUnmanage(ctx context.Context, args []string) error {
 	fs := a.newFlags("unmanage")
 	if err := parse(fs, args); err != nil {
@@ -659,12 +676,8 @@ func (a *App) cmdUnmanage(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	m, ok := cfg.FindMachine(name)
-	if !ok {
+	if _, ok := cfg.FindMachine(name); !ok {
 		return fail(ExitError, errors.New(i18n.T("cli.machine_missing", name)))
-	}
-	if m.IsEngine() {
-		return fail(ExitError, errors.New(i18n.T("gui.machines.engine_protected", m.Distro)))
 	}
 	_ = wsl.StopDocker(ctx, a.WSL, name) // best-effort：distro 未醒／無 docker 仍刪 profile
 	if !cfg.RemoveMachine(name) {
@@ -691,9 +704,6 @@ func (a *App) cmdUnregister(ctx context.Context, args []string) error {
 	cfg, err := a.loadConfig()
 	if err != nil {
 		return err
-	}
-	if m, ok := cfg.FindMachine(name); ok && m.IsEngine() {
-		return fail(ExitError, errors.New(i18n.T("gui.machines.engine_protected", m.Distro)))
 	}
 	_ = wsl.StopDocker(ctx, a.WSL, name)
 	if err := wsl.Unregister(ctx, a.WSL, name); err != nil {

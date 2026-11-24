@@ -213,8 +213,7 @@ test("Free up disk space: a free disk is compacted right away", async ({ page })
 test("Ordinary notices still disappear on their own and have no close button", async ({ page }) => {
   await page.clock.install();
   await machines(page);
-  await page.getByTestId("nav-settings").click();
-  await page.getByTestId("settings-save").click();
+  await page.getByTestId("btn-machine-use-docker-desktop").click();
   await expect(page.getByTestId("notice")).toBeVisible();
   await expect(page.getByTestId("notice-close")).toHaveCount(0);
   await page.clock.fastForward(9_000);

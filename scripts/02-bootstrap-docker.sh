@@ -3,9 +3,6 @@
 # 讓 dockerd 同時監聽 unix socket 與 tcp://127.0.0.1:<port>（只綁 loopback），
 # 並啟用 systemd／linger，供 Windows 端 wsld / wsld-gui 使用。
 #
-# --role engine：專用 dockerd distro，另在 /mnt/wsl/wsld/docker.sock 提供跨 distro 共用的 socket。
-# --role client：只裝 docker CLI/plugin，建立指向 engine socket 的 docker context，不裝 daemon。
-#
 # 用法見 --help。冪等；可重複執行。需要 sudo（會在需要時提示密碼）。
 # 結束時輸出機器可讀行：WSLD_API_PORT=<port> WSLD_API_ENDPOINT=tcp://127.0.0.1:<port>
 
@@ -48,7 +45,7 @@ case "$FAMILY" in
 esac
 
 id "$WSLD_USER" >/dev/null 2>&1 || die "使用者不存在: $WSLD_USER" 2
-log "distro=$DISTRO_ID family=$FAMILY user=$WSLD_USER role=${WSLD_ROLE:-standalone} start-port=$WSLD_PORT compose=$WSLD_INSTALL_COMPOSE dry-run=$WSLD_DRY_RUN"
+log "distro=$DISTRO_ID family=$FAMILY user=$WSLD_USER start-port=$WSLD_PORT compose=$WSLD_INSTALL_COMPOSE dry-run=$WSLD_DRY_RUN"
 
 # ---------------------------------------------------------------- 1. wsl.conf systemd
 NEED_WSL_RESTART=0
@@ -64,19 +61,6 @@ if ! wsld_wsl_conf_has_systemd /etc/wsl.conf; then
     rm -f "$tmp"
   fi
   NEED_WSL_RESTART=1
-fi
-
-# engine：不把 Windows PATH 灌進專用 distro（只影響下次啟動；interop 保留，埠占用偵測仍需 netstat.exe）
-if [ "$WSLD_ROLE" = "engine" ]; then
-  if [ "$WSLD_DRY_RUN" = "1" ]; then
-    printf '[dry-run] ensure [interop] appendWindowsPath=false in /etc/wsl.conf\n'
-  else
-    tmp="$(mktemp)"
-    [ -f /etc/wsl.conf ] && cat /etc/wsl.conf > "$tmp"
-    wsld_ensure_ini_key "$tmp" interop appendWindowsPath false
-    $SUDO install -m 0644 "$tmp" /etc/wsl.conf
-    rm -f "$tmp"
-  fi
 fi
 
 if [ "$NEED_WSL_RESTART" = "1" ] || ! [ -d /run/systemd/system ]; then
@@ -104,12 +88,8 @@ install_docker_debian() {
       | $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
   fi
   run $SUDO apt-get update -y
-  if [ "$WSLD_ROLE" = "client" ]; then
-    read -r -a pkgs <<< "$(wsld_client_packages debian "$WSLD_INSTALL_COMPOSE")"
-  else
-    pkgs=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin)
-    [ "$WSLD_INSTALL_COMPOSE" = "1" ] && pkgs+=(docker-compose-plugin)
-  fi
+  pkgs=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin)
+  [ "$WSLD_INSTALL_COMPOSE" = "1" ] && pkgs+=(docker-compose-plugin)
   run $SUDO apt-get install -y "${pkgs[@]}"
 }
 
@@ -150,20 +130,7 @@ ensure_compose_suse() {
   fi
 }
 
-if [ "$WSLD_ROLE" = "client" ]; then
-  if command -v docker >/dev/null 2>&1; then
-    log "docker CLI 已安裝，略過安裝"
-  else
-    case "$FAMILY" in
-      debian) install_docker_debian ;;
-      arch|suse)
-        read -r -a pkgs <<< "$(wsld_client_packages "$FAMILY" "$WSLD_INSTALL_COMPOSE")"
-        if [ "$FAMILY" = "arch" ]; then run $SUDO pacman -Sy --noconfirm --needed "${pkgs[@]}"
-        else run $SUDO zypper --non-interactive --gpg-auto-import-keys install --no-recommends "${pkgs[@]}"; fi
-        ;;
-    esac
-  fi
-elif ! wsld_docker_engine_installed; then
+if ! wsld_docker_engine_installed; then
   case "$FAMILY" in
     debian) install_docker_debian ;;
     arch) install_docker_arch ;;
@@ -176,28 +143,6 @@ else
     arch) ensure_compose_arch ;;
     suse) ensure_compose_suse ;;
   esac
-fi
-
-# ---------------------------------------------------------------- 2b. client：只建立 context
-if [ "$WSLD_ROLE" = "client" ]; then
-  if command -v dockerd >/dev/null 2>&1 && systemctl is-enabled --quiet docker </dev/null 2>/dev/null; then
-    warn "此 distro 仍有本機 dockerd（docker.service 已啟用）；為避免兩個引擎並存，請遷移資料後執行：sudo systemctl disable --now docker docker.socket"
-  fi
-  if [ "$WSLD_DRY_RUN" = "1" ]; then
-    printf '[dry-run] docker context create wsld --docker host=unix://%s (user %s)\n' "$WSLD_ENGINE_SOCK" "$WSLD_USER"
-    log "dry-run 完成"
-    exit 0
-  fi
-  user_home="$(getent passwd "$WSLD_USER" | cut -d: -f6)"
-  # lifecycle 以 root 執行：用 runuser 切到目標使用者，HOME 指向其家目錄（context 存在 ~/.docker）
-  as_user() { runuser -u "$WSLD_USER" -- env HOME="$user_home" "$@" </dev/null; }
-  if ! as_user docker context inspect wsld >/dev/null 2>&1; then
-    as_user docker context create wsld --docker "host=unix://$WSLD_ENGINE_SOCK" >/dev/null
-  fi
-  as_user docker context use wsld >/dev/null
-  [ -S "$WSLD_ENGINE_SOCK" ] || warn "engine socket 尚未出現（$WSLD_ENGINE_SOCK）；請先啟動 engine distro"
-  log "完成。docker context 'wsld' 已啟用，指向 $WSLD_ENGINE_SOCK"
-  exit 0
 fi
 
 # ---------------------------------------------------------------- 3. docker 群組
@@ -234,9 +179,7 @@ else
   fi
 fi
 
-SHARED_SOCK=""
-[ "$WSLD_ROLE" = "engine" ] && SHARED_SOCK="$WSLD_ENGINE_SOCK"
-DAEMON_JSON="$(wsld_render_daemon_json "$PORT" "$SHARED_SOCK")"
+DAEMON_JSON="$(wsld_render_daemon_json "$PORT")"
 wsld_validate_loopback_hosts "$DAEMON_JSON" || die "daemon.json 含非 loopback host，拒絕寫入" 1
 
 if [ "$WSLD_DRY_RUN" = "1" ]; then
@@ -249,11 +192,7 @@ else
     $SUDO cp /etc/docker/daemon.json /etc/docker/daemon.json.wsld.bak
   fi
   printf '%s\n' "$DAEMON_JSON" | $SUDO tee /etc/docker/daemon.json >/dev/null
-  if [ "$WSLD_ROLE" = "engine" ]; then
-    wsld_render_engine_override "$FAMILY" "$WSLD_ENGINE_SOCK"
-  else
-    wsld_render_systemd_override "$FAMILY"
-  fi | $SUDO tee /etc/systemd/system/docker.service.d/wsld-override.conf >/dev/null
+  wsld_render_systemd_override "$FAMILY" | $SUDO tee /etc/systemd/system/docker.service.d/wsld-override.conf >/dev/null
 fi
 
 # ---------------------------------------------------------------- 5. 啟動服務 + linger
@@ -282,10 +221,6 @@ fi
 
 if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -E ":${PORT}\$" | grep -vqE '^(127\.0\.0\.1|\[::1\])'; then
   die "dockerd 在埠 ${PORT} 綁到了非 loopback 位址，請檢查 daemon.json" 1
-fi
-
-if [ "$WSLD_ROLE" = "engine" ] && ! [ -S "$WSLD_ENGINE_SOCK" ]; then
-  die "共用 socket 未建立: $WSLD_ENGINE_SOCK（journalctl -u docker -n 50）" 4
 fi
 
 if [ "$WSLD_INSTALL_COMPOSE" = "1" ]; then

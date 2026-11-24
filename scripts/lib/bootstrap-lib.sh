@@ -17,21 +17,12 @@ wsld_parse_args() {
   WSLD_DRY_RUN=0
   WSLD_HELP=0
   WSLD_BUSY_PORTS=""
-  WSLD_ROLE=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) shift; WSLD_PORT="${1:?--port needs a value}" ;;
       --busy-ports) shift; WSLD_BUSY_PORTS="${1:?--busy-ports needs a value}" ;;
       --user) shift; WSLD_USER="${1:?--user needs a value}" ;;
       --no-compose) WSLD_INSTALL_COMPOSE=0 ;;
-      --role)
-        shift
-        WSLD_ROLE="${1:?--role needs a value}"
-        case "$WSLD_ROLE" in
-          engine|client) ;;
-          *) echo "unknown role: $WSLD_ROLE (engine|client)" >&2; return 2 ;;
-        esac
-        ;;
       --dry-run) WSLD_DRY_RUN=1 ;;
       -h|--help) WSLD_HELP=1; wsld_usage; return 0 ;;
       *) echo "unknown argument: $1" >&2; wsld_usage >&2; return 2 ;;
@@ -43,12 +34,11 @@ wsld_parse_args() {
 
 wsld_usage() {
   printf '%s\n' \
-    '用法: 02-bootstrap-docker.sh [--port N] [--busy-ports CSV] [--user NAME] [--no-compose] [--role engine|client] [--dry-run]' \
+    '用法: 02-bootstrap-docker.sh [--port N] [--busy-ports CSV] [--user NAME] [--no-compose] [--dry-run]' \
     '  --port N         Docker API 起始埠（只綁 127.0.0.1；占用時自動遞增），預設 23750' \
     '  --busy-ports CSV 額外視為占用的埠（例如其他 machine 已登記的 api_endpoint）' \
     '  --user NAME      要加入 docker 群組並啟用 linger 的使用者，預設目前使用者' \
     '  --no-compose     不安裝 docker-compose-plugin' \
-    '  --role ROLE      engine = 專用 dockerd distro（共用 socket 放 /mnt/wsl）；client = 只裝 docker CLI 並連到 engine；省略 = 自帶 dockerd' \
     '  --dry-run        只印出將執行的動作'
 }
 
@@ -284,12 +274,10 @@ wsld_pick_free_port() {
 
 # $1 = port
 # 注意：不可用 cat <<EOF——bundle 以 `bash -s`（stdin=腳本）執行時 heredoc 會吞掉後續腳本。
-# $2（可選）= 共用 unix socket 路徑（engine 模式，放在跨 distro 共用的 /mnt/wsl tmpfs）。
 wsld_render_daemon_json() {
-  local port="$1" shared="${2:-}" hosts='"unix:///var/run/docker.sock"'
-  [ -n "$shared" ] && hosts="$hosts, \"unix://$shared\""
+  local port="$1"
   printf '%s\n' '{'
-  printf '  "hosts": [%s, "tcp://127.0.0.1:%s"]\n' "$hosts" "$port"
+  printf '  "hosts": ["unix:///var/run/docker.sock", "tcp://127.0.0.1:%s"]\n' "$port"
   printf '%s\n' '}'
 }
 
@@ -320,46 +308,6 @@ wsld_render_systemd_override() {
     '[Service]' \
     'ExecStart=' \
     "ExecStart=$exec"
-}
-
-# --- 共用 engine（專用 dockerd distro）-----------------------------------
-
-# /mnt/wsl 是所有 WSL2 distro 共用的 tmpfs；engine 在此放 socket，client 的 docker context 指向它。
-WSLD_ENGINE_SOCK="/mnt/wsl/wsld/docker.sock"
-
-# engine 的 docker.service drop-in：沿用 wsld_render_systemd_override，另在啟動前建立共用目錄、
-# 清掉殘留 socket（tmpfs 於 VM 重啟後清空），啟動後開放 0666（各 distro 的 docker GID 不同）。
-# $1 = family、$2 = 共用 socket 路徑。
-wsld_render_engine_override() {
-  local family="${1:-}" sock="${2:-$WSLD_ENGINE_SOCK}" dir
-  dir="$(dirname "$sock")"
-  wsld_render_systemd_override "$family"
-  printf '%s\n' \
-    "ExecStartPre=/bin/mkdir -p $dir" \
-    "ExecStartPre=/bin/rm -f $sock" \
-    "ExecStartPost=/bin/chmod 0666 $sock"
-}
-
-# client 要安裝的套件（只要 CLI 與 plugin，不裝 daemon）。$1 = family、$2 = 1 則含 compose。
-# Arch／openSUSE 沒有獨立 CLI 套件：裝完整 docker，但不 enable 服務。
-wsld_client_packages() {
-  local family="$1" compose="${2:-1}" pkgs
-  case "$family" in
-    debian)
-      pkgs="docker-ce-cli docker-buildx-plugin"
-      [ "$compose" = "1" ] && pkgs="$pkgs docker-compose-plugin"
-      ;;
-    arch)
-      pkgs="docker docker-buildx"
-      [ "$compose" = "1" ] && pkgs="$pkgs docker-compose"
-      ;;
-    suse)
-      pkgs="docker docker-buildx"
-      [ "$compose" = "1" ] && pkgs="$pkgs docker-compose"
-      ;;
-    *) echo "unsupported family: $family" >&2; return 1 ;;
-  esac
-  printf '%s\n' "$pkgs"
 }
 
 # --- wsl.conf ------------------------------------------------------------
@@ -393,25 +341,6 @@ wsld_ensure_wsl_conf_systemd() {
     if [ -s "$f" ]; then prefix=$'\n'; fi
     printf '%s[boot]\nsystemd=true\n' "$prefix" >> "$f"
   fi
-}
-
-# $1 = ini 路徑、$2 = section、$3 = key、$4 = value。冪等；保留其他區段；key 只在指定 section 內比對。
-wsld_ensure_ini_key() {
-  local f="$1" sec="$2" key="$3" val="$4" tmp
-  [ -f "$f" ] || : > "$f"
-  tmp="$(mktemp)"
-  awk -v sec="[$sec]" -v key="$key" -v val="$val" '
-    function flush() { if (cur == sec && !done) { print key "=" val; done = 1 } }
-    /^[[:space:]]*\[/ { flush(); cur = $0; gsub(/[[:space:]]/, "", cur); seen = seen || (cur == sec) }
-    cur == sec && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { if (!done) { print key "=" val; done = 1 } ; next }
-    { print }
-    END {
-      flush()
-      if (!seen) { if (NR > 0) print ""; print sec; print key "=" val }
-    }
-  ' "$f" > "$tmp"
-  cat "$tmp" > "$f"
-  rm -f "$tmp"
 }
 
 # --- k3s -----------------------------------------------------------------

@@ -49,8 +49,6 @@ func (f *fakeRunner) Run(_ context.Context, stdin io.Reader, args ...string) ([]
 
 type fakeAPI struct {
 	pingErr    error
-	pingSeq    []error // 非空時依序回傳（耗盡後回 pingErr）；模擬「引擎原本沒起來，bootstrap 後才通」
-	pings      int
 	containers []dockerapi.Container
 	started    []string
 	stopped    []string
@@ -59,13 +57,7 @@ type fakeAPI struct {
 	inspectTTY bool
 }
 
-func (a *fakeAPI) Ping(context.Context) error {
-	a.pings++
-	if a.pings <= len(a.pingSeq) {
-		return a.pingSeq[a.pings-1]
-	}
-	return a.pingErr
-}
+func (a *fakeAPI) Ping(context.Context) error { return a.pingErr }
 func (a *fakeAPI) ListContainers(_ context.Context, all bool) ([]dockerapi.Container, error) {
 	if a.listErr != nil {
 		return nil, a.listErr
@@ -138,14 +130,12 @@ func newHarness(t *testing.T, withConfig bool) *harness {
 		"-d Ubuntu-26.04 -- cat /etc/docker/daemon.json":                        `{"hosts":["unix:///var/run/docker.sock","tcp://127.0.0.1:23750"]}`,
 		"-d Ubuntu-26.04 -- loginctl show-user irice --property=Linger --value": "yes\n",
 		"-d Ubuntu-26.04 -- id -un":                                             "irice\n",
-		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": "WSLD_API_PORT=23750\n",
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": "WSLD_API_PORT=23750\n",
 	}, errs: map[string]error{}}
 	cfgPath := filepath.Join(h.cfgDir, "config.toml")
 	if withConfig {
 		c := config.Default()
-		c.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: config.EndpointForPort(config.DefaultPort)})
-		_ = c.SetEngine("Ubuntu-26.04") // 這台就是共用 engine
-		_ = c.SetActive("Ubuntu-26.04")
+		c.Distro, c.User = "Ubuntu-26.04", "irice"
 		if err := config.Save(cfgPath, c); err != nil {
 			t.Fatal(err)
 		}
@@ -196,7 +186,7 @@ func TestVersion(t *testing.T) {
 }
 
 func TestCommandsRequireConfigExceptInit(t *testing.T) {
-	for _, cmd := range []string{"status", "doctor"} {
+	for _, cmd := range []string{"start", "status", "ps", "doctor"} {
 		h := newHarness(t, false)
 		if code := h.run(cmd); code != 3 || !strings.Contains(h.errb.String(), "wsld init") {
 			t.Fatalf("%s without config: code=%d err=%q", cmd, code, h.errb.String())
@@ -223,7 +213,7 @@ func TestInitWritesConfig(t *testing.T) {
 
 func TestInitPortChangeIsPersisted(t *testing.T) {
 	h := newHarness(t, false)
-	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine"] = "WSLD_API_PORT=23751\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750"] = "WSLD_API_PORT=23751\n"
 	if code := h.run("init"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
@@ -236,7 +226,7 @@ func TestInitPortChangeIsPersisted(t *testing.T) {
 func TestInitFlags(t *testing.T) {
 	h := newHarness(t, false)
 	h.wsl.resp["-d Ubuntu-26.04 -u root -- id -u bob"] = "1000\n"
-	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000 --no-compose --role engine"] = "WSLD_API_PORT=24000\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000 --no-compose"] = "WSLD_API_PORT=24000\n"
 	if code := h.run("init", "--user", "bob", "--port", "24000", "--no-compose"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
@@ -428,17 +418,27 @@ func TestUnregisterRemovesDistroAndProfile(t *testing.T) {
 	}
 }
 
-// 需要引擎的指令會自動把尚未 init 的 engine profile 帶起來（不再有獨立的 start）。
-func TestEngineCommandAutoInitsPlaceholderEngine(t *testing.T) {
+func TestUseFailsWhenDistroMissing(t *testing.T) {
+	h := newHarness(t, true)
+	if code := h.run("use", "Ghost"); code != 3 {
+		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
+	}
+	if !strings.Contains(h.errb.String(), "Ghost") && !strings.Contains(h.out.String()+h.errb.String(), "does not exist") {
+		// Init returns init_distro_missing
+		if !strings.Contains(h.errb.String(), "does not exist") && !strings.Contains(h.errb.String(), "not found") && !strings.Contains(h.errb.String(), "不存在") {
+			t.Fatalf("err=%q", h.errb.String())
+		}
+	}
+}
+
+func TestStartAutoInitsPlaceholder(t *testing.T) {
 	h := newHarness(t, true)
 	c := config.Default()
-	c.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04"}) // 占位：未 init
-	_ = c.SetEngine("Ubuntu-26.04")
-	_ = c.SetActive("Ubuntu-26.04")
+	c.EnsureActive(config.Machine{Distro: "Ubuntu-26.04"}) // placeholder
 	if err := config.Save(h.app.ConfigPath, c); err != nil {
 		t.Fatal(err)
 	}
-	if code := h.run("ps"); code != 0 {
+	if code := h.run("start"); code != 0 {
 		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
 	}
 	c, err := config.Load(h.app.ConfigPath)
@@ -446,42 +446,8 @@ func TestEngineCommandAutoInitsPlaceholderEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, ok := c.FindMachine("Ubuntu-26.04")
-	if !ok || !m.Ready() || !m.IsEngine() {
-		t.Fatalf("want a ready engine after ps, got %+v", m)
-	}
-}
-
-// 引擎已就緒時不碰 WSL（快速路徑）。
-func TestEngineCommandSkipsBringUpWhenAPIIsUp(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("ps"); code != 0 {
-		t.Fatalf("code=%d err=%q", code, h.errb.String())
-	}
-	if len(h.wsl.calls) != 0 {
-		t.Fatalf("ready engine must not be touched: %v", h.wsl.calls)
-	}
-}
-
-// 沒有任何 config 時，需要引擎的指令首次使用就自動建立 wsld-engine。
-func TestEngineCommandCreatesWsldEngineOnFirstUse(t *testing.T) {
-	h := newHarness(t, false)
-	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n  wsld-engine Running 2\r\n")
-	h.wsl.resp["-d wsld-engine -u root -- id -u irice"] = "1000\n"
-	h.wsl.resp["-d wsld-engine -- id -un"] = "irice\n"
-	h.wsl.resp["-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine"] = "WSLD_API_PORT=23750\n"
-	h.wsl.resp["-d wsld-engine -- true"] = ""
-	h.wsl.resp["-d wsld-engine -- systemctl is-system-running"] = "running\n"
-	h.wsl.resp["-d wsld-engine -- systemctl is-active docker"] = "active\n"
-	h.api.pingSeq = []error{errors.New("down")}
-	if code := h.run("ps"); code != 0 {
-		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
-	}
-	c, err := config.Load(h.app.ConfigPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "wsld-engine" || !e.Ready() {
-		t.Fatalf("engine = %+v %v", e, ok)
+	if !ok || !m.Ready() {
+		t.Fatalf("want ready after start, got %+v", m)
 	}
 }
 
@@ -538,24 +504,5 @@ func TestResizeDiskAlsoCompacts(t *testing.T) {
 	joined := strings.Join(h.wsl.calls, "\n")
 	if i, j := strings.Index(joined, "--resize 80GB"), strings.Index(joined, "--manage dev --compact"); i < 0 || j < i {
 		t.Fatalf("compact must follow resize; calls:\n%s", joined)
-	}
-}
-
-func TestEngineCannotBeUnmanagedOrUnregistered(t *testing.T) {
-	h := newHarness(t, true)
-	if code := h.run("unmanage", "Ubuntu-26.04"); code != ExitError || !strings.Contains(h.errb.String(), "engine") {
-		t.Fatalf("unmanage: code=%d err=%q", code, h.errb.String())
-	}
-	h.errb.Reset()
-	if code := h.run("unregister", "Ubuntu-26.04", "--confirm", "Ubuntu-26.04"); code != ExitError || !strings.Contains(h.errb.String(), "engine") {
-		t.Fatalf("unregister: code=%d err=%q", code, h.errb.String())
-	}
-	for _, c := range h.wsl.calls {
-		if strings.Contains(c, "--unregister") || strings.Contains(c, "stop docker") {
-			t.Fatalf("the engine must not be touched: %s", c)
-		}
-	}
-	if _, ok := h.cfg(t).EngineMachine(); !ok {
-		t.Fatal("engine profile must stay")
 	}
 }

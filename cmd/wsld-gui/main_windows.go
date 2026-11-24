@@ -152,15 +152,11 @@ func main() {
 	lanCtx, stopLAN := context.WithCancel(context.Background())
 	defer stopLAN()
 	go srv.RunLAN(lanCtx, 3*time.Second)
-	// 啟動 wsld 就是啟動引擎：首次使用先建立 wsld-engine，之後帶起 docker 與（設定為 k8s 的）k3s；
-	// 之後由 Supervise 持續確認，engine 掉了（WSL 關閉、當機）自動拉起，失敗退避重試。
-	superviseCtx, stopSupervise := context.WithCancel(context.Background())
-	defer stopSupervise()
+	// 啟動即自動連線：帶起 active machine 的 docker 與（設定為 k8s 的）k3s，等同按 Start engine
 	go func() {
 		if err := srv.AutoStart(); err != nil {
 			log.Printf("auto start: %v", err)
 		}
-		srv.Supervise(superviseCtx, 5*time.Second)
 	}()
 	app.srv, app.base, app.token, app.engine = srv, base, srv.Token, engine
 
@@ -208,6 +204,7 @@ type guiApp struct {
 
 	trayStatus *systray.MenuItem
 	trayOpen   *systray.MenuItem
+	trayStart  *systray.MenuItem
 	trayQuit   *systray.MenuItem
 	lastState  string // 最近一次 tray 狀態鍵（gui.status.*），語系切換時重套
 	quitting   atomic.Bool
@@ -292,9 +289,10 @@ func (a *guiApp) trayReady() {
 	a.trayStatus.Disable()
 	systray.AddSeparator()
 	a.trayOpen = systray.AddMenuItem(i18n.T("gui.tray.open"), "")
+	a.trayStart = systray.AddMenuItem(i18n.T("gui.ensure"), "")
 	systray.AddSeparator()
 	a.trayQuit = systray.AddMenuItem(i18n.T("gui.tray.quit"), "")
-	open, quit := a.trayOpen, a.trayQuit
+	open, start, quit := a.trayOpen, a.trayStart, a.trayQuit
 
 	go func() {
 		for {
@@ -302,6 +300,17 @@ func (a *guiApp) trayReady() {
 			case <-open.ClickedCh:
 				wruntime.WindowShow(a.ctx)
 				wruntime.WindowUnminimise(a.ctx)
+			case <-start.ClickedCh:
+				go func() {
+					a.setTray("gui.status.starting")
+					req, _ := http.NewRequest(http.MethodPost, a.base+"/api/engine/start", nil)
+					req.Header.Set("Authorization", "Bearer "+a.token)
+					resp, err := (&http.Client{Timeout: 4 * time.Minute}).Do(req)
+					if err == nil {
+						resp.Body.Close()
+					}
+					a.pollOnce()
+				}()
 			case <-quit.ClickedCh:
 				a.quit()
 				return
@@ -354,6 +363,7 @@ func (a *guiApp) relabelTray() {
 		return
 	}
 	a.trayOpen.SetTitle(i18n.T("gui.tray.open"))
+	a.trayStart.SetTitle(i18n.T("gui.ensure"))
 	a.trayQuit.SetTitle(i18n.T("gui.tray.quit"))
 	if a.lastState != "" {
 		a.setTray(a.lastState)

@@ -171,15 +171,35 @@ func TestK8sSecondOperationWhileBusyConflicts(t *testing.T) {
 	k.waitIdle(t)
 }
 
-func TestK8sOnRejectsAClientMachineNamingTheEngine(t *testing.T) {
+func TestK8sOnRejectsOtherOwnerUnlessSwitch(t *testing.T) {
 	k := newK8sEnv(t)
-	k.addMachine(t, "Other", false)
-	resp, b := k.req(t, "POST", "/api/k8s/on?machine=Other", "")
-	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), "Ubuntu-26.04") {
+	k.addMachine(t, "Other", true)
+	resp, b := k.req(t, "POST", "/api/k8s/on", "")
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), "Other") {
 		t.Fatalf("on = %d %s", resp.StatusCode, b)
 	}
-	if _, ok := k.cfg(t).K8sMachine(); ok {
-		t.Fatal("k8s must stay off")
+	if m, _ := k.cfg(t).K8sMachine(); m.Distro != "Other" {
+		t.Fatal("owner must stay Other")
+	}
+}
+
+func TestK8sSwitchMovesClusterToTarget(t *testing.T) {
+	k := newK8sEnv(t)
+	k.addMachine(t, "Other", true)
+	k.cluster.installed["Other"], k.cluster.running = true, "Other"
+	if resp, b := k.req(t, "POST", "/api/k8s/on?switch=1", ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	r := k.waitIdle(t)
+	if r.Error != "" || r.Machine != "Ubuntu-26.04" || r.Status.State != k8s.StateReady {
+		t.Fatalf("%+v", r)
+	}
+	if m, _ := k.cfg(t).K8sMachine(); m.Distro != "Ubuntu-26.04" {
+		t.Fatalf("owner = %q", m.Distro)
+	}
+	calls := strings.Join(k.cluster.Called(), ",")
+	if strings.Index(calls, "stop:Other") > strings.Index(calls, "start:Ubuntu-26.04") || !strings.Contains(calls, "stop:Other") {
+		t.Fatalf("must stop the old owner before starting the new one: %s", calls)
 	}
 }
 
@@ -485,14 +505,13 @@ func TestK8sStreamRejectsBadNamesAndDisabled(t *testing.T) {
 	}
 }
 
-func TestEngineBringUpResumesK3sWhenEnabled(t *testing.T) {
+func TestEngineStartResumesK3sWhenEnabledOnPrimary(t *testing.T) {
 	k := newK8sEnv(t)
 	c := k.cfg(t)
 	_ = c.SetK8s("Ubuntu-26.04", true)
 	_ = config.Save(k.cfgP, c)
-	k.engine.SetDown(true)
-	if err := k.s.AutoStart(); err != nil {
-		t.Fatal(err)
+	if resp, b := k.req(t, "POST", "/api/engine/start", ""); resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 	r := k.waitIdle(t)
 	if r.Status.State != k8s.StateReady || r.Error != "" {
@@ -500,11 +519,10 @@ func TestEngineBringUpResumesK3sWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestEngineBringUpLeavesK3sAloneWhenOff(t *testing.T) {
+func TestEngineStartLeavesK3sAloneWhenOff(t *testing.T) {
 	k := newK8sEnv(t)
-	k.engine.SetDown(true)
-	if err := k.s.AutoStart(); err != nil {
-		t.Fatal(err)
+	if resp, _ := k.req(t, "POST", "/api/engine/start", ""); resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
 	}
 	time.Sleep(30 * time.Millisecond)
 	if len(k.cluster.Called()) != 0 {
@@ -796,23 +814,5 @@ func TestK8sStackDeployAndDelete(t *testing.T) {
 	_, b = k.req(t, "GET", "/api/k8s/deployments?ns=shop", "")
 	if strings.Contains(string(b), `"web"`) {
 		t.Fatalf("stack not removed: %s", b)
-	}
-}
-
-// 不帶 machine 參數的 /api/k8s/on 一律裝在 engine（即使 config 的 active 指到別台）。
-func TestK8sOnDefaultsToEngine(t *testing.T) {
-	k := newK8sEnv(t)
-	k.addMachine(t, "Client1", false)
-	c := k.cfg(t)
-	c.Active = "Client1"
-	if err := config.Save(k.cfgP, c); err != nil {
-		t.Fatal(err)
-	}
-	if resp, b := k.req(t, "POST", "/api/k8s/on", ""); resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("on = %d %s", resp.StatusCode, b)
-	}
-	k.waitIdle(t)
-	if m, ok := k.cfg(t).K8sMachine(); !ok || m.Distro != "Ubuntu-26.04" {
-		t.Fatalf("k8s must land on the engine, got %+v %v", m, ok)
 	}
 }

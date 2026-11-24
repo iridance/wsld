@@ -622,8 +622,6 @@ button.usage-btn[aria-expanded="true"] .ico { transform: rotate(180deg); }
 
 /* ---- 機器卡片 -------------------------------------------------------------- */
 .machine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-content: start; }
-.machine-group + .machine-group { margin-top: 24px; }
-.machine-group-title { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .machine-card {
   display: flex; flex-direction: column; gap: 14px; padding: 16px 16px 12px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);

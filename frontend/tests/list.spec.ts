@@ -143,18 +143,18 @@ test("auto refresh picks up changes within the configured interval", async ({ pa
   await expect(row(page, "auto")).toBeVisible({ timeout: 10_000 });
 });
 
-test("engine down shows Disconnected badge and the error banner; the supervisor reconnects by itself", async ({ page, request }) => {
+test("engine down shows Disconnected badge, error banner and enables Start engine; starting reconnects", async ({ page, request }) => {
   await open(page);
-  await expect(page.getByTestId("btn-start-engine")).toHaveCount(0); // 沒有「啟動引擎」：啟動 wsld 就是啟動引擎
+  await expect(page.getByTestId("btn-start-engine")).toBeDisabled();
 
   await engine(request, "down");
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "disconnected", { timeout: 10_000 });
   await expect(page.getByTestId("error-banner")).toBeVisible();
   await expect(page.getByTestId("error-banner")).toContainText("Cannot reach Docker API");
-  await expect(page.getByTestId("btn-engine-cta")).toHaveCount(0);
+  await expect(page.getByTestId("btn-start-engine")).toBeEnabled();
 
-  await request.post("/__test/supervise/on");
-  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 15_000 });
+  await page.getByTestId("btn-start-engine").click();
+  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
   await expect(page.getByTestId("error-banner")).toBeHidden();
   await expect(row(page, "web")).toBeVisible();
 
@@ -162,13 +162,22 @@ test("engine down shows Disconnected badge and the error banner; the supervisor 
   expect(win.starts).toBe(1);
 });
 
-test("auto-start failure surfaces the not-ready message and keeps it across polls", async ({ page, request }) => {
+test("Start engine failure surfaces the not-ready message", async ({ page, request }) => {
   await engine(request, "down");
   await lifecycleBroken(request);
   await open(page);
-  await request.post("/__test/supervise/on");
-  await expect(page.getByTestId("error-banner")).toContainText("systemd", { timeout: 15_000 });
+  await expect(page.getByTestId("btn-start-engine")).toBeEnabled();
+  await page.getByTestId("btn-start-engine").click();
+  await expect(page.getByTestId("error-banner")).toContainText("systemd");
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "disconnected");
+});
+
+test("Start engine failure stays in the banner across refresh polls (also on Machines)", async ({ page, request }) => {
+  await engine(request, "down");
+  await lifecycleBroken(request);
+  await open(page);
+  await page.getByTestId("btn-start-engine").click();
+  await expect(page.getByTestId("error-banner")).toContainText("systemd");
   const st = () => page.evaluate(() => (window as unknown as { __wsld: { state(): { refreshCount: number } } }).__wsld.state());
   const count = (await st()).refreshCount;
   await expect.poll(async () => (await st()).refreshCount, { timeout: 10_000 }).toBeGreaterThan(count + 1);
@@ -211,27 +220,29 @@ test("defaults to English; the Settings language switch changes labels and persi
   await page.getByTestId("nav-settings").click();
   await expect(page).toHaveTitle("wsld");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
-  await expect(page.getByTestId("nav-containers")).toHaveText("Containers");
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
   await expect(page.getByTestId("lang-select")).toHaveAttribute("data-value", "en");
 
   await page.getByTestId("lang-select").click();
   await page.getByTestId("lang-select-option-zh-TW").click();
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
   await expect(page.getByTestId("nav-containers")).toHaveText("容器");
   await expect(page.getByTestId("status-connection")).toHaveText("已連線");
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
 
   await page.reload(); // 存在 config，不是只在記憶體
-  await expect(page.getByTestId("nav-containers")).toHaveText("容器");
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
   await expect(page.getByTestId("lang-select")).toHaveAttribute("data-value", "zh-TW");
 
   await page.getByTestId("lang-select").click();
   await page.getByTestId("lang-select-option-en").click();
-  await expect(page.getByTestId("nav-containers")).toHaveText("Containers");
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
 });
 
 test("every button carries a semantic icon; row actions are icon-only with an accessible name", async ({ page }) => {
   await open(page);
   const expected: Record<string, string> = {
+    "btn-start-engine": "power",
     "btn-open-folder": "folder",
     "btn-open-terminal": "terminal",
     "btn-start-web": "play",
@@ -261,6 +272,7 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
     await expect(b).toHaveAttribute("title", label);
     expect(await b.evaluate((e) => getComputedStyle(e).borderStyle)).toBe("none");
   }
+  await expect(page.getByTestId("btn-start-engine")).toHaveText("Start engine");
   await page.getByTestId("nav-settings").click();
   await expect(page.getByTestId("settings-save").locator("svg.ico")).toHaveAttribute("data-icon", "save");
 });

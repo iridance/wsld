@@ -97,6 +97,7 @@ interface State {
   /** 後端自行帶起引擎（程式啟動自動連線）中：畫面同樣顯示 Starting… */
   autoStarting?: boolean;
   /** 正在切換的 target distro 名稱；有值時 header 顯示 Loading／Switching */
+  switching?: string;
   paused: boolean;
   refreshCount: number;
   panel?: Panel;
@@ -498,8 +499,7 @@ export class App {
       const status = await api.status(signal);
       if (signal.aborted || gen !== this.refreshGen) return;
       this.st.status = status;
-      // 自動帶起 engine 的失敗原因（後端 Supervise 記錄）；就緒後清除
-      this.st.bringUpError = status.ready ? undefined : status.start_error;
+      if (status.ready) this.st.bringUpError = undefined;
       if (status.starting && !this.st.starting) {
         this.st.starting = this.st.autoStarting = true;
         this.renderHeader();
@@ -588,6 +588,28 @@ export class App {
   }
 
   // ---- 動作 -----------------------------------------------------------------
+
+  private async startEngine(): Promise<void> {
+    this.st.starting = true;
+    this.st.lastError = undefined;
+    this.st.bringUpError = undefined;
+    this.renderHeader();
+    this.renderBanner();
+    this.renderViewBody(); // Machines 列顯示 Starting…
+    try {
+      this.st.status = await api.startEngine();
+      // Start 可能順便完成未就緒 distro 的 init／寫入 profile
+      this.st.meta = await api.meta();
+      setMessages(this.st.meta.messages);
+      await this.loadView();
+      this.st.loaded.add(this.st.view);
+    } catch (e) {
+      this.st.lastError = this.st.bringUpError = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      this.st.starting = false;
+      this.renderAll();
+    }
+  }
 
   private async act(fn: () => Promise<void>): Promise<void> {
     let err: string | undefined;
@@ -848,7 +870,8 @@ export class App {
   }
 
   /** 引擎連線狀態（側欄發行版卡片與 Start engine 共用）。 */
-  private engineState(): { state: "starting" | "connected" | "disconnected"; text: string; dot: string } {
+  private engineState(): { state: "switching" | "starting" | "connected" | "disconnected"; text: string; dot: string } {
+    if (this.st.switching) return { state: "switching", text: t("gui.status.switching"), dot: "warn" };
     if (this.st.starting) return { state: "starting", text: t("gui.status.starting"), dot: "warn" };
     if (this.st.status?.ready === true) return { state: "connected", text: t("gui.status.connected"), dot: "ok" };
     return { state: "disconnected", text: t("gui.status.disconnected"), dot: "off" };
@@ -858,10 +881,20 @@ export class App {
    *  同時更新內容區頂端的頁標題與摘要。 */
   private renderHeader(): void {
     const actions = this.root.querySelector<HTMLElement>('[data-testid="top-actions"]')!;
-    const busy = this.st.starting;
+    const ready = this.st.status?.ready === true;
+    const switching = this.st.switching;
+    const busy = !!switching || this.st.starting;
 
-    const distro = this.st.status?.Distro || this.st.meta.distro;
-    const hasDistro = !!distro;
+    const startBtn = btn({ class: "primary", "data-testid": "btn-start-engine" }, "power", t("gui.ensure"));
+    // 未 init 的 active：即使舊引擎還連得上，也要能按 Start 觸發自動設定
+    const needsStart = !ready || this.st.meta.active_ready === false;
+    startBtn.disabled = busy || !needsStart;
+    // 已連線就不佔頁首空間；啟動中保留（停用）讓使用者看到進度
+    startBtn.hidden = !needsStart && !busy;
+    startBtn.onclick = () => void this.startEngine();
+
+    const distro = switching || this.st.status?.Distro || this.st.meta.distro;
+    const hasDistro = !!distro && !switching;
     const folderBtn = iconBtn({ class: "bordered", "data-testid": "btn-open-folder" }, "folder", t("gui.open_folder"));
     folderBtn.disabled = !hasDistro;
     folderBtn.onclick = () => void this.distroAction("open-folder");
@@ -878,6 +911,7 @@ export class App {
 
     actions.replaceChildren(
       el("div", { "data-testid": "distro-slot" }),
+      startBtn,
       el("span", { class: "top-sep", "aria-hidden": "true" }),
       el("div", { class: "distro-actions", "data-testid": "distro-actions", ...(busy ? { "aria-busy": "true" } : {}) }, folderBtn, termBtn),
       gear,
@@ -1027,6 +1061,9 @@ export class App {
     const s = this.st.status;
     const distro = s?.Distro || this.st.meta.distro || t("gui.title");
     const starting = this.st.starting;
+    const cta = btn({ class: "primary", "data-testid": "btn-engine-cta" }, "power", starting ? t("gui.status.starting") : t("gui.ensure"));
+    cta.disabled = starting || !!this.st.switching;
+    cta.onclick = () => void this.startEngine();
     const checks: [string, boolean | undefined, string?][] = [
       ["gui.check.distro", s?.DistroFound, distro],
       ["gui.check.running", s?.DistroRunning],
@@ -1048,7 +1085,7 @@ export class App {
       el("div", { class: "engine-down-icon", "aria-hidden": "true" }, icon("power")),
       el("h2", { text: starting ? t("gui.down.starting") : t("gui.down.title") }),
       el("p", { text: fmt(t("gui.down.body"), distro) }),
-      ...(!starting && s?.start_error ? [el("p", { class: "engine-down-error", "data-testid": "engine-down-error", text: s.start_error })] : []),
+      cta,
       list,
     );
   }
@@ -1063,17 +1100,19 @@ export class App {
   private renderDistroSwitch(): void {
     const slot = this.root.querySelector<HTMLElement>('[data-testid="distro-slot"]');
     if (!slot) return;
-    const distro = this.st.status?.Distro || this.st.meta.distro;
+    const switching = this.st.switching;
+    const distro = switching || this.st.status?.Distro || this.st.meta.distro;
     const eng = this.engineState();
     const nameRow: (Node | string)[] = [
       el("span", { class: "distro-name", "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
     ];
+    if (switching) nameRow.push(el("span", { class: "header-loading", "data-testid": "header-loading", text: t("gui.status.loading") }));
     const b = el("button", {
       type: "button",
       class: "distro-switch",
       "data-testid": "distro-switch",
       "aria-label": `${t("gui.nav.machines")}: ${distro || t("gui.title")} — ${eng.text}`,
-      ...(this.st.starting ? { "aria-busy": "true" } : {}),
+      ...(switching || this.st.starting ? { "aria-busy": "true" } : {}),
     });
     const port = (this.st.meta.api_endpoint || "").match(/:(\d+)$/)?.[1];
     b.append(
@@ -1102,7 +1141,7 @@ export class App {
   private renderBanner(): void {
     const b = this.root.querySelector<HTMLElement>('[data-testid="error-banner"]')!;
     // 動作錯誤優先（例如 Start 失敗），不要被 not-ready 橫幅蓋掉
-    if (this.st.lastError && !this.st.starting) {
+    if (this.st.lastError && !this.st.starting && !this.st.switching) {
       const prefix = t("gui.error.api");
       b.textContent = this.st.lastError === prefix || this.st.lastError.startsWith("docker api unreachable")
         ? `${prefix} — ${this.st.lastError === prefix ? (this.st.status?.APIError ?? prefix) : this.st.lastError}`
@@ -2000,10 +2039,9 @@ export class App {
     if (!list || !bar) return;
     list.classList.add("cards");
     const m = this.st.machines;
-    const removingAny = [...this.st.busy].some((k) => k.startsWith("remove:") || k.startsWith("role:"));
-    const hasEngine = m?.available ? m.machines.some((x) => x.role === "engine") : false;
+    const removingAny = [...this.st.busy].some((k) => k.startsWith("remove:"));
     const add = btn({ class: "primary", "data-testid": "btn-add-machine" }, "plus", t("gui.machines.add"));
-    add.disabled = !m?.available || this.st.busy.has("install") || removingAny || this.st.starting;
+    add.disabled = !m?.available || this.st.busy.has("install") || removingAny || !!this.st.switching || this.st.starting;
     add.onclick = () => this.openAddMachine();
     bar.replaceChildren(el("span", { class: "spacer" }), add);
     this.renderDiskSlot((m?.available ? m.machines : []).map((d) => ({ key: d.name, label: d.name, size: d.disk_bytes ?? 0 })));
@@ -2020,20 +2058,16 @@ export class App {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.machines") }));
       return;
     }
-    // Engine 單獨一組放最上面；其餘機器依原順序在下一組
-    const engineGrid = el("div", { class: "machine-grid" });
-    const otherGrid = el("div", { class: "machine-grid" });
+    const grid = el("div", { class: "machine-grid" });
     for (const d of m.machines) {
-      const isEngine = d.role === "engine";
-      const grid = isEngine ? engineGrid : otherGrid;
       const removing = this.st.busy.has(`remove:${d.name}`);
+      const switching = this.st.switching === d.name;
       const starting = (this.st.starting && d.active) || this.st.busy.has(`power-on:${d.name}`);
       const stopping = this.st.busy.has(`power-off:${d.name}`);
       const resizing = this.st.busy.has(`resize:${d.name}`);
       const compacting = this.st.busy.has(`compact:${d.name}`);
-      const configuring = this.st.busy.has(`role:${d.name}`);
-      const pending = configuring ? "configuring" : removing ? "removing" : starting ? "starting" : stopping ? "stopping" : resizing ? "resizing" : compacting ? "compacting" : undefined;
-      const locked = !!pending || removingAny || this.st.starting;
+      const pending = removing ? "removing" : switching ? "switching" : starting ? "starting" : stopping ? "stopping" : resizing ? "resizing" : compacting ? "compacting" : undefined;
+      const locked = !!pending || removingAny || !!this.st.switching || this.st.starting;
       const tools: HTMLElement[] = [];
       const cfg = iconBtn({ "data-testid": `btn-machine-config-${d.name}` }, "info", t("gui.machines.info"));
       cfg.disabled = locked;
@@ -2068,42 +2102,27 @@ export class App {
         : iconBtn({ "data-testid": `btn-machine-start-${d.name}` }, "play", t("gui.machines.start"));
       power.disabled = locked;
       power.onclick = () => void this.machinePower(d.name, running ? "off" : "on", d.active);
-      // Engine 是所有 distro 共用的 dockerd：不能停止、不能刪除（只在它沒在跑時留「啟動」）
-      tools.push(...(isEngine && running ? [] : [power]), cfg, folder, term, compact, ...(isEngine ? [] : [rm]));
+      tools.push(power, cfg, folder, term, compact, rm);
 
       const footKids: HTMLElement[] = [];
-      // engine／client 角色：沒有 engine 時可把任一機器設為 engine；有 engine 後其他機器可改為 client（共用 engine 的 docker）
-      const internal = d.name.toLowerCase().startsWith("docker-desktop");
-      if (!internal && d.role !== "engine" && d.role !== "client" && d.version === 2) {
-        const role: "engine" | "client" = hasEngine ? "client" : "engine";
-        const roleBtn = btn({ "data-testid": `btn-machine-role-${d.name}` }, "machines", t(role === "engine" ? "gui.machines.make_engine" : "gui.machines.make_client"));
-        roleBtn.disabled = locked;
-        roleBtn.onclick = () =>
-          void this.resourceAction(
-            `role:${d.name}`,
-            `${t(role === "engine" ? "gui.machines.make_engine_prompt" : "gui.machines.make_client_prompt")}\n${d.name}`,
-            async () => {
-              await api.setMachineRole(d.name, role);
-              this.st.meta = await api.meta();
-              setMessages(this.st.meta.messages);
-              return fmt(t("gui.machines.role_done"), d.name, t(role === "engine" ? "gui.machines.role_engine" : "gui.machines.role_client"));
-            },
-          );
-        footKids.push(roleBtn);
+      if (!d.active) {
+        const use = btn({ "data-testid": `btn-machine-use-${d.name}` }, "save", t("gui.machines.use"));
+        use.disabled = locked;
+        use.onclick = () => void this.useMachine(d.name);
+        footKids.push(use);
       }
       footKids.push(el("span", { class: "spacer" }), ...tools);
 
       const flags: HTMLElement[] = [];
-      if (d.role === "engine") flags.push(el("span", { class: "tag accent", "data-testid": "machine-flag-engine", text: t("gui.machines.role_engine"), title: t("gui.machines.role_engine_tip") }));
-      if (d.role === "client") flags.push(el("span", { class: "tag", "data-testid": "machine-flag-client", text: t("gui.machines.role_client"), title: t("gui.machines.role_client_tip") }));
+      if (d.active) flags.push(el("span", { class: "tag accent", "data-testid": "machine-flag-active", text: t("gui.machines.active"), title: d.api_endpoint || this.st.meta.api_endpoint }));
       if (d.managed && !d.ready) flags.push(el("span", { class: "tag warn", "data-testid": "machine-flag-not-ready", text: t("status.not_ready") }));
       if (d.default) flags.push(el("span", { class: "tag", "data-testid": "machine-flag-default", text: t("gui.machines.default") }));
       if (d.managed === false) flags.push(el("span", { class: "tag warn", "data-testid": "machine-flag-unmanaged", text: t("gui.machines.unmanaged") }));
       const stateText =
-        pending === "configuring"
-          ? t("gui.machines.configuring")
-          : pending === "removing"
+        pending === "removing"
           ? t("gui.machines.removing")
+          : pending === "switching"
+            ? t("gui.status.switching")
             : pending === "starting"
               ? t("gui.status.starting")
               : pending === "stopping"
@@ -2152,16 +2171,7 @@ export class App {
         ),
       );
     }
-    if (!engineGrid.hasChildNodes()) {
-      list.replaceChildren(otherGrid); // 還沒有 engine（首次設定中）：維持單一清單
-      return;
-    }
-    const group = (id: string, titleKey: string, g: HTMLElement) =>
-      el("section", { class: "machine-group", "data-testid": `machines-group-${id}` }, el("h3", { class: "machine-group-title", text: t(titleKey) }), g);
-    list.replaceChildren(
-      group("engine", "gui.machines.group_engine", engineGrid),
-      ...(otherGrid.hasChildNodes() ? [group("others", "gui.machines.group_others", otherGrid)] : []),
-    );
+    list.replaceChildren(grid);
   }
 
   /** 啟動／停止 distro。停止主要 distro 會連帶停掉 Docker，先確認。 */
@@ -2194,6 +2204,29 @@ export class App {
     this.st.volumes = [];
     this.st.networks = [];
     this.st.disk = undefined;
+  }
+
+  private async useMachine(name: string): Promise<void> {
+    if (this.st.switching) return;
+    this.st.switching = name;
+    this.st.lastError = undefined;
+    this.st.bringUpError = undefined;
+    this.renderHeader();
+    this.renderBanner();
+    this.renderViewBody(); // 鎖住其他「設為主要」
+    try {
+      await api.useMachine(name);
+      this.hardCutActive();
+      this.st.meta = await api.meta();
+      setMessages(this.st.meta.messages);
+      this.notify(fmt(t("gui.machines.used"), name));
+      await this.refresh();
+    } catch (e) {
+      this.st.lastError = this.st.bringUpError = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      this.st.switching = undefined;
+      this.renderAll();
+    }
   }
 
   private async openMachineInfo(name: string): Promise<void> {
@@ -3052,6 +3085,17 @@ export class App {
     if (s.ip_mismatch) hint(t("gui.k8s.hint.ip_mismatch"), "k8s-ip-mismatch", "k8s-hint bad");
     if (k.error) hint(k.error, "k8s-error", "k8s-hint bad");
     if (k.warning) hint(k.warning, "k8s-warning", "k8s-hint warn");
+    // 單一叢集限制：k3s 在另一台 machine 上時，提供一鍵移到目前的 primary
+    const active = this.activeDistro();
+    if (k.enabled && active && k.machine !== active && !k.op) {
+      const move = btn({ "data-testid": "btn-k8s-move" }, "play", fmt(t("gui.k8s.move"), active));
+      move.onclick = () => {
+        void this.confirm(fmt(t("gui.k8s.confirm.move"), k.machine, active), undefined, { label: t("gui.k8s.move_ok"), icon: "play", danger: false }).then((ok) => {
+          if (ok) void this.k8sRun(() => api.k8sOn({ machine: active, switch: true }));
+        });
+      };
+      card.append(el("p", { class: "k8s-hint", "data-testid": "k8s-owner", text: fmt(t("gui.k8s.hint.owner"), k.machine) }), move);
+    }
     return card;
   }
 

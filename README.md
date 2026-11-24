@@ -50,9 +50,8 @@ wsld init
 ### CLI
 
 ```powershell
-# 沒有 start／use：需要 Docker 的指令（ps、logs、exec、k8s…）會自動帶起共用 engine，首次使用會自動建立 wsld-engine
-wsld init --distro <d> --role engine   # 專用 dockerd distro：全部 distro 共用同一個引擎
-wsld init --distro <d> --role client   # 只裝 docker CLI，連到共用 engine
+wsld start                 # 喚醒 distro、起 dockerd
+wsld use <distro>          # 設為主要；首次會自動 init + start
 wsld unmanage <distro>     # 停 docker 並刪 profile（保留 WSL）
 wsld unregister <d> --confirm <d>
 wsld resize-disk <d> 60     # 調整磁碟上限（GB；需要關閉 WSL 時會說明，確認後加 --shutdown）
@@ -85,20 +84,19 @@ wsld-gui.exe           # 開主視窗；按 X 縮到系統匣
 wsld-gui.exe --tray    # 只留系統匣
 ```
 
-側欄切 Containers／Images／Volumes／Networks／Machines／Kubernetes／Settings；標題列可開資料夾、終端；開啟 wsld-gui 就會自動帶起引擎（首次自動建立 wsld-engine）。細節：[GUI](docs/GUI.md)。
+側欄切 Containers／Images／Volumes／Networks／Machines／Kubernetes／Settings；標題列可開資料夾、終端、啟動引擎。細節：[GUI](docs/GUI.md)。
 
 ### 重開機之後
 
-什麼都不用做：開著 wsld-gui（或任何 Docker 指令）會自動把引擎帶起來。並存 Desktop、踩坑：[OPERATIONS](docs/OPERATIONS.md)。
+再跑一次 `wsld start`，或在 GUI 按「啟動引擎」。並存 Desktop、踩坑：[OPERATIONS](docs/OPERATIONS.md)。
 
 ## 小提醒
 
 1. 程式碼放 WSL `$HOME`，別把 `C:\` 當主戰場。
 2. 用 WSL Remote 開發比較順。
 3. 盡量別跟 Docker Desktop 雙引擎混著玩。
-4. 不想每個 distro 各裝一份 Docker（image／volume 各存一份）？把其中一個設為 **engine**、其他設為 **client**，共用同一個 dockerd。注意：client 內 `-v /home/...` 這類 distro 內路徑的 bind mount 目前不支援，細節見 [OPERATIONS](docs/OPERATIONS.md#共用-engine專用-dockerd-distro)。
-5. API 預設 **23750**（占用會換），只聽 `127.0.0.1`。
-6. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：到 GUI Settings › 網路開啟「區網存取」，或執行 `wsld lan on`。wsld-gui 會在內網 IP 轉發容器的 published 埠。第一次開啟時若 wsld-gui 尚未通過 Windows 防火牆，wsld 會先說明要加的規則（私人＋公用網路、只接受同網段；規則綁定 exe 位置，搬移後需重新授權），按「繼續」後由 Windows 內建的 netsh 經 UAC 加入；授權前不轉發。只在 wsld-gui 執行時有效（含系統匣），API 不轉發。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
+4. API 預設 **23750**（占用會換），只聽 `127.0.0.1`。
+5. 要讓手機／其他電腦連到容器（`http://<內網IP>:8080`）：到 GUI Settings › 網路開啟「區網存取」，或執行 `wsld lan on`。wsld-gui 會在內網 IP 轉發容器的 published 埠。第一次開啟時若 wsld-gui 尚未通過 Windows 防火牆，wsld 會先說明要加的規則（私人＋公用網路、只接受同網段；規則綁定 exe 位置，搬移後需重新授權），按「繼續」後由 Windows 內建的 netsh 經 UAC 加入；授權前不轉發。只在 wsld-gui 執行時有效（含系統匣），API 不轉發。細節見 [OPERATIONS](docs/OPERATIONS.md#區網存取讓其他設備連到容器)。
 
 ## 開發
 

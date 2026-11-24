@@ -230,7 +230,7 @@ func TestStartBootstrapsWhenDockerUnitMissing(t *testing.T) {
 			{out: "", err: &wsl.ExitError{Code: 1}},
 		},
 		"-d Ubuntu-26.04 -u root -- id -u irice": {{out: "1000\n"}},
-		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {
 			{out: "WSLD_API_PORT=23750\n"},
 		},
 	}}
@@ -285,7 +285,7 @@ func TestInitPicksUbuntuDetectsUserRunsBundleAndParsesPort(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":          {{out: utf16(listUbuntuRunning)}},
 		"-d Ubuntu-26.04 -- id -un": {{out: "irice\n"}},
-		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "[wsld] ...\nWSLD_API_PORT=23751\nWSLD_API_ENDPOINT=tcp://127.0.0.1:23751\n"}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "[wsld] ...\nWSLD_API_PORT=23751\nWSLD_API_ENDPOINT=tcp://127.0.0.1:23751\n"}},
 	}}
 	var out bytes.Buffer
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("BUNDLE"), Output: &out, Sleep: func(time.Duration) {}}
@@ -309,7 +309,7 @@ func TestInitPassesBusyPortsFromOtherMachines(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":     {{out: utf16("  NAME STATE VERSION\r\n  Debian1 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
 		"-d Debian1 -- id -un": {{out: "bob\n"}},
-		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23751 --busy-ports 23750 --role engine": {{out: "WSLD_API_PORT=23752\n"}},
+		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23751 --busy-ports 23750": {{out: "WSLD_API_PORT=23752\n"}},
 	}}
 	cfg := config.Default()
 	cfg.UpsertMachine(config.Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: config.EndpointForPort(23750)})
@@ -331,7 +331,7 @@ func TestInitHonoursExplicitDistroUserPort(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":                     {{out: utf16("  NAME STATE VERSION\r\n  Ubuntu-22.04 Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")}},
 		"-d Ubuntu-22.04 -u root -- id -u bob": {{out: "1000\n"}},
-		"-d Ubuntu-22.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000 --role engine": {{out: "WSLD_API_PORT=24000\n"}},
+		"-d Ubuntu-22.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000": {{out: "WSLD_API_PORT=24000\n"}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	cfg, err := m.Init(context.Background(), InitOptions{Distro: "Ubuntu-22.04", User: "bob", Port: 24000})
@@ -355,7 +355,7 @@ func TestInitCreatesUserWhenDefaultIsRoot(t *testing.T) {
 		"-d Debian1 -u root -- useradd -m -s /bin/bash irice": {{}},
 		"-d Debian1 -u root -- usermod -aG sudo irice":        {{}},
 		"-d Debian1 -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
-		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
+		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
 	}}
 	var out bytes.Buffer
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Output: &out, Sleep: func(time.Duration) {}}
@@ -392,7 +392,7 @@ func TestInitAsksPasswordOnlyWhenCreatingUser(t *testing.T) {
 			"-d Debian1 -u root -- chpasswd":                      {{}},
 			"-d Debian1 -u root -- usermod -aG sudo irice":        {{}},
 			"-d Debian1 -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
-			"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
+			"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "WSLD_API_PORT=23750\n"}},
 		}}
 	}
 
@@ -482,7 +482,7 @@ func TestInitBootstrapExit3MapsToNotReady(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":          {{out: utf16(listUbuntuRunning)}},
 		"-d Ubuntu-26.04 -- id -un": {{out: "irice\n"}},
-		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "[wsld] WARN: systemd...", err: &wsl.ExitError{Code: 3}}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "[wsld] WARN: systemd...", err: &wsl.ExitError{Code: 3}}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	_, err := m.Init(context.Background(), InitOptions{})
@@ -495,7 +495,7 @@ func TestInitBootstrapExit5MapsToUnsupported(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose":          {{out: utf16(listUbuntuRunning)}},
 		"-d Ubuntu-26.04 -- id -un": {{out: "irice\n"}},
-		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "[wsld] ERROR: ...", err: &wsl.ExitError{Code: 5}}},
+		"-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750": {{out: "[wsld] ERROR: ...", err: &wsl.ExitError{Code: 5}}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	_, err := m.Init(context.Background(), InitOptions{})
@@ -559,167 +559,5 @@ func TestStatusSteadyStateSkipsWSLProbes(t *testing.T) {
 	}
 	if len(fr.calls) != n {
 		t.Fatalf("steady-state poll must not run wsl.exe: %v", fr.calls[n:])
-	}
-}
-
-func TestInitEngineRolePassesFlagAndMarksEngine(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose":                    {{out: utf16("  NAME STATE VERSION\r\n  wsld-engine Running 2\r\n")}},
-		"-d wsld-engine -u root -- id -u bob": {{out: "1000\n"}},
-		"-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
-	}}
-	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	cfg, err := m.Init(context.Background(), InitOptions{Distro: "wsld-engine", User: "bob", Role: config.RoleEngine})
-	if err != nil {
-		t.Fatal(err)
-	}
-	em, ok := cfg.EngineMachine()
-	if !ok || em.Distro != "wsld-engine" || em.APIEndpoint != "tcp://127.0.0.1:23750" {
-		t.Fatalf("engine machine = %+v %v", em, ok)
-	}
-	if cfg.Active != "wsld-engine" {
-		t.Fatalf("a fresh engine becomes active, got %q", cfg.Active)
-	}
-}
-
-func TestInitEngineRoleRefusesSecondEngineBeforeRunningBootstrap(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  E1 Running 2\r\n  E2 Running 2\r\n")}},
-	}}
-	cfg := config.Default()
-	cfg.UpsertMachine(config.Machine{Distro: "E1", User: "u", APIEndpoint: config.EndpointForPort(23750)})
-	_ = cfg.SetEngine("E1")
-	_ = cfg.SetActive("E1")
-	m := &Manager{WSL: fr, Cfg: cfg, API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	_, err := m.Init(context.Background(), InitOptions{Distro: "E2", User: "bob", Role: config.RoleEngine})
-	if err == nil || !strings.Contains(err.Error(), "E1") {
-		t.Fatalf("want error naming E1, got %v", err)
-	}
-	if fr.called("wsld-bootstrap.sh") {
-		t.Fatal("bootstrap must not run")
-	}
-}
-
-func TestInitClientRoleNeedsEngine(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {{out: utf16("  NAME STATE VERSION\r\n  Debian1 Running 2\r\n")}},
-	}}
-	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	_, err := m.Init(context.Background(), InitOptions{Distro: "Debian1", User: "bob", Role: config.RoleClient})
-	if !errors.Is(err, ErrNotReady) {
-		t.Fatalf("want ErrNotReady, got %v", err)
-	}
-	if fr.called("wsld-bootstrap.sh") {
-		t.Fatal("bootstrap must not run without an engine")
-	}
-}
-
-func TestInitClientRoleSharesEngineEndpointAndKeepsActive(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose":                {{out: utf16("  NAME STATE VERSION\r\n  E Running 2\r\n  Debian1 Running 2\r\n")}},
-		"-d Debian1 -u root -- id -u bob": {{out: "1000\n"}},
-		"-d Debian1 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --role client": {{out: "[wsld] done\n"}},
-	}}
-	cfg := config.Default()
-	cfg.UpsertMachine(config.Machine{Distro: "E", User: "u", APIEndpoint: config.EndpointForPort(23750)})
-	_ = cfg.SetEngine("E")
-	_ = cfg.SetActive("E")
-	m := &Manager{WSL: fr, Cfg: cfg, API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	got, err := m.Init(context.Background(), InitOptions{Distro: "Debian1", User: "bob", Role: config.RoleClient})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cm, ok := got.FindMachine("Debian1")
-	if !ok || cm.Role != config.RoleClient || cm.APIEndpoint != "tcp://127.0.0.1:23750" || cm.User != "bob" {
-		t.Fatalf("client machine = %+v %v", cm, ok)
-	}
-	if got.Active != "E" {
-		t.Fatalf("client init must not steal active, got %q", got.Active)
-	}
-}
-
-// ---- EnsureEngine：首次使用自動建立 wsld-engine ----
-
-func TestEnsureEngineNoopWhenEngineReady(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{}}
-	cfg := config.Default()
-	cfg.UpsertMachine(config.Machine{Distro: "wsld-engine", User: "u", APIEndpoint: config.EndpointForPort(23750)})
-	_ = cfg.SetEngine("wsld-engine")
-	m := &Manager{WSL: fr, Cfg: cfg, Bundle: []byte("B")}
-	got, err := m.EnsureEngine(context.Background(), InitOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(fr.calls) != 0 {
-		t.Fatalf("a ready engine must not touch WSL: %v", fr.calls)
-	}
-	if e, _ := got.EngineMachine(); e.Distro != "wsld-engine" {
-		t.Fatalf("cfg = %+v", got.Machines)
-	}
-}
-
-func TestEnsureEngineInstallsWsldEngineWhenMissing(t *testing.T) {
-	old := wsl.CurrentUsername
-	wsl.CurrentUsername = func() (string, error) { return `PC\irice`, nil }
-	defer func() { wsl.CurrentUsername = old }()
-
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose": {
-			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n")},
-			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n  wsld-engine Stopped 2\r\n")},
-		},
-		"--install -d Ubuntu --name wsld-engine --no-launch":      {{}},
-		"-d wsld-engine -- id -un":                                {{out: "root\n"}},
-		"-d wsld-engine -u root -- id -u irice":                   {{err: errors.New("no such user")}},
-		"-d wsld-engine -u root -- useradd -m -s /bin/bash irice": {{}},
-		"-d wsld-engine -u root -- usermod -aG sudo irice":        {{}},
-		"-d wsld-engine -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
-		"-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
-	}}
-	m := &Manager{WSL: fr, Cfg: config.Default(), Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	got, err := m.EnsureEngine(context.Background(), InitOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fr.called("--install -d Ubuntu --name wsld-engine") {
-		t.Fatalf("wsld-engine must be installed: %v", fr.calls)
-	}
-	e, ok := got.EngineMachine()
-	if !ok || e.Distro != DefaultEngineDistro || e.User != "irice" || e.APIEndpoint != "tcp://127.0.0.1:23750" {
-		t.Fatalf("engine = %+v %v", e, ok)
-	}
-}
-
-func TestEnsureEngineReusesExistingWsldEngineDistro(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose":                    {{out: utf16("  NAME STATE VERSION\r\n  wsld-engine Stopped 2\r\n")}},
-		"-d wsld-engine -u root -- id -u bob": {{out: "1000\n"}},
-		"-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
-	}}
-	m := &Manager{WSL: fr, Cfg: config.Default(), Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	if _, err := m.EnsureEngine(context.Background(), InitOptions{User: "bob"}); err != nil {
-		t.Fatal(err)
-	}
-	if fr.called("--install") {
-		t.Fatalf("must not reinstall an existing distro: %v", fr.calls)
-	}
-}
-
-func TestEnsureEngineBootstrapsAnUnreadyEngineProfile(t *testing.T) {
-	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose":          {{out: utf16("  NAME STATE VERSION\r\n  E Running 2\r\n")}},
-		"-d E -u root -- id -u bob": {{out: "1000\n"}},
-		"-d E -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
-	}}
-	cfg := config.Default()
-	cfg.UpsertMachine(config.Machine{Distro: "E"}) // 占位：未 init
-	_ = cfg.SetEngine("E")
-	m := &Manager{WSL: fr, Cfg: cfg, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	got, err := m.EnsureEngine(context.Background(), InitOptions{User: "bob"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e, _ := got.EngineMachine(); !e.Ready() {
-		t.Fatalf("engine must be ready after bootstrap: %+v", e)
 	}
 }

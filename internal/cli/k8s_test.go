@@ -86,22 +86,22 @@ func TestK8sOnEnablesStartsAndLeavesWindowsKubeconfigAlone(t *testing.T) {
 	}
 }
 
-func TestK8sOnRejectsClientMachineNamingTheEngine(t *testing.T) {
+func TestK8sOnRejectsSecondMachineNamingTheFirst(t *testing.T) {
 	h := newHarness(t, true)
 	h.k8sReady()
 	c := h.cfg(t)
-	c.UpsertMachine(config.Machine{Distro: "Other", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	c.UpsertMachine(config.Machine{Distro: "Other", User: "u", APIEndpoint: "tcp://127.0.0.1:23751", K8s: true})
 	if err := config.Save(h.app.ConfigPath, c); err != nil {
 		t.Fatal(err)
 	}
-	if code := h.run("k8s", "on", "--machine", "Other"); code != ExitError {
+	if code := h.run("k8s", "on"); code != ExitError {
 		t.Fatalf("code %d", code)
 	}
-	if !strings.Contains(h.errb.String(), "Ubuntu") {
-		t.Fatalf("error must name the engine: %s", h.errb)
+	if !strings.Contains(h.errb.String(), "Other") {
+		t.Fatalf("error must name the current owner: %s", h.errb)
 	}
-	if _, ok := h.cfg(t).K8sMachine(); ok {
-		t.Fatal("k8s must stay off")
+	if m, _ := h.cfg(t).K8sMachine(); m.Distro != "Other" {
+		t.Fatalf("owner must remain Other, got %q", m.Distro)
 	}
 }
 
@@ -253,14 +253,13 @@ func TestK8sUsageErrors(t *testing.T) {
 	}
 }
 
-func TestEngineBringUpResumesK3sWhenK8sIsOn(t *testing.T) {
+func TestStartResumesK3sForActiveMachineWithK8s(t *testing.T) {
 	h := newHarness(t, true)
 	h.k8sReady()
 	c := h.cfg(t)
 	_ = c.SetK8s("Ubuntu-26.04", true)
 	_ = config.Save(h.app.ConfigPath, c)
-	h.api.pingSeq = []error{errors.New("down")} // 引擎原本沒起來 → 帶起來時一併恢復 k3s
-	if code := h.run("ps"); code != ExitOK {
+	if code := h.run("start"); code != ExitOK {
 		t.Fatalf("code %d %s", code, h.errb)
 	}
 	started := false
@@ -270,15 +269,14 @@ func TestEngineBringUpResumesK3sWhenK8sIsOn(t *testing.T) {
 		}
 	}
 	if !started {
-		t.Fatalf("bringing the engine up must resume k3s: %v", h.wsl.calls)
+		t.Fatalf("wsld start must resume k3s: %v", h.wsl.calls)
 	}
 }
 
-func TestEngineBringUpLeavesK3sAloneWhenOff(t *testing.T) {
+func TestStartLeavesK3sAloneWhenOff(t *testing.T) {
 	h := newHarness(t, true)
 	h.k8sReady()
-	h.api.pingSeq = []error{errors.New("down")}
-	if code := h.run("ps"); code != ExitOK {
+	if code := h.run("start"); code != ExitOK {
 		t.Fatalf("code %d", code)
 	}
 	for _, c := range h.wsl.calls {

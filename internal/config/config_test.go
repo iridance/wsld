@@ -20,7 +20,7 @@ func TestDefaultValues(t *testing.T) {
 	}
 }
 
-func TestLoadMigratesFlatConfigToClientPlusDedicatedEngine(t *testing.T) {
+func TestLoadMigratesFlatConfigToMachines(t *testing.T) {
 	p := writeTemp(t, `
 distro = "Ubuntu-26.04"
 user = "irice"
@@ -31,19 +31,21 @@ lang = "zh-TW"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Lang != "zh-TW" {
-		t.Fatalf("lang = %q", c.Lang)
+	if c.Active != "Ubuntu-26.04" {
+		t.Fatalf("Active = %q", c.Active)
 	}
-	m, ok := c.FindMachine("Ubuntu-26.04")
-	if !ok || m.User != "irice" || m.APIEndpoint != "tcp://127.0.0.1:23751" || m.Role != RoleClient || !m.Ready() {
-		t.Fatalf("legacy machine must survive as a ready client: %+v %v", m, ok)
+	if len(c.Machines) != 1 {
+		t.Fatalf("Machines = %+v", c.Machines)
 	}
-	e, ok := c.EngineMachine()
-	if !ok || e.Distro != DefaultEngineDistro || e.Ready() {
-		t.Fatalf("a not-yet-created dedicated engine placeholder is expected, got %+v %v", e, ok)
+	m := c.Machines[0]
+	if m.Distro != "Ubuntu-26.04" || m.User != "irice" || m.APIEndpoint != "tcp://127.0.0.1:23751" {
+		t.Fatalf("machine = %+v", m)
 	}
-	if c.Active != DefaultEngineDistro || c.Distro != DefaultEngineDistro {
-		t.Fatalf("Active = %q Distro = %q", c.Active, c.Distro)
+	if c.Distro != m.Distro || c.User != m.User || c.APIEndpoint != m.APIEndpoint {
+		t.Fatalf("derived not synced: %+v", c)
+	}
+	if !m.Ready() {
+		t.Fatal("migrated machine should be Ready")
 	}
 }
 
@@ -62,7 +64,6 @@ api_endpoint = "tcp://127.0.0.1:23750"
 distro = "Ubuntu-22.04"
 user = "bob"
 api_endpoint = "tcp://127.0.0.1:23751"
-role = "engine"
 `)
 	c, err := Load(p)
 	if err != nil {
@@ -99,7 +100,6 @@ func TestSetActiveAndSaveWritesNewFormatOnly(t *testing.T) {
 	c := Default()
 	c.UpsertMachine(Machine{Distro: "A", User: "u1", APIEndpoint: "tcp://127.0.0.1:23750"})
 	c.UpsertMachine(Machine{Distro: "B", User: "u2", APIEndpoint: "tcp://127.0.0.1:23751"})
-	_ = c.SetEngine("A")
 	if err := c.SetActive("B"); err != nil {
 		t.Fatal(err)
 	}
@@ -145,12 +145,9 @@ func TestUpsertMachineUpdatesExisting(t *testing.T) {
 
 func TestLoadAppliesDefaultsForMissingOptionalFields(t *testing.T) {
 	p := writeTemp(t, `
-active = "Ubuntu-26.04"
-[[machines]]
 distro = "Ubuntu-26.04"
 user = "irice"
 api_endpoint = "tcp://127.0.0.1:23751"
-role = "engine"
 `)
 	c, err := Load(p)
 	if err != nil {
@@ -249,7 +246,6 @@ func TestSaveRoundTripAndCreatesDir(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "config.toml")
 	c := Default()
 	c.UpsertMachine(Machine{Distro: "Ubuntu-26.04", User: "irice", APIEndpoint: "tcp://127.0.0.1:23752"})
-	_ = c.SetEngine("Ubuntu-26.04")
 	_ = c.SetActive("Ubuntu-26.04")
 	c.ExecShell = "fish"
 	c.Theme = "dark"
@@ -459,7 +455,6 @@ func TestK8sRoundTripAndOmitWhenOff(t *testing.T) {
 	c := Default()
 	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", K8s: true})
 	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
-	_ = c.SetEngine("A")
 	c.EnsureActive(c.Machines[0])
 	if err := Save(p, c); err != nil {
 		t.Fatal(err)
@@ -564,289 +559,5 @@ func TestK8sAPIPortRoundTripAndValidation(t *testing.T) {
 	c.K8sAPIPort = 80
 	if err := c.Validate(); err == nil {
 		t.Fatal("port 80 should be rejected")
-	}
-}
-
-func TestEngineMachineNoneByDefault(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	if _, ok := c.EngineMachine(); ok {
-		t.Fatal("no engine by default")
-	}
-	if m, _ := c.FindMachine("A"); m.IsEngine() {
-		t.Fatal("default role is not engine")
-	}
-}
-
-func TestSetEngineAllowsOnlyOne(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "wsld-engine", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
-	c.EnsureActive(c.Machines[0])
-	if err := c.SetEngine("wsld-engine"); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetEngine("B"); err == nil || !strings.Contains(err.Error(), "wsld-engine") {
-		t.Fatalf("second engine must be rejected naming the first, got %v", err)
-	}
-	if m, ok := c.EngineMachine(); !ok || m.Distro != "wsld-engine" || m.Role != RoleEngine {
-		t.Fatalf("EngineMachine = %+v %v", m, ok)
-	}
-	if err := c.SetEngine("nope"); err == nil {
-		t.Fatal("unknown machine must error")
-	}
-	if err := c.ClearEngine(); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := c.EngineMachine(); ok {
-		t.Fatal("engine cleared")
-	}
-}
-
-func TestValidateRejectsTwoEngines(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", Role: RoleEngine})
-	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751", Role: RoleEngine})
-	c.EnsureActive(c.Machines[0])
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "engine") {
-		t.Fatalf("want engine conflict, got %v", err)
-	}
-}
-
-func TestValidateRejectsUnknownRole(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", Role: "bogus"})
-	c.EnsureActive(c.Machines[0])
-	if err := c.Validate(); err == nil {
-		t.Fatal("unknown role must be rejected")
-	}
-}
-
-func TestValidateK8sMustBeOnEngineWhenEngineExists(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", Role: RoleEngine})
-	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751", Role: RoleClient, K8s: true})
-	c.EnsureActive(c.Machines[0])
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "k8s") {
-		t.Fatalf("k8s on a client must be rejected, got %v", err)
-	}
-}
-
-func TestUpsertMachinePreservesRole(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	if err := c.SetEngine("E"); err != nil {
-		t.Fatal(err)
-	}
-	c.UpsertMachine(Machine{Distro: "e", User: "u2", APIEndpoint: "tcp://127.0.0.1:23760"}) // Init 重寫 profile
-	if m, _ := c.FindMachine("E"); m.Role != RoleEngine || m.User != "u2" {
-		t.Fatalf("role must survive upsert: %+v", m)
-	}
-}
-
-func TestRoleRoundTripAndOmitWhenEmpty(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "config.toml")
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
-	c.EnsureActive(c.Machines[0])
-	if err := c.SetEngine("E"); err != nil {
-		t.Fatal(err)
-	}
-	if err := Save(p, c); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(p)
-	if strings.Count(string(raw), "role") != 1 {
-		t.Fatalf("role written only for engine:\n%s", raw)
-	}
-	got, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m, ok := got.EngineMachine(); !ok || m.Distro != "E" {
-		t.Fatalf("round trip lost engine: %+v", got.Machines)
-	}
-}
-
-func TestSetK8sMustBeOnEngineWhenEngineExists(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	_ = c.SetEngine("E")
-	_ = c.SetClient("B")
-	c.EnsureActive(c.Machines[0])
-	if err := c.SetK8s("B", true); err == nil || !strings.Contains(err.Error(), "E") {
-		t.Fatalf("k8s on a client must be rejected naming the engine, got %v", err)
-	}
-	if err := c.SetK8s("E", true); err != nil {
-		t.Fatalf("k8s on the engine must work: %v", err)
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSetEngineRefusedWhileK8sRunsElsewhere(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
-	_ = c.SetK8s("A", true)
-	c.EnsureActive(c.Machines[0])
-	if err := c.SetEngine("E"); err == nil || !strings.Contains(err.Error(), "k8s") {
-		t.Fatalf("want k8s conflict, got %v", err)
-	}
-	if _, ok := c.EngineMachine(); ok {
-		t.Fatal("engine must not be set on failure")
-	}
-	if err := c.SetEngine("A"); err != nil {
-		t.Fatalf("promoting the k8s machine itself is fine: %v", err)
-	}
-}
-
-func TestK8sTargetPrefersEngineOverActive(t *testing.T) {
-	c := Default()
-	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
-	c.EnsureActive(c.Machines[0])
-	if m, ok := c.K8sTarget(); !ok || m.Distro != "A" {
-		t.Fatalf("no engine → active, got %+v %v", m, ok)
-	}
-	_ = c.SetEngine("E")
-	if m, ok := c.K8sTarget(); !ok || m.Distro != "E" {
-		t.Fatalf("engine → engine, got %+v %v", m, ok)
-	}
-}
-
-// ---- 舊設定（獨立模式、可切換 active）載入時遷移成 engine + client ----
-
-func writeCfg(t *testing.T, body string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-func TestLoadMigratesEveryReadyMachineToAClientAndAddsADedicatedEngine(t *testing.T) {
-	p := writeCfg(t, `active = "B"
-[[machines]]
-distro = "A"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23750"
-[[machines]]
-distro = "B"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23751"
-[[machines]]
-distro = "Placeholder"
-`)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, ok := c.EngineMachine()
-	if !ok || e.Distro != "wsld-engine" || e.Ready() {
-		t.Fatalf("a dedicated, not-yet-created engine is expected, got %+v %v", e, ok)
-	}
-	for _, n := range []string{"A", "B"} {
-		if m, _ := c.FindMachine(n); m.Role != RoleClient {
-			t.Fatalf("%s must become a client: %+v", n, m)
-		}
-	}
-	if ph, _ := c.FindMachine("Placeholder"); ph.Role != "" {
-		t.Fatalf("never-initialised placeholder keeps no role: %+v", ph)
-	}
-	if c.Active != "wsld-engine" {
-		t.Fatalf("Active = %q", c.Active)
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLoadMigrationClearsK8sFlagsBecauseK3sMustLiveOnTheEngine(t *testing.T) {
-	p := writeCfg(t, `active = "A"
-[[machines]]
-distro = "A"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23750"
-[[machines]]
-distro = "K"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23751"
-k8s = true
-`)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, on := c.K8sMachine(); on {
-		t.Fatal("k8s flags must be cleared during migration")
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLoadMigrationReusesAnExistingWsldEngineMachine(t *testing.T) {
-	p := writeCfg(t, `active = "A"
-[[machines]]
-distro = "A"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23750"
-[[machines]]
-distro = "wsld-engine"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23751"
-`)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "wsld-engine" || !e.Ready() {
-		t.Fatalf("an existing wsld-engine must be reused: %+v %v", e, ok)
-	}
-	if n := len(c.Machines); n != 2 {
-		t.Fatalf("no duplicate profile expected, got %d", n)
-	}
-	if a, _ := c.FindMachine("A"); a.Role != RoleClient {
-		t.Fatalf("A = %+v", a)
-	}
-}
-
-func TestLoadMigrationIsIdempotentAndKeepsExistingEngine(t *testing.T) {
-	p := writeCfg(t, `active = "A"
-[[machines]]
-distro = "A"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23750"
-role = "client"
-[[machines]]
-distro = "E"
-user = "u"
-api_endpoint = "tcp://127.0.0.1:23751"
-role = "engine"
-`)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e, _ := c.EngineMachine(); e.Distro != "E" {
-		t.Fatalf("an existing engine must not be replaced: %q", e.Distro)
-	}
-	if a, _ := c.FindMachine("A"); a.Role != RoleClient {
-		t.Fatalf("A = %+v", a)
-	}
-}
-
-func TestEmptyConfigStaysEmpty(t *testing.T) {
-	c, err := Load(writeCfg(t, ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := c.EngineMachine(); ok || len(c.Machines) != 0 {
-		t.Fatalf("empty config must stay empty: %+v", c)
 	}
 }
