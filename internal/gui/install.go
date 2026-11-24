@@ -55,7 +55,7 @@ type InstallProgress struct {
 	Active       bool   `json:"active"`
 	Distribution string `json:"distribution,omitempty"`
 	Name         string `json:"name,omitempty"`
-	// Phase：preparing（尚未開始下載）／downloading／installing（下載完、匯入中，或無法追蹤下載）／joining（加入共用 engine 中）。
+	// Phase：preparing（尚未開始下載）／downloading／installing（下載完、匯入中，或無法追蹤下載）／joining（加入共用 engine 中）／bootstrapping（engine 內安裝 Docker 中）。
 	Phase       string `json:"phase,omitempty"`
 	Downloaded  int64  `json:"downloaded"`
 	Total       int64  `json:"total"` // 0 = 未知
@@ -77,7 +77,7 @@ type installState struct {
 	untracked  bool // 查不到總大小 → 沒有 .wsl 暫存檔可追
 	sawFile    bool
 	samples    []sizeSample
-	joining    bool // 安裝完成，正在加入共用 engine（bootstrap client）
+	phase      string // 強制階段：joining（加入共用 engine）、bootstrapping（建立 engine 時在 distro 內安裝 Docker）；空＝依下載狀況推算
 }
 
 // installTracker 記錄唯一一個進行中的安裝（wsl.exe 不支援同時安裝）。
@@ -108,11 +108,14 @@ func (t *installTracker) begin(dist, name string) bool {
 }
 
 // setJoining 標記進入「加入共用 engine」階段（進度條改顯示 joining，而不是停在下載完成的畫面）。
-func (t *installTracker) setJoining() {
+func (t *installTracker) setJoining() { t.setPhase("joining") }
+
+// setPhase 強制目前階段（之後不再依下載狀況推算）。
+func (t *installTracker) setPhase(p string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.cur != nil {
-		t.cur.joining = true
+		t.cur.phase = p
 	}
 }
 
@@ -148,8 +151,8 @@ func (t *installTracker) snapshot() InstallProgress {
 		Active: true, Distribution: c.dist, Name: c.name,
 		Total: c.total, ElapsedSec: int64(now.Sub(c.started) / time.Second),
 	}
-	if c.joining {
-		p.Phase = "joining"
+	if c.phase != "" {
+		p.Phase = c.phase
 		return p
 	}
 	if t.probe == nil {

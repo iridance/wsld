@@ -668,7 +668,7 @@ func TestEnsureEngineInstallsWsldEngineWhenMissing(t *testing.T) {
 			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n")},
 			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n  wsld-engine Stopped 2\r\n")},
 		},
-		"--install -d Ubuntu --name wsld-engine --no-launch":      {{}},
+		"--install -d Debian --name wsld-engine --vhd-size 100GB --no-launch": {{}},
 		"-d wsld-engine -- id -un":                                {{out: "root\n"}},
 		"-d wsld-engine -u root -- id -u irice":                   {{err: errors.New("no such user")}},
 		"-d wsld-engine -u root -- useradd -m -s /bin/bash irice": {{}},
@@ -681,7 +681,7 @@ func TestEnsureEngineInstallsWsldEngineWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !fr.called("--install -d Ubuntu --name wsld-engine") {
+	if !fr.called("--install -d Debian --name wsld-engine --vhd-size 100GB") {
 		t.Fatalf("wsld-engine must be installed: %v", fr.calls)
 	}
 	e, ok := got.EngineMachine()

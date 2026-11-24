@@ -668,6 +668,20 @@ func (s *Server) createEngine(ctx context.Context, cfg *config.Config) error {
 		_ = cfg.SetActive(name)
 	case *lifecycle.Manager:
 		life.Cfg = *cfg
+		// 進度：沿用 wsl --install 的下載追蹤，並在 bootstrap 階段切成 bootstrapping（Machines 頁顯示建立進度）。
+		name := lifecycle.DefaultEngineDistro
+		if e, ok := cfg.EngineMachine(); ok {
+			name = e.Distro
+		}
+		if done, ok := s.trackInstall(ctx, cfg.EngineBaseOrDefault(), name); ok {
+			defer done()
+			life.Progress = func(stage string) {
+				if stage == "bootstrapping" {
+					s.installs().setPhase("bootstrapping")
+				}
+			}
+			defer func() { life.Progress = nil }()
+		}
 		got, err := life.EnsureEngine(ctx, lifecycle.InitOptions{})
 		if err != nil {
 			return err

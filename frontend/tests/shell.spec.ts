@@ -97,7 +97,7 @@ test("top bar shows the brand mark and the active distro with engine state; clic
   const nav = page.getByTestId("header");
   await expect(nav.getByTestId("brand-mark")).toBeVisible();
   const sw = nav.getByTestId("distro-switch");
-  await expect(sw.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
+  await expect(sw.getByTestId("header-distro")).toHaveCount(0); // 不顯示 engine 名稱
   await expect(sw.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
   await expect(sw.getByTestId("engine-dot")).toHaveClass(/\bok\b/);
   await sw.click();

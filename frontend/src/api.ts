@@ -148,7 +148,7 @@ export interface InstallProgress {
   active: boolean;
   distribution?: string;
   name?: string;
-  phase?: "preparing" | "downloading" | "installing" | "joining";
+  phase?: "preparing" | "downloading" | "installing" | "joining" | "bootstrapping";
   downloaded: number;
   total: number;
   bytes_per_sec: number;

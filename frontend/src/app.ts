@@ -92,6 +92,8 @@ interface State {
   /** 通知不自動消失（長時間作業的結果，使用者可能已切走）；需按 ✕ 關閉 */
   noticeSticky?: boolean;
   starting: boolean;
+  /** 建立 engine 中的進度（Machines 頁的 engine 卡片顯示；undefined＝沒有在建立） */
+  engineBuild?: InstallProgress;
   /** 已完成首次載入的頁面；未載入前顯示對齊資料版面的 loading 佔位，載入後才切成實際內容／空狀態 */
   loaded: Set<View>;
   /** 後端自行帶起引擎（程式啟動自動連線）中：畫面同樣顯示 Starting… */
@@ -510,7 +512,14 @@ export class App {
       }
       if (this.st.view === "machines" || this.st.view === "settings" || this.st.view === "kubernetes") {
         // WSL 清單／設定／k3s 不依賴 Docker 引擎
-        if (this.st.view === "machines") this.st.machines = await api.machines(signal);
+        if (this.st.view === "machines") {
+          this.st.machines = await api.machines(signal);
+          // 建立 engine（wsl --install＋bootstrap）期間顯示進度；平常不多打一支 API
+          if (this.st.starting) {
+            const p = await api.installProgress().catch(() => undefined);
+            this.st.engineBuild = p?.active ? p : undefined;
+          } else this.st.engineBuild = undefined;
+        }
         if (this.st.view === "kubernetes") await (k8sLoad ?? this.loadKubernetes(signal));
         if (signal.aborted || gen !== this.refreshGen) return;
         this.st.lastError = this.st.starting ? undefined : this.st.bringUpError;
@@ -1065,9 +1074,6 @@ export class App {
     if (!slot) return;
     const distro = this.st.status?.Distro || this.st.meta.distro;
     const eng = this.engineState();
-    const nameRow: (Node | string)[] = [
-      el("span", { class: "distro-name", "data-testid": "header-distro", text: distro || t("gui.title"), title: distro ? `${t("gui.title")} — ${distro}` : t("gui.title") }),
-    ];
     const b = el("button", {
       type: "button",
       class: "distro-switch",
@@ -1078,7 +1084,6 @@ export class App {
     const port = (this.st.meta.api_endpoint || "").match(/:(\d+)$/)?.[1];
     b.append(
       el("span", { class: `dot ${eng.dot}`, "data-testid": "engine-dot" }),
-      ...nameRow,
       el("span", { class: "distro-status", "data-state": eng.state },
         el("span", { "data-testid": "status-connection", "data-state": eng.state, text: eng.text }),
         eng.state === "connected" && port ? ` · :${port}` : "",
@@ -2016,15 +2021,18 @@ export class App {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.machines.unavailable") }));
       return;
     }
-    if (m.machines.length === 0) {
+    const build = this.st.engineBuild;
+    if (m.machines.length === 0 && !build) {
       list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.machines") }));
       return;
     }
     // Engine 單獨一組放最上面；其餘機器依原順序在下一組
-    const engineGrid = el("div", { class: "machine-grid" });
+    const engineGrid = el("div", { class: "machine-grid engine-grid" });
     const otherGrid = el("div", { class: "machine-grid" });
+    if (build) engineGrid.append(this.engineBuildCard(build));
     for (const d of m.machines) {
       const isEngine = d.role === "engine";
+      if (isEngine && build) continue; // 建立中：由 engine 建立卡片取代
       const grid = isEngine ? engineGrid : otherGrid;
       const removing = this.st.busy.has(`remove:${d.name}`);
       const starting = (this.st.starting && d.active) || this.st.busy.has(`power-on:${d.name}`);
@@ -2097,8 +2105,6 @@ export class App {
       footKids.push(el("span", { class: "spacer" }), ...tools);
 
       const flags: HTMLElement[] = [];
-      if (d.exposed) flags.push(el("span", { class: "tag warn", "data-testid": "machine-flag-exposed", text: t("gui.machines.exposed"), title: t("gui.machines.exposed_tip") }));
-      if (d.role === "engine") flags.push(el("span", { class: "tag accent", "data-testid": "machine-flag-engine", text: t("gui.machines.role_engine"), title: t("gui.machines.role_engine_tip") }));
       if (d.role === "client") flags.push(el("span", { class: "tag", "data-testid": "machine-flag-client", text: t("gui.machines.role_client"), title: t("gui.machines.role_client_tip") }));
       if (d.managed && !d.ready) flags.push(el("span", { class: "tag warn", "data-testid": "machine-flag-not-ready", text: t("status.not_ready") }));
       if (d.default) flags.push(el("span", { class: "tag", "data-testid": "machine-flag-default", text: t("gui.machines.default") }));
@@ -2140,6 +2146,37 @@ export class App {
       if (d.active && (d.api_endpoint || this.st.meta.api_endpoint)) {
         meta.push(el("span", { class: "muted mono", "data-testid": "machine-endpoint", text: ` · ${d.api_endpoint || this.st.meta.api_endpoint}` }));
       }
+      if (isEngine) {
+        // Engine：全寬 stat card——資訊拆成欄位，按鈕收在右側
+        const stat = (label: string, ...value: (Node | string)[]) =>
+          el("div", { class: "stat" }, el("span", { class: "stat-label", text: label }), el("span", { class: "stat-value" }, ...value));
+        const stats: HTMLElement[] = [
+          stat(t("gui.machines.stat_state"), el("span", { class: `state ${pending ? "pending" : d.state.toLowerCase()}`, "data-testid": "machine-state", text: stateText })),
+        ];
+        if ((d.disk_bytes ?? 0) > 0) {
+          stats.push(stat(t("gui.machines.disk"),
+            el("span", { "data-testid": "machine-disk", "data-size": String(d.disk_bytes), title: t("gui.machines.disk_hint"), text: humanSize(d.disk_bytes ?? 0) }),
+            ...((d.disk_limit_bytes ?? 0) > 0
+              ? [" / ", el("span", { "data-testid": "machine-disk-limit", title: t("gui.machines.disk_limit"), text: humanSize(d.disk_limit_bytes ?? 0) })]
+              : [])));
+        }
+        if (d.active && (d.api_endpoint || this.st.meta.api_endpoint)) {
+          stats.push(stat(t("gui.machines.stat_endpoint"), el("span", { class: "mono", "data-testid": "machine-endpoint", text: d.api_endpoint || this.st.meta.api_endpoint })));
+        }
+        grid.append(
+          el("article", { ...attrs, class: `${attrs.class} engine-card` },
+            el("div", { class: "machine-head" },
+              el("span", { class: "machine-icon", "aria-hidden": "true" }, distroLogo(d.name) ?? icon("machines")),
+              // 群組標題已是 Docker engine：不顯示 wsld-engine 名稱（只留給螢幕閱讀器）；沒有 tag 時不放標題欄，避免 icon 與 stat 之間多出空隙
+              el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: d.name }),
+              ...(flags.length ? [el("div", { class: "machine-title" }, el("div", { class: "machine-name-row" }, ...flags))] : []),
+            ),
+            el("div", { class: "machine-stats" }, ...stats),
+            el("div", { class: "machine-tools" }, ...tools),
+          ),
+        );
+        continue;
+      }
       grid.append(
         el("article", attrs,
           el("div", { class: "machine-head" },
@@ -2165,6 +2202,35 @@ export class App {
     list.replaceChildren(
       group("engine", "gui.machines.group_engine", engineGrid),
       ...(otherGrid.hasChildNodes() ? [group("others", "gui.machines.group_others", otherGrid)] : []),
+    );
+  }
+
+  /** 建立 engine 中的卡片：全寬，顯示步驟（Download → Register → Set up Docker）與進度條。 */
+  private engineBuildCard(p: InstallProgress): HTMLElement {
+    const phase = p.phase ?? "installing";
+    const cur = phase === "bootstrapping" ? 2 : phase === "installing" ? 1 : 0;
+    const steps = ["download", "register", "docker"];
+    const list = el("ol", { class: "k8s-steps engine-build-steps", "data-testid": "engine-build-steps" });
+    steps.forEach((step, i) => {
+      const status = i < cur ? "done" : i === cur ? "active" : "todo";
+      list.append(el("li", { class: `k8s-step ${status}`, "data-testid": `engine-build-step-${step}`, "data-status": status },
+        el("span", { class: "k8s-step-mark", "aria-hidden": "true", text: status === "done" ? "✓" : status === "active" ? "…" : "○" }),
+        el("span", { text: t(`gui.machines.engine_step_${step}`) }),
+      ));
+    });
+    const block = engineProgressBlock();
+    updateInstallProgress(block, p);
+    const name = p.name || "wsld-engine";
+    return el("article", { class: "machine-card engine-card engine-build", "data-testid": "engine-build", "data-name": name, "data-phase": phase, "aria-label": name },
+      el("div", { class: "machine-head" },
+        el("span", { class: "machine-icon", "aria-hidden": "true" }, distroLogo(name) ?? icon("machines")),
+        el("div", { class: "machine-title" },
+          el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: name }),
+          el("div", { class: "machine-meta", text: t("gui.machines.engine_building") }),
+        ),
+      ),
+      list,
+      el("div", { class: "engine-build-progress" }, block),
     );
   }
 
@@ -4969,6 +5035,15 @@ function installProgressBlock(): HTMLElement {
   );
 }
 
+/** 建立 engine 的進度區塊（Machines 頁）：沿用 installProgressBlock 的版面，testid 前綴換成 engine-build-progress。 */
+function engineProgressBlock(): HTMLElement {
+  const b = installProgressBlock();
+  b.removeAttribute("hidden");
+  b.setAttribute("data-testid", "engine-build-progress");
+  for (const part of ["label", "pct", "detail"]) b.querySelector(`[data-testid="add-machine-progress-${part}"]`)?.setAttribute("data-testid", `engine-build-progress-${part}`);
+  return b;
+}
+
 function updateInstallProgress(block: HTMLElement, p: InstallProgress): void {
   const phase = p.phase ?? "installing";
   const known = phase === "downloading" && p.total > 0;
@@ -4978,15 +5053,15 @@ function updateInstallProgress(block: HTMLElement, p: InstallProgress): void {
   if (known) block.removeAttribute("data-indeterminate");
   else block.setAttribute("data-indeterminate", "true");
   block.querySelector<HTMLElement>(".usage-fill")!.style.width = `${pct}%`;
-  block.querySelector<HTMLElement>('[data-testid="add-machine-progress-label"]')!.textContent = t(`gui.machines.progress_${phase}`);
-  block.querySelector<HTMLElement>('[data-testid="add-machine-progress-pct"]')!.textContent = known ? `${pct}%` : "";
+  block.querySelector<HTMLElement>('[data-testid$="progress-label"]')!.textContent = t(`gui.machines.progress_${phase}`);
+  block.querySelector<HTMLElement>('[data-testid$="progress-pct"]')!.textContent = known ? `${pct}%` : "";
   const parts: string[] = [];
   if (phase === "downloading" && p.downloaded > 0) {
     parts.push(p.total > 0 ? `${humanSize(p.downloaded)} / ${humanSize(p.total)}` : humanSize(p.downloaded));
     if (p.bytes_per_sec > 0) parts.push(`${humanSize(p.bytes_per_sec)}/s`);
   }
   parts.push(fmt(t("gui.machines.progress_elapsed"), fmtElapsed(p.elapsed_sec)));
-  block.querySelector<HTMLElement>('[data-testid="add-machine-progress-detail"]')!.textContent = parts.join(" · ");
+  block.querySelector<HTMLElement>('[data-testid$="progress-detail"]')!.textContent = parts.join(" · ");
 }
 
 /** 秒數 → m:ss（滿一小時 → h:mm:ss）。 */

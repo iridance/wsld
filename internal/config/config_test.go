@@ -850,3 +850,25 @@ func TestEmptyConfigStaysEmpty(t *testing.T) {
 		t.Fatalf("empty config must stay empty: %+v", c)
 	}
 }
+
+func TestEngineBaseDefaultsToDebianAndRoundTrips(t *testing.T) {
+	c := Default()
+	if got := c.EngineBaseOrDefault(); got != "Debian" {
+		t.Fatalf("default engine base = %q", got)
+	}
+	c.EngineBase = "  Ubuntu-24.04 "
+	if got := c.EngineBaseOrDefault(); got != "Ubuntu-24.04" {
+		t.Fatalf("custom engine base = %q", got)
+	}
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EngineBase != c.EngineBase {
+		t.Fatalf("engine_base not persisted: %q", got.EngineBase)
+	}
+}

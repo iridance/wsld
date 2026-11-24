@@ -8,7 +8,7 @@ test.beforeEach(async ({ request }) => {
 test("top bar carries distro, connection and version; Settings carries github and language; page title sits in the content", async ({ page }) => {
   await open(page);
   const nav = page.getByTestId("header");
-  await expect(nav.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
+  await expect(nav.getByTestId("header-distro")).toHaveCount(0);
   await expect(nav.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
   await expect(nav.getByTestId("status-version")).toHaveText("vtesthost");
   await expect(nav.getByTestId("status-github")).toHaveCount(0);
@@ -265,10 +265,10 @@ test("every button carries a semantic icon; row actions are icon-only with an ac
   await expect(page.getByTestId("settings-save").locator("svg.ico")).toHaveAttribute("data-icon", "save");
 });
 
-test("header shows the connected WSL distro name next to the connection badge", async ({ page }) => {
+test("header shows the connection badge without the engine distro name", async ({ page }) => {
   await open(page);
-  await expect(page.getByTestId("header-distro")).toHaveText("Ubuntu-26.04");
-  await expect(page.getByTestId("header-distro")).toBeVisible();
+  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
+  await expect(page.getByTestId("header-distro")).toHaveCount(0);
 });
 
 test("container toolbar: status filter and search narrow the list; header shows the running/stopped summary", async ({ page }) => {

@@ -71,6 +71,8 @@ type Config struct {
 	LANAccess bool `toml:"lan_access,omitempty"`
 	// K8sAPIPort：新安裝 k3s 的 API server 埠（0 = 預設 26443，避開常被占用的 6443）。已安裝的 k3s 不受影響。
 	K8sAPIPort int `toml:"k8s_api_port,omitempty"`
+	// EngineBase：新建 wsld-engine 時 `wsl --install -d` 用的發行版名稱（"" = DefaultEngineBase）。只影響新建，既有 engine 不動。
+	EngineBase string `toml:"engine_base,omitempty"`
 
 	// 自 active machine 衍生，不寫入檔案（供 lifecycle／doctor 沿用欄位存取）。
 	Distro      string `toml:"-"`
@@ -90,6 +92,7 @@ type fileShape struct {
 	Theme              string    `toml:"theme"`
 	LANAccess          bool      `toml:"lan_access"`
 	K8sAPIPort         int       `toml:"k8s_api_port"`
+	EngineBase         string    `toml:"engine_base"`
 	// Legacy flat keys
 	Distro      string `toml:"distro"`
 	User        string `toml:"user"`
@@ -153,6 +156,7 @@ func Load(path string) (Config, error) {
 	c.Theme = raw.Theme
 	c.LANAccess = raw.LANAccess
 	c.K8sAPIPort = raw.K8sAPIPort
+	c.EngineBase = raw.EngineBase
 	if raw.RefreshIntervalSec != 0 {
 		c.RefreshIntervalSec = raw.RefreshIntervalSec
 	}
@@ -177,6 +181,18 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return c, nil
+}
+
+// DefaultEngineBase 是新建 wsld-engine 預設使用的發行版（`wsl --install -d` 的名稱）：
+// Debian 的 rootfs 與常駐佔用比 Ubuntu 小，且有 systemd 與 Docker 官方 apt 來源，k3s 也能直接跑。
+const DefaultEngineBase = "Debian"
+
+// EngineBaseOrDefault 回傳新建 engine 要安裝的發行版名稱。
+func (c Config) EngineBaseOrDefault() string {
+	if b := strings.TrimSpace(c.EngineBase); b != "" {
+		return b
+	}
+	return DefaultEngineBase
 }
 
 // DefaultEngineDistro 是專用 engine distro 的名稱（首次使用或遷移舊設定時建立）。
@@ -241,6 +257,7 @@ type saveShape struct {
 	Theme              string    `toml:"theme,omitempty"`
 	LANAccess          bool      `toml:"lan_access,omitempty"`
 	K8sAPIPort         int       `toml:"k8s_api_port,omitempty"`
+	EngineBase         string    `toml:"engine_base,omitempty"`
 }
 
 // Save 驗證後寫入新格式（會建立目錄）。
@@ -263,6 +280,7 @@ func Save(path string, c Config) error {
 		Theme:              c.Theme,
 		LANAccess:          c.LANAccess,
 		K8sAPIPort:         c.K8sAPIPort,
+		EngineBase:         c.EngineBase,
 	}
 	data, err := toml.Marshal(out)
 	if err != nil {

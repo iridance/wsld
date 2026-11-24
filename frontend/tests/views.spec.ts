@@ -162,8 +162,8 @@ test("Machines: lists local WSL distros with state, version and role badges", as
   await expect(page.getByTestId("machine-row")).toHaveCount(2);
   const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
   await expect(u.getByTestId("machine-state")).toHaveText("Running");
-  await expect(u.getByTestId("machine-version")).toHaveText("2");
-  await expect(u.getByTestId("machine-flag-engine")).toBeVisible();
+  await expect(u.getByTestId("machine-version")).toHaveCount(0); // engine 卡片不顯示 WSL 版本
+  await expect(u.getByTestId("machine-flag-engine")).toHaveCount(0);
   await expect(u.getByTestId("machine-flag-default")).toBeVisible();
   const dd = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
   await expect(dd.getByTestId("machine-state")).toHaveText("Stopped");
@@ -178,18 +178,16 @@ test("Machines: card icon is the distro logo, generic icon when unrecognised", a
   await expect(dd.locator('.machine-icon svg[data-icon="machines"]')).toBeVisible();
 });
 
-test("Machines: the engine is labelled Engine and nothing offers Set as primary", async ({ page }) => {
+test("Machines: the engine sits under the Engine group and nothing offers Set as primary", async ({ page }) => {
   await go(page, "machines");
-  const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(u.getByTestId("machine-flag-engine")).toHaveText("Engine");
+  await expect(page.getByTestId("machines-group-engine").getByTestId("machine-row")).toHaveCount(1);
   await expect(page.locator('[data-testid^="btn-machine-use-"]')).toHaveCount(0);
 });
 
-test("Machines: zh-TW keeps the Engine label", async ({ page, request }) => {
+test("Machines: zh-TW keeps the Engine group title", async ({ page, request }) => {
   await setLang(request, "zh-TW");
   await go(page, "machines");
-  const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(u.getByTestId("machine-flag-engine")).toHaveText("Engine");
+  await expect(page.getByTestId("machines-group-engine").locator("h3")).toHaveText("Docker engine");
   await expect(page.locator('[data-testid^="btn-machine-use-"]')).toHaveCount(0);
 });
 

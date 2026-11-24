@@ -39,6 +39,8 @@ type Manager struct {
 	Output io.Writer // init 時串流 bootstrap 輸出；nil 則丟棄
 	// NewAPI 在 Start 自動 bootstrap 後重綁 Pinger（埠可能變更）；可選。
 	NewAPI func(cfg config.Config) Pinger
+	// Progress 回報建立 engine 的階段（"installing"＝wsl --install、"bootstrapping"＝在 distro 內安裝 Docker）；可選，供 GUI 顯示進度。
+	Progress func(stage string)
 
 	verMu      sync.Mutex
 	verifiedAt time.Time // 最近一次完整驗證通過的時間
@@ -405,6 +407,7 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		bootArgs = append(bootArgs, "--role", opts.Role)
 	}
 	m.print(i18n.T("lc.init_running", d.Name))
+	m.stage("bootstrapping")
 	// 先把 bundle 寫入 distro 暫存再執行，避免 `bash -s`+stdin 被 systemctl 等指令吞掉腳本。
 	var b strings.Builder
 	b.WriteString("cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh")
@@ -461,6 +464,12 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	return cfg, nil
 }
 
+func (m *Manager) stage(s string) {
+	if m.Progress != nil {
+		m.Progress(s)
+	}
+}
+
 func (m *Manager) print(s string) {
 	if m.Output != nil {
 		_, _ = io.WriteString(m.Output, s)
@@ -490,6 +499,9 @@ func shellQuote(s string) string {
 // DefaultEngineDistro 是首次使用時自動建立的專用 engine distro 名稱。
 const DefaultEngineDistro = config.DefaultEngineDistro
 
+// DefaultEngineVHDSizeGB 是新建 wsld-engine 的預設虛擬磁碟上限（呼叫端沒指定時使用；WSL 預設為 1 TB）。
+const DefaultEngineVHDSizeGB = 100
+
 // EnsureEngine 確保有一個已 init 的 engine：已就緒就原樣回傳（不碰 WSL）；
 // 否則沿用 engine profile（或既有的 wsld-engine distro）跑 bootstrap；兩者都沒有就先 wsl --install 一個 wsld-engine。
 // opts 的 User／Password／VHDSizeGB 等照 Init 的語意傳入；Distro 與 Role 由本函式決定。
@@ -508,7 +520,11 @@ func (m *Manager) EnsureEngine(ctx context.Context, opts InitOptions) (config.Co
 	}
 	if _, found := wsl.FindDistro(list, name); !found {
 		m.print(i18n.T("lc.engine_installing", name))
-		if err := wsl.Install(ctx, m.WSL, "Ubuntu", name, opts.VHDSizeGB); err != nil {
+		m.stage("installing")
+		if opts.VHDSizeGB == 0 {
+			opts.VHDSizeGB = DefaultEngineVHDSizeGB
+		}
+		if err := wsl.Install(ctx, m.WSL, cfg.EngineBaseOrDefault(), name, opts.VHDSizeGB); err != nil {
 			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_install_failed", name, err))
 		}
 	}

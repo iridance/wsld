@@ -647,6 +647,23 @@ h2.machine-name { margin: 0 4px 0 0; font-size: 16px; font-weight: 600; white-sp
 .machine-foot { display: flex; align-items: center; gap: 2px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
 .machine-foot > button:not(.icon) { margin-right: 6px; }
 
+/* Engine：全寬 stat card，按鈕在右側 */
+.engine-grid { grid-template-columns: 1fr; }
+.engine-card.active { border-color: var(--border); box-shadow: var(--shadow); } /* engine 卡片不加藍色外框 */
+.engine-card { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 14px 16px; }
+.engine-card .machine-head { align-items: center; }
+.machine-stats { display: flex; flex-wrap: wrap; gap: 8px 32px; flex: 1; min-width: 0; }
+.stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat-label { font-size: 12px; color: var(--muted); }
+.stat-value { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.stat-value .state { font-weight: 600; }
+.engine-build .engine-build-steps { flex-direction: row; gap: 18px; flex: none; }
+.engine-build .engine-build-progress { flex: 1 1 240px; min-width: 200px; }
+.machine-tools { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+@media (max-width: 720px) {
+  .engine-card .machine-head { flex-basis: 100%; }
+}
+
 /* ---- 引擎未啟動 ------------------------------------------------------------ */
 .engine-down { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; max-width: 560px; padding: 32px; }
 .engine-down-icon {
