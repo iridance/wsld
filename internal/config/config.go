@@ -32,8 +32,6 @@ type Machine struct {
 	Distro      string `toml:"distro"`
 	User        string `toml:"user"`
 	APIEndpoint string `toml:"api_endpoint"`
-	// K8s：此 machine 開啟單節點 k3s（預設關；全部 machine 同時最多一台，見 Config.SetK8s）。
-	K8s bool `toml:"k8s,omitempty"`
 	// Role：engine = 專用 dockerd distro（全部 client 共用）；client = 只裝 docker CLI；"" = 舊式（自帶 dockerd）。
 	// 只能經 SetEngine／ClearEngine 改變。
 	Role string `toml:"role,omitempty"`
@@ -69,8 +67,6 @@ type Config struct {
 	Theme              string    `toml:"theme,omitempty"` // light | dark | system；"" = system
 	// LANAccess：wsld-gui 在內網 IP 上轉發容器 published 埠（Settings › Network）。
 	LANAccess bool `toml:"lan_access,omitempty"`
-	// K8sAPIPort：新安裝 k3s 的 API server 埠（0 = 預設 26443，避開常被占用的 6443）。已安裝的 k3s 不受影響。
-	K8sAPIPort int `toml:"k8s_api_port,omitempty"`
 	// EngineBase：新建 wsld-engine 時 `wsl --install -d` 用的發行版名稱（"" = DefaultEngineBase）。只影響新建，既有 engine 不動。
 	EngineBase string `toml:"engine_base,omitempty"`
 
@@ -91,7 +87,6 @@ type fileShape struct {
 	Lang               string    `toml:"lang"`
 	Theme              string    `toml:"theme"`
 	LANAccess          bool      `toml:"lan_access"`
-	K8sAPIPort         int       `toml:"k8s_api_port"`
 	EngineBase         string    `toml:"engine_base"`
 	// Legacy flat keys
 	Distro      string `toml:"distro"`
@@ -155,7 +150,6 @@ func Load(path string) (Config, error) {
 	c.Lang = raw.Lang
 	c.Theme = raw.Theme
 	c.LANAccess = raw.LANAccess
-	c.K8sAPIPort = raw.K8sAPIPort
 	c.EngineBase = raw.EngineBase
 	if raw.RefreshIntervalSec != 0 {
 		c.RefreshIntervalSec = raw.RefreshIntervalSec
@@ -184,7 +178,7 @@ func Load(path string) (Config, error) {
 }
 
 // DefaultEngineBase 是新建 wsld-engine 預設使用的發行版（`wsl --install -d` 的名稱）：
-// Debian 的 rootfs 與常駐佔用比 Ubuntu 小，且有 systemd 與 Docker 官方 apt 來源，k3s 也能直接跑。
+// Debian 的 rootfs 與常駐佔用比 Ubuntu 小，且有 systemd 與 Docker 官方 apt 來源。
 const DefaultEngineBase = "Debian"
 
 // EngineBaseOrDefault 回傳新建 engine 要安裝的發行版名稱。
@@ -201,7 +195,6 @@ const DefaultEngineDistro = "wsld-engine"
 // migrateToEngine 把舊設定（各 distro 自帶 dockerd、可切換 active）遷移成「專用 engine + 多個 client」：
 // 已有 engine 就不動；否則一律改用專用的 wsld-engine（已存在就沿用，否則加一個尚未 init 的占位，啟動時自動建立），
 // 原本已 init 的機器全部變成 client（資料保留，之後用 wsld migrate 搬進 engine）。
-// k3s 只能在 engine 上，所以舊機器的 k8s 旗標會被清掉（舊 k3s 仍留在該 distro，只是不再由 wsld 管理）。
 // 從未 init 的占位 profile 不加角色。沒有任何已 init 的機器（全新或空設定）時不動。
 func (c *Config) migrateToEngine() {
 	if len(c.Machines) == 0 {
@@ -232,13 +225,11 @@ func (c *Config) migrateToEngine() {
 		idx = len(c.Machines) - 1
 	}
 	c.Machines[idx].Role = RoleEngine
-	c.Machines[idx].K8s = false
 	c.Active = c.Machines[idx].Distro
 	for i := range c.Machines {
 		if i == idx {
 			continue
 		}
-		c.Machines[i].K8s = false
 		if c.Machines[i].Ready() && c.Machines[i].Role == "" {
 			c.Machines[i].Role = RoleClient
 		}
@@ -256,7 +247,6 @@ type saveShape struct {
 	Lang               string    `toml:"lang,omitempty"`
 	Theme              string    `toml:"theme,omitempty"`
 	LANAccess          bool      `toml:"lan_access,omitempty"`
-	K8sAPIPort         int       `toml:"k8s_api_port,omitempty"`
 	EngineBase         string    `toml:"engine_base,omitempty"`
 }
 
@@ -279,7 +269,6 @@ func Save(path string, c Config) error {
 		Lang:               c.Lang,
 		Theme:              c.Theme,
 		LANAccess:          c.LANAccess,
-		K8sAPIPort:         c.K8sAPIPort,
 		EngineBase:         c.EngineBase,
 	}
 	data, err := toml.Marshal(out)
@@ -291,49 +280,6 @@ func Save(path string, c Config) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-// K8sMachine 回傳目前開啟 k3s 的 machine（所有 WSL2 distro 共用網路命名空間，最多一台）。
-func (c Config) K8sMachine() (Machine, bool) {
-	for _, m := range c.Machines {
-		if m.K8s {
-			return m, true
-		}
-	}
-	return Machine{}, false
-}
-
-// K8sTarget 是「開啟 k8s」的預設目標：有 engine 就是 engine（k3s --docker 必須與 dockerd 同 distro），否則為 active。
-func (c Config) K8sTarget() (Machine, bool) {
-	if e, ok := c.EngineMachine(); ok {
-		return e, true
-	}
-	return c.ActiveMachine()
-}
-
-// SetK8s 開／關指定 machine 的 k3s。開啟時若另一台已開則拒絕（錯誤訊息指出目前開啟者）。
-func (c *Config) SetK8s(distro string, on bool) error {
-	idx := -1
-	for i := range c.Machines {
-		if strings.EqualFold(c.Machines[i].Distro, distro) {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return fmt.Errorf("machine %q not found", distro)
-	}
-	if on {
-		if eng, ok := c.EngineMachine(); ok && !strings.EqualFold(eng.Distro, c.Machines[idx].Distro) {
-			return fmt.Errorf("k8s must run on the engine %q (k3s --docker has to sit beside dockerd)", eng.Distro)
-		}
-		if cur, ok := c.K8sMachine(); ok && !strings.EqualFold(cur.Distro, c.Machines[idx].Distro) {
-			return fmt.Errorf("k8s is already enabled on %q (disable it first; all WSL2 distros share one network namespace)", cur.Distro)
-		}
-	}
-	c.Machines[idx].K8s = on
-	c.syncDerived()
-	return nil
 }
 
 // EngineMachine 回傳專用 engine distro（最多一台）。
@@ -360,9 +306,6 @@ func (c *Config) SetEngine(distro string) error {
 	}
 	if cur, ok := c.EngineMachine(); ok && !strings.EqualFold(cur.Distro, c.Machines[idx].Distro) {
 		return fmt.Errorf("engine is already %q (clear it first)", cur.Distro)
-	}
-	if k, ok := c.K8sMachine(); ok && !strings.EqualFold(k.Distro, c.Machines[idx].Distro) {
-		return fmt.Errorf("k8s is enabled on %q; turn it off (or make that machine the engine) before choosing another engine", k.Distro)
 	}
 	c.Machines[idx].Role = RoleEngine
 	c.syncDerived()
@@ -399,8 +342,6 @@ func (c *Config) ClearEngine() error {
 func (c *Config) UpsertMachine(m Machine) {
 	for i := range c.Machines {
 		if strings.EqualFold(c.Machines[i].Distro, m.Distro) {
-			// k8s 旗標只能經 SetK8s 改變：Init 等流程會以新建的 Machine 覆寫 profile，不可因此清掉它
-			m.K8s = c.Machines[i].K8s
 			m.Role = c.Machines[i].Role // 同理：Role 只能經 SetEngine 改變
 			c.Machines[i] = m
 			c.syncDerived()
@@ -525,7 +466,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("active %q not in machines", c.Active)
 	}
 	seen := map[string]bool{}
-	k8sOn, engineOn := "", ""
+	engineOn := ""
 	for _, m := range c.Machines {
 		if m.Distro == "" {
 			return errors.New("machine distro is required")
@@ -544,12 +485,6 @@ func (c Config) Validate() error {
 			}
 			engineOn = m.Distro
 		}
-		if m.K8s {
-			if k8sOn != "" {
-				return fmt.Errorf("k8s enabled on both %q and %q (only one machine may run k3s)", k8sOn, m.Distro)
-			}
-			k8sOn = m.Distro
-		}
 		if m.APIEndpoint != "" {
 			host, _, err := splitEndpoint(m.APIEndpoint)
 			if err != nil {
@@ -560,9 +495,6 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	if engineOn != "" && k8sOn != "" && !strings.EqualFold(engineOn, k8sOn) {
-		return fmt.Errorf("k8s is enabled on %q but the engine is %q (k3s --docker must run beside dockerd)", k8sOn, engineOn)
-	}
 	return c.validateGlobals()
 }
 
@@ -572,9 +504,6 @@ func (c Config) validateGlobals() error {
 	}
 	if c.APITimeoutSec <= 0 {
 		return errors.New("api_timeout_sec must be > 0")
-	}
-	if c.K8sAPIPort != 0 && (c.K8sAPIPort < 1024 || c.K8sAPIPort > 65535) {
-		return fmt.Errorf("k8s_api_port must be between 1024 and 65535, got %d", c.K8sAPIPort)
 	}
 	switch c.ThemeOrDefault() {
 	case "light", "dark", "system":

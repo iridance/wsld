@@ -16,9 +16,6 @@ var bootstrapLib string
 //go:embed lib/distros.tsv
 var distrosTable string
 
-//go:embed 03-k3s.sh
-var k3sMain string
-
 // BootstrapBundle 把分類表、lib 與主腳本合成單一自足腳本（移除 source 行）。
 func BootstrapBundle() []byte {
 	var b strings.Builder
@@ -29,16 +26,6 @@ func BootstrapBundle() []byte {
 	b.WriteString("'\n")
 	b.WriteString(stripShebang(bootstrapLib))
 	writeMain(&b, bootstrapMain)
-	return []byte(b.String())
-}
-
-// K3sBundle 把 lib 與 03-k3s.sh 合成單一自足腳本（install|uninstall），供 wsld k8s 餵入 distro。
-func K3sBundle() []byte {
-	var b strings.Builder
-	b.WriteString("#!/usr/bin/env bash\n")
-	b.WriteString("# --- generated bundle: lib/bootstrap-lib.sh + 03-k3s.sh ---\n")
-	b.WriteString(stripShebang(bootstrapLib))
-	writeMain(&b, k3sMain)
 	return []byte(b.String())
 }
 

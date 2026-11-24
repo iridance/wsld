@@ -59,10 +59,6 @@ type App struct {
 	Lang    i18n.Lang // 空則沿用目前設定
 	// LAN 管理區網存取（wsld lan）；nil 表示不支援。
 	LAN *lan.Manager
-	// K3sBundle：wsld k8s 安裝／移除 k3s 用的內嵌腳本（scripts.K3sBundle()）。
-	K3sBundle []byte
-	// KubeconfigPath：匯出 kubeconfig 的目標（空 = %USERPROFILE%\.kube\config；測試用）。
-	KubeconfigPath string
 	// PingInterval 覆寫 lifecycle 重試間隔（測試用；0 = 預設）。
 	PingInterval time.Duration
 	// SelfInWSL：wsld.exe 位於 WSL 檔案系統（\\wsl.localhost\…）；此時拒絕 wsl --shutdown。
@@ -133,8 +129,6 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdExpose(ctx, rest)
 	case "lan":
 		err = a.cmdLan(ctx, rest)
-	case "k8s":
-		err = a.cmdK8s(ctx, rest)
 	default:
 		err = fail(ExitUsage, errors.New(i18n.T("cli.unknown_command", cmd)))
 	}
@@ -568,7 +562,7 @@ func (a *App) requireActive(cfg config.Config) (config.Machine, error) {
 // needsEngine：這些指令一定要用到 Docker 引擎。status／doctor 是診斷、init／unmanage 等是設定，不自動帶起。
 func needsEngine(cmd string) bool {
 	switch cmd {
-	case "ps", "logs", "start-ct", "stop-ct", "exec", "k8s", "migrate", "expose":
+	case "ps", "logs", "start-ct", "stop-ct", "exec", "migrate", "expose":
 		return true
 	}
 	return false
@@ -608,7 +602,6 @@ func (a *App) ensureEngine(ctx context.Context) error {
 	if _, cfg, err = a.bringUp(ctx, cfg); err != nil {
 		return err
 	}
-	a.resumeK8s(ctx, cfg)
 	return nil
 }
 

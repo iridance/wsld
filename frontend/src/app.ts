@@ -1,22 +1,12 @@
 import {
   api,
   ApiError,
-  type ComposePreview,
   type Container,
-  type FileEntry,
-  type FileSources,
   type DiskInfo,
   type InstallDefaults,
   type MachineConfig,
   type Image,
   type InstallProgress,
-  type K8sDeployment,
-  type K8sInfo,
-  type K8sStep,
-  type K8sPod,
-  type K8sService,
-  type K8sExtras,
-  type K8sDeploymentDetail,
   type LANForward,
   type LANStatus,
   type MachinesResponse,
@@ -30,24 +20,17 @@ import { setMessages, t } from "./i18n";
 import { openTerminal, type TerminalSession } from "./terminal";
 import { brandMark, icon, type IconName } from "./icons";
 import { distroLogo } from "./distroLogos";
-import { buildApps, type App as K8sApp } from "./k8sApps";
-import { buildNamespaceGraph, endpointCount, isSystemNs, nodePortsOf, ownerOf, serviceTargets, summarizeNamespace, usedBy, type K8sResources } from "./k8sGraph";
 
-/** k8s：Kubernetes 頁的 Pod 面板（logs／exec 走 /api/k8s/pods/...），其餘為容器／machine 面板。 */
-type PanelK8s = { ns: string; pod: string };
 type Panel =
-  | { kind: "logs"; id: string; name: string; live: boolean; ws?: WebSocket; k8s?: PanelK8s }
-  | { kind: "term"; id: string; name: string; session?: TerminalSession; k8s?: PanelK8s };
+  | { kind: "logs"; id: string; name: string; live: boolean; ws?: WebSocket }
+  | { kind: "term"; id: string; name: string; session?: TerminalSession };
 type InfoDrawer =
   | { kind: "container"; id: string; name: string; detail?: import("./api").ContainerInfo }
   | { kind: "compose"; project: string }
   | { kind: "machine"; name: string; detail?: import("./api").MachineConfig };
 
 /** 側欄視圖。 */
-export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "kubernetes" | "settings";
-type K8sTab = "architecture" | "pods" | "workloads" | "services" | "config" | "storage" | "others";
-type K8sGroup = "workloads" | "system";
-const K8S_TABS: K8sTab[] = ["architecture", "pods", "workloads", "services", "config", "storage", "others"];
+export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "settings";
 type CtFilter = "all" | "running" | "stopped";
 type ImgKind = "inuse" | "unused" | "dangling" | "unknown";
 type ImgFilter = "all" | "inuse" | "unused" | "dangling";
@@ -70,7 +53,6 @@ const VIEWS: { id: View; icon: IconName; label: string; section: "resources" | "
   { id: "volumes", icon: "volumes", label: "gui.nav.volumes", section: "resources" },
   { id: "networks", icon: "networks", label: "gui.nav.networks", section: "resources" },
   { id: "machines", icon: "machines", label: "gui.nav.machines", section: "system" },
-  { id: "kubernetes", icon: "kubernetes", label: "gui.nav.kubernetes", section: "system" },
   { id: "settings", icon: "settings", label: "gui.nav.settings", section: "foot" },
 ];
 
@@ -122,21 +104,6 @@ interface State {
   usageOpen: boolean;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
-  /** Kubernetes 頁：/api/k8s 狀態與目前分頁的資源列表（k3s 就緒時才載入） */
-  k8s?: K8sInfo;
-  k8sTab: K8sTab;
-  /** 空字串 = 所有 namespace */
-  k8sNs: string;
-  k8sNamespaces: string[];
-  k8sPods: K8sPod[];
-  k8sDeployments: K8sDeployment[];
-  k8sServices: K8sService[];
-  k8sExtras: K8sExtras;
-  /** 側欄的 Deployment 詳情（點 Deployment 進入）與其 rollout 歷史／事件 */
-  k8sDetail?: { ns: string; name: string };
-  k8sDetailData?: K8sDeploymentDetail;
-  k8sPodQuery: string;
-  k8sPodFilter: "" | "notready";
 }
 
 /** SVG 元素建立（命名空間不同於 HTML）。 */
@@ -437,15 +404,6 @@ export class App {
       usageOpen: false,
       lanForwards: [],
       lanEnabled: false,
-      k8sTab: normalizeK8sTab(loadJSON<string>(LS_K8S_TAB, "architecture")),
-      k8sNs: "",
-      k8sNamespaces: [],
-      k8sPods: [],
-      k8sDeployments: [],
-      k8sServices: [],
-      k8sExtras: emptyK8sExtras(),
-      k8sPodQuery: "",
-      k8sPodFilter: "",
     };
     if (!VIEWS.some((v) => v.id === this.st.view)) this.st.view = "containers";
     this.build();
@@ -494,9 +452,6 @@ export class App {
     const { signal } = ac;
     this.refreshInFlight = true;
     try {
-      // Kubernetes 頁不依賴 Docker 引擎狀態：與 /api/k8s 並行，不讓兩段 wsl.exe 查詢串行相加
-      const k8sLoad = this.st.view === "kubernetes" ? this.loadKubernetes(signal) : undefined;
-      k8sLoad?.catch(() => {}); // 錯誤留給下面 await 處理，避免 status 先拋錯時成為未處理的 rejection
       const status = await api.status(signal);
       if (signal.aborted || gen !== this.refreshGen) return;
       this.st.status = status;
@@ -510,8 +465,8 @@ export class App {
         this.st.meta = await api.meta();
         if (signal.aborted || gen !== this.refreshGen) return;
       }
-      if (this.st.view === "machines" || this.st.view === "settings" || this.st.view === "kubernetes") {
-        // WSL 清單／設定／k3s 不依賴 Docker 引擎
+      if (this.st.view === "machines" || this.st.view === "settings") {
+        // WSL 清單／設定不依賴 Docker 引擎
         if (this.st.view === "machines") {
           this.st.machines = await api.machines(signal);
           // 建立 engine（wsl --install＋bootstrap）期間顯示進度；平常不多打一支 API
@@ -520,7 +475,6 @@ export class App {
             this.st.engineBuild = p?.active ? p : undefined;
           } else this.st.engineBuild = undefined;
         }
-        if (this.st.view === "kubernetes") await (k8sLoad ?? this.loadKubernetes(signal));
         if (signal.aborted || gen !== this.refreshGen) return;
         this.st.lastError = this.st.starting ? undefined : this.st.bringUpError;
       } else if (status.ready) {
@@ -680,7 +634,7 @@ export class App {
 
   private async loadLogs(): Promise<void> {
     const p = this.st.panel;
-    if (!p || p.kind !== "logs" || p.k8s) return; // Pod 日誌只走串流（setLive）
+    if (!p || p.kind !== "logs") return;
     const pre = this.root.querySelector<HTMLPreElement>('[data-testid="logs-content"]');
     if (!pre) return;
     try {
@@ -702,7 +656,7 @@ export class App {
     if (on) {
       const pre = this.root.querySelector<HTMLPreElement>('[data-testid="logs-content"]');
       if (pre) pre.textContent = "";
-      const ws = new WebSocket(p.k8s ? api.k8sLogsUrl(p.k8s.ns, p.k8s.pod, 200) : api.logsStreamUrl(p.id, 100));
+      const ws = new WebSocket(api.logsStreamUrl(p.id, 100));
       ws.onmessage = (ev) => {
         if (!pre) return;
         pre.textContent += String(ev.data);
@@ -724,23 +678,6 @@ export class App {
     this.st.panel.session = openTerminal(host, (cols, rows) => api.execUrl(c.Id, cols, rows), () => {
       /* 顯示已由 terminal.ts 寫入 */
     });
-    this.st.panel.session.term.focus();
-  }
-
-  private openPodLogs(ns: string, pod: string): void {
-    this.closePanel();
-    this.st.panel = { kind: "logs", id: `k8s:${ns}/${pod}`, name: pod, live: false, k8s: { ns, pod } };
-    this.renderPanel();
-    this.setLive(true); // Pod 日誌預設即時追蹤
-  }
-
-  private openPodTerminal(ns: string, pod: string): void {
-    this.closePanel();
-    this.st.panel = { kind: "term", id: `k8s:${ns}/${pod}`, name: pod, k8s: { ns, pod } };
-    this.renderPanel();
-    const host = this.root.querySelector<HTMLElement>('[data-testid="terminal-xterm"]');
-    if (!host || this.st.panel.kind !== "term") return;
-    this.st.panel.session = openTerminal(host, (cols, rows) => api.k8sExecUrl(ns, pod, cols, rows), () => {});
     this.st.panel.session.term.focus();
   }
 
@@ -837,9 +774,6 @@ export class App {
       this.buildFirewallDialog(),
       this.buildAddMachineDialog(),
       this.buildResizeDialog(),
-      this.buildDeployDialog(),
-      this.buildImportDialog(),
-      this.buildExposeDialog(),
     );
     this.renderNav();
     this.renderView();
@@ -925,8 +859,6 @@ export class App {
         return ready ? fmt(t("gui.sub.items"), String(this.st.networks.length)) : "";
       case "machines":
         return this.st.machines?.available ? fmt(t("gui.sub.items"), String(this.st.machines.machines.length)) : "";
-      case "kubernetes":
-        return this.k8sSubtitle();
       default:
         return "";
     }
@@ -1022,13 +954,6 @@ export class App {
       );
     }
     return grid;
-  }
-
-  /** Kubernetes 叢集資訊卡 loading 佔位。 */
-  private skeletonK8sCard(): HTMLElement {
-    const grid = el("dl", { class: "k8s-fields" });
-    for (let i = 0; i < 4; i++) grid.append(el("div", { class: "k8s-f" }, el("span", { class: "skel", style: "width:50px" }), el("span", { class: "skel", style: "width:120px" })));
-    return el("section", { class: "k8s-card", "data-testid": "skeleton", "aria-busy": "true" }, el("div", { class: "k8s-head" }, el("span", { class: "skel", style: "width:90px" })), grid);
   }
 
   /** 引擎未就緒時取代空列表：說明＋啟動引擎＋由 status 推得的檢查清單。 */
@@ -1171,14 +1096,10 @@ export class App {
         el("div", { class: "list", "data-testid": "container-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
-    } else if (this.st.view === "machines" || this.st.view === "kubernetes") {
+    } else if (this.st.view === "machines") {
       main.replaceChildren(
         pageBar(toolbar()),
-        // Kubernetes：叢集資訊卡獨立在列表面板之外（自己的卡片），資源列表才放進 .list
-        ...(this.st.view === "kubernetes" ? [el("div", { class: "k8s-top", "data-testid": "k8s-top" })] : []),
-        this.st.view === "kubernetes"
-          ? el("div", { class: "k8s-body", "data-testid": "k8s-body" }, el("div", { class: "list", "data-testid": "kubernetes-list" }), el("section", { class: "k8s-side", "data-testid": "k8s-side", hidden: "" }))
-          : el("div", { class: "list", "data-testid": `${this.st.view}-list` }),
+        el("div", { class: "list", "data-testid": `${this.st.view}-list` }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
     } else {
@@ -1204,9 +1125,6 @@ export class App {
         break;
       case "machines":
         this.renderMachines();
-        break;
-      case "kubernetes":
-        this.renderKubernetes();
         break;
       case "settings":
         this.renderSettings();
@@ -1267,20 +1185,8 @@ export class App {
     volumes: loadJSON(`${LS_COLS}.volumes`, {}),
     networks: loadJSON(`${LS_COLS}.networks`, {}),
     machines: loadJSON(`${LS_COLS}.machines`, {}),
-    kubernetes: loadJSON(`${LS_COLS}.kubernetes`, {}),
   };
-  private collapsed: Set<string> = this.initialCollapsed();
-
-  /** k3s 容器群組預設收合（只首次；之後依使用者的展開／收合記錄）。 */
-  private initialCollapsed(): Set<string> {
-    const set = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
-    if (!loadJSON<boolean>(LS_K8S_GROUP_SEEN, false)) {
-      set.add(K8S_GROUP);
-      saveJSON(LS_COLLAPSED, [...set]);
-      saveJSON(LS_K8S_GROUP_SEEN, true);
-    }
-    return set;
-  }
+  private collapsed: Set<string> = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
 
   private widthOf(view: View, col: Col): number {
     return Math.max(col.min, this.colWidths[view][col.key] ?? col.def);
@@ -1480,8 +1386,8 @@ export class App {
     toggle.append(icon(expanded ? "chevron-down" : "chevron-right"));
     toggle.onclick = () => this.toggleGroup(g.project);
     const actions: HTMLElement[] = [];
-    if (g.project && g.project !== K8S_GROUP) {
-      // 只有 compose 專案才有整組 Start／Stop／Info；未分組與 k3s 群組只是集合（k3s 容器交給 k3s 管理）
+    if (g.project) {
+      // 只有 compose 專案才有整組 Start／Stop／Info；未分組只是集合
       const startBtn = iconBtn({ "data-testid": "group-start" }, "play", t("gui.start"));
       startBtn.disabled = anyPending || running === g.items.length;
       startBtn.onclick = () =>
@@ -1502,7 +1408,7 @@ export class App {
         "div",
         { class: "group-bar" },
         toggle,
-        el("span", { class: "group-name", "data-testid": "group-name", text: g.project === K8S_GROUP ? t("gui.ct.k8s_group") : g.project || "-" }),
+        el("span", { class: "group-name", "data-testid": "group-name", text: g.project || "-" }),
         el("span", { class: "group-count", "data-testid": "group-count", text: `${running}/${g.items.length}` }),
         ...(this.st.disk
           ? [el("span", { class: "group-size muted", "data-testid": "group-size", text: humanSize(g.items.reduce((a, c) => a + (this.st.disk?.containers[c.Id]?.size_rw ?? 0), 0)) })]
@@ -1609,20 +1515,7 @@ export class App {
     const kids: (Node | string)[] = [title];
     // 容器面板（有分頁時標題只放名稱，類型由分頁表示）：日誌／終端分頁切換（同一個容器）；machine 終端沒有日誌
     const c = this.st.containers.find((x) => x.Id === p.id);
-    if (p.k8s) {
-      // Pod 面板：日誌／終端分頁（同一個 Pod）
-      const { ns, pod } = p.k8s;
-      title.textContent = pod;
-      kids.push(tabs({
-        testid: "panel-tabs", selected: p.kind,
-        items: [{ id: "logs", testid: "panel-tab-logs", icon: "logs", label: t("gui.logs") }, { id: "term", testid: "panel-tab-term", icon: "terminal", label: t("gui.terminal") }],
-        onSelect: (kind) => {
-          if (this.st.panel?.kind === kind) return;
-          if (kind === "logs") this.openPodLogs(ns, pod);
-          else this.openPodTerminal(ns, pod);
-        },
-      }));
-    } else if (c) {
+    if (c) {
       title.textContent = p.name;
       kids.push(tabs({
         testid: "panel-tabs", selected: p.kind,
@@ -2210,11 +2103,11 @@ export class App {
     const phase = p.phase ?? "installing";
     const cur = phase === "bootstrapping" ? 2 : phase === "installing" ? 1 : 0;
     const steps = ["download", "register", "docker"];
-    const list = el("ol", { class: "k8s-steps engine-build-steps", "data-testid": "engine-build-steps" });
+    const list = el("ol", { class: "build-steps engine-build-steps", "data-testid": "engine-build-steps" });
     steps.forEach((step, i) => {
       const status = i < cur ? "done" : i === cur ? "active" : "todo";
-      list.append(el("li", { class: `k8s-step ${status}`, "data-testid": `engine-build-step-${step}`, "data-status": status },
-        el("span", { class: "k8s-step-mark", "aria-hidden": "true", text: status === "done" ? "✓" : status === "active" ? "…" : "○" }),
+      list.append(el("li", { class: `build-step ${status}`, "data-testid": `engine-build-step-${step}`, "data-status": status },
+        el("span", { class: "build-step-mark", "aria-hidden": "true", text: status === "done" ? "✓" : status === "active" ? "…" : "○" }),
         el("span", { text: t(`gui.machines.engine_step_${step}`) }),
       ));
     });
@@ -2935,1648 +2828,6 @@ export class App {
     });
   }
 
-  // ---- Kubernetes（本機 k3s）------------------------------------------------
-
-  private k8sPollTimer?: number;
-  private k8sListError?: string;
-  private k8sAddContext: boolean = loadJSON<boolean>(LS_K8S_ADDCTX, true);
-  /** Ready 時的主視圖：Apps（預設）或 Namespaces（進階：namespace 卡片與側欄分頁） */
-  private k8sView: "apps" | "namespaces" = loadJSON<string>(LS_K8S_VIEW, "apps") === "namespaces" ? "namespaces" : "apps";
-  private k8sShowSystem: boolean = loadJSON<boolean>(LS_K8S_SHOWSYS, false);
-  private k8sExpandedApps = new Set<string>();
-  private k8sGroup: K8sGroup = loadJSON<string>(LS_K8S_GROUP, "workloads") === "system" ? "system" : "workloads";
-
-  /** /api/k8s 狀態；k3s 就緒（且沒有進行中的作業）時再載入 namespace 與目前分頁的資源。 */
-  private async loadKubernetes(signal?: AbortSignal): Promise<void> {
-    const info = await api.k8s(signal);
-    if (signal?.aborted) return;
-    this.st.k8s = info;
-    this.k8sListError = undefined;
-    if (this.k8sNeedsPoll()) this.pollK8sWhilePending();
-    if (!info.enabled || info.status.state !== "ready" || info.op) {
-      this.st.k8sNamespaces = [];
-      this.st.k8sPods = [];
-      this.st.k8sDeployments = [];
-      this.st.k8sServices = [];
-      this.st.k8sExtras = emptyK8sExtras();
-      return;
-    }
-    try {
-      // 卡片與架構圖都需要全部 namespace 的資源；側欄的表格再依 namespace 過濾。
-      // 每個請求都是一次 wsl.exe + kubectl，全部並行（namespace 清單不依賴其他結果）。
-      // extras（ConfigMap／PVC 等）一律走 kubectl，慢又只是附加資訊：不讓它拖住 Apps／Pods 的顯示，晚到再補畫。
-      const extras = api.k8sExtras("", signal);
-      extras.catch(() => {});
-      [this.st.k8sNamespaces, this.st.k8sPods, this.st.k8sDeployments, this.st.k8sServices] = await Promise.all([api.k8sNamespaces(signal), api.k8sPods("", signal), api.k8sDeployments("", signal), api.k8sServices("", signal)]);
-      void extras.then((x) => {
-        if (signal?.aborted || this.st.view !== "kubernetes") return;
-        this.st.k8sExtras = x;
-        this.renderKubernetes();
-      }).catch(() => {});
-      if (this.st.k8sNs && !this.st.k8sNamespaces.includes(this.st.k8sNs)) this.st.k8sNs = "";
-      if (this.st.k8sDetail) {
-        const d = this.st.k8sDetail;
-        this.st.k8sDetailData = await api.k8sDeploymentDetail(d.ns, d.name, signal).catch(() => this.st.k8sDetailData);
-      }
-    } catch (e) {
-      if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) throw e;
-      this.k8sListError = e instanceof ApiError ? e.message : String(e);
-    }
-  }
-
-  /** 作業進行中，或 k3s 已啟動但 node 尚未 Ready（state=starting）時都需要輪詢。 */
-  private k8sNeedsPoll(): boolean {
-    const k = this.st.k8s;
-    return !!k && (!!k.op || (k.enabled && k.status.state === "starting"));
-  }
-
-  /** 背景作業（啟動／停止／重置）進行中時加快輪詢，完成後自動停止。 */
-  private pollK8sWhilePending(): void {
-    if (this.k8sPollTimer !== undefined) return;
-    this.k8sPollTimer = window.setTimeout(async () => {
-      this.k8sPollTimer = undefined;
-      if (this.st.view !== "kubernetes") return;
-      await this.refresh();
-      if (this.k8sNeedsPoll()) this.pollK8sWhilePending();
-    }, 700);
-  }
-
-  private k8sSubtitle(): string {
-    const k = this.st.k8s;
-    if (!k) return "";
-    if (k.op) return t(`gui.k8s.op.${k.op}`);
-    const label = t(`gui.k8s.state.${k.status.state}`);
-    return k.status.version ? `${label} · ${k.status.version}` : label;
-  }
-
-  private activeDistro(): string {
-    return this.st.status?.Distro || this.st.meta.distro || "";
-  }
-
-  /** 啟動／停止：後端以背景作業進行，回應已含 op；之後輪詢到完成。 */
-  private async k8sRun(fn: () => Promise<K8sInfo>): Promise<void> {
-    let err: string | undefined;
-    try {
-      this.st.k8s = await fn();
-      this.st.lastError = undefined;
-    } catch (e) {
-      err = e instanceof ApiError ? e.message : String(e);
-    }
-    this.renderPageHead();
-    this.renderKubernetes();
-    if (err) {
-      this.st.lastError = err;
-      this.renderBanner();
-      return;
-    }
-    this.pollK8sWhilePending();
-  }
-
-  /** 不需確認的資源動作（restart／scale）：標 busy → 執行 → 通知 → 刷新。 */
-  private async k8sMutate(key: string, fn: () => Promise<void>, doneMsg: string): Promise<void> {
-    this.st.busy.add(key);
-    this.renderKubernetes();
-    let err: string | undefined;
-    try {
-      await fn();
-      this.notify(doneMsg);
-    } catch (e) {
-      err = e instanceof ApiError ? e.message : String(e);
-    } finally {
-      this.st.busy.delete(key);
-    }
-    await this.refreshKeeping(err);
-  }
-
-  private renderKubernetes(): void {
-    const list = this.root.querySelector<HTMLElement>('[data-testid="kubernetes-list"]');
-    const top = this.root.querySelector<HTMLElement>('[data-testid="k8s-top"]');
-    const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
-    if (!list || !top || !bar) return;
-    // 使用者正在操作清單內的輸入（replicas 欄位、namespace 下拉展開）時不重建，避免每次輪詢吃掉輸入
-    const ae = document.activeElement;
-    const sideEl = this.root.querySelector<HTMLElement>('[data-testid="k8s-side"]');
-    if (ae && (list.contains(ae) || sideEl?.contains(ae)) && (ae.tagName === "INPUT" || ae.getAttribute("aria-expanded") === "true")) return;
-    const k = this.st.k8s;
-    const op = k?.op;
-    const state = k?.status.state;
-    const running = state === "ready" || state === "starting";
-    const busyOp = !!op;
-
-    const kube = btn({ "data-testid": "btn-k8s-kubeconfig" }, "download", t("gui.k8s.kubeconfig"));
-    // 匯出只是讀機器內的檔案：不看 k3s 是否就緒／啟動中／已關閉，只在作業進行中、尚未安裝或機器停止時停用。
-    kube.disabled = !k?.machine || busyOp || state === "not-installed" || state === "stopped";
-    kube.onclick = () => void this.k8sExportKubeconfig();
-    const reset = btn({ "data-testid": "btn-k8s-reset" }, "reset", t("gui.k8s.reset"));
-    reset.disabled = !k?.enabled || busyOp;
-    reset.onclick = () => {
-      void this.confirm(fmt(t("gui.k8s.confirm.reset"), k?.machine ?? ""), undefined, { label: t("gui.k8s.reset"), icon: "reset" }).then((ok) => {
-        if (ok) void this.k8sRun(() => api.k8sReset());
-      });
-    };
-    const toggle = running
-      ? btn({ "data-testid": "btn-k8s-stop" }, "stop", t("gui.k8s.stop"))
-      : btn({ class: "primary", "data-testid": "btn-k8s-start" }, "play", t("gui.k8s.start"));
-    toggle.disabled = !k || busyOp;
-    toggle.onclick = () => void this.k8sRun(() => (running ? api.k8sOff() : api.k8sOn({ addContext: this.k8sAddContext })));
-    // 關閉狀態由頁面中央的 hero 負責啟用，工具列不再放第二個啟動鈕
-    const heroMode = !!k && !k.op && !k.enabled;
-    const ready = !!k && k.enabled && state === "ready" && !busyOp;
-    const deploy = btn({ "data-testid": "btn-k8s-deploy" }, "plus", t("gui.k8s.deploy"));
-    deploy.onclick = () => void this.openDeploy();
-    const stack = btn({ "data-testid": "btn-k8s-import" }, "layers", t("gui.k8s.import"));
-    stack.onclick = () => void this.openImport();
-    const copyCtx = btn({ "data-testid": "btn-k8s-copy-context" }, "kubernetes", t("gui.k8s.copy_context"));
-    copyCtx.title = k?.status.context ?? "";
-    copyCtx.onclick = () => void this.k8sCopyContext();
-    bar.replaceChildren(
-      el("span", { class: "spacer" }),
-      ...(ready ? [deploy, stack, copyCtx] : []),
-      kube,
-      reset,
-      ...(heroMode ? [] : [toggle]),
-    );
-
-    if (!k) {
-      top.replaceChildren(this.skeletonK8sCard());
-      list.style.display = "none";
-      list.replaceChildren();
-      this.renderK8sSide();
-      return;
-    }
-    top.replaceChildren(heroMode ? this.k8sHero(k) : this.k8sCard(k));
-    // 沒有資源可列時（未安裝／已關閉／啟動中）不顯示空白的列表面板
-    if (k.enabled && state === "ready" && !op) {
-      list.style.display = "";
-      list.classList.add("cards"); // 容器透明，Apps 卡片與 Namespaces 面板各自浮在頁面上
-      list.replaceChildren(this.k8sResources());
-    } else {
-      list.style.display = "none";
-      list.replaceChildren();
-    }
-    this.renderK8sSide();
-  }
-
-  private async k8sExportKubeconfig(): Promise<void> {
-    try {
-      const r = await api.k8sKubeconfig();
-      this.notify(fmt(t("gui.k8s.kubeconfig_done"), r.path, r.context));
-    } catch (e) {
-      this.st.lastError = e instanceof ApiError ? e.message : String(e);
-      this.renderBanner();
-    }
-  }
-
-  /** 叢集資訊卡：狀態徽章＋欄位＋提示（未安裝／已關閉／另一台持有／錯誤）。 */
-  private k8sCard(k: K8sInfo): HTMLElement {
-    const s = k.status;
-    const stateKey = k.op ? `op.${k.op}` : `state.${s.state}`;
-    const cls = k.op || s.state === "starting" || s.state === "unknown" ? "pending" : s.state === "ready" ? "running" : s.state === "error" ? "failed" : "exited";
-    const badge = el("span", { class: `state ${cls}`, "data-testid": "k8s-state", "data-state": k.op ?? s.state, text: t(`gui.k8s.${stateKey}`) });
-    const fields: [string, string, string][] = [["machine", t("gui.k8s.f.machine"), k.machine]];
-    if (s.state === "ready") {
-      fields.push(["version", t("gui.k8s.f.version"), s.version ?? ""]);
-      fields.push(["node", t("gui.k8s.f.node"), [s.node_name, s.node_ip].filter(Boolean).join(" · ")]);
-      fields.push(["api", t("gui.k8s.f.api"), s.endpoint]);
-      fields.push(["context", t("gui.k8s.f.context"), s.context]);
-      if (s.memory_bytes) fields.push(["memory", t("gui.k8s.f.memory"), humanSize(s.memory_bytes)]);
-    }
-    const grid = el("dl", { class: "k8s-fields", "data-testid": "k8s-fields" });
-    for (const [key, label, value] of fields) {
-      grid.append(el("div", { class: "k8s-f" }, el("dt", { text: label }), el("dd", { "data-testid": `k8s-f-${key}`, class: key === "machine" ? "" : "mono", text: value, title: value })));
-    }
-    const card = el("section", { class: "k8s-card", "data-testid": "k8s-card" }, el("div", { class: "k8s-head" }, badge), grid);
-
-    const hint = (text: string, testid = "k8s-hint", cls2 = "k8s-hint") => card.append(el("p", { class: cls2, "data-testid": testid, text }));
-    if (!k.op) {
-      if (s.state === "not-installed") hint(fmt(t("gui.k8s.hint.not_installed"), k.machine));
-      else if (s.state === "off") hint(fmt(t("gui.k8s.hint.off"), k.machine));
-      else if (s.state === "stopped") hint(fmt(t("gui.k8s.hint.stopped"), k.machine));
-      else if (s.state === "error") hint(fmt(t("gui.k8s.hint.error"), k.machine), "k8s-hint", "k8s-hint bad");
-    } else if (k.op === "starting" && s.state === "not-installed") {
-      hint(fmt(t("gui.k8s.hint.installing"), k.machine));
-    }
-    if (k.op === "starting") card.append(this.k8sSteps(k));
-    if (s.ip_mismatch) hint(t("gui.k8s.hint.ip_mismatch"), "k8s-ip-mismatch", "k8s-hint bad");
-    if (k.error) hint(k.error, "k8s-error", "k8s-hint bad");
-    if (k.warning) hint(k.warning, "k8s-warning", "k8s-hint warn");
-    return card;
-  }
-
-  /** 啟用步驟清單：完成 ✓、進行中 …、之後 ○；失敗時標出停在哪一步。 */
-  private k8sSteps(k: K8sInfo): HTMLElement {
-    const steps: K8sStep[] = (k.steps ?? []).filter((x) => x !== "context" || this.k8sAddContext);
-    const cur = k.op === "starting" ? steps.indexOf(k.step ?? "engine") : k.error_step ? steps.indexOf(k.error_step) : -1;
-    const failed = !k.op && !!k.error;
-    const list = el("ol", { class: "k8s-steps", "data-testid": "k8s-steps" });
-    steps.forEach((step, i) => {
-      const status = failed ? (i < cur ? "done" : i === cur ? "failed" : "todo") : i < cur ? "done" : i === cur ? "active" : "todo";
-      list.append(el("li", { class: `k8s-step ${status}`, "data-testid": `k8s-step-${step}`, "data-status": status },
-        el("span", { class: "k8s-step-mark", "aria-hidden": "true", text: status === "done" ? "✓" : status === "failed" ? "✕" : status === "active" ? "…" : "○" }),
-        el("span", { text: t(`gui.k8s.step.${step}`) }),
-      ));
-    });
-    return list;
-  }
-
-  /** 關閉狀態的 hero：說明、啟用鈕、選項；失敗時顯示停在哪一步並改為 Retry。 */
-  private k8sHero(k: K8sInfo): HTMLElement {
-    const s = k.status;
-    const failed = !!k.error;
-    const enable = btn({ class: "primary", "data-testid": "btn-k8s-start" }, "play", failed ? t("gui.k8s.retry") : t("gui.k8s.hero.enable"));
-    enable.onclick = () => void this.k8sRun(() => api.k8sOn({ addContext: this.k8sAddContext }));
-    const ctx = el("input", { type: "checkbox", "data-testid": "k8s-opt-add-context" }) as HTMLInputElement;
-    ctx.checked = this.k8sAddContext;
-    ctx.onchange = () => {
-      this.k8sAddContext = ctx.checked;
-      saveJSON(LS_K8S_ADDCTX, ctx.checked);
-    };
-    const hero = el("section", { class: "k8s-hero", "data-testid": "k8s-hero", "data-state": s.state },
-      icon("kubernetes"),
-      el("h2", { text: t("gui.k8s.hero.title") }),
-      el("p", { class: "k8s-hero-body", text: t("gui.k8s.hero.body") }),
-      enable,
-      el("p", { class: "k8s-hero-facts", text: t("gui.k8s.hero.facts") }),
-      el("label", { class: "k8s-opt" }, ctx, el("span", { text: t("gui.k8s.opt.add_context") })),
-      el("p", { class: "k8s-hero-facts", "data-testid": "k8s-f-machine", text: fmt(t("gui.k8s.hero.machine"), k.machine) }),
-    );
-    const hint = (text: string, testid = "k8s-hint", cls = "k8s-hint") => hero.append(el("p", { class: cls, "data-testid": testid, text }));
-    if (s.state === "not-installed") hint(fmt(t("gui.k8s.hint.not_installed"), k.machine));
-    else if (s.state === "off") hint(fmt(t("gui.k8s.hint.off"), k.machine));
-    else if (s.state === "stopped") hint(fmt(t("gui.k8s.hint.stopped"), k.machine));
-    else if (s.state === "error") hint(fmt(t("gui.k8s.hint.error"), k.machine), "k8s-hint", "k8s-hint bad");
-    if (failed) {
-      hint(k.error ?? "", "k8s-error", "k8s-hint bad");
-      if (k.error_step) hint(fmt(t("gui.k8s.failed_at"), t(`gui.k8s.step.${k.error_step}`)), "k8s-failed-step", "k8s-hint bad");
-    }
-    if (k.warning) hint(k.warning, "k8s-warning", "k8s-hint warn");
-    return hero;
-  }
-
-  /** Ready 但還沒有任何使用者 workload：邀請部署第一個 app。 */
-  private k8sDeployEmpty(): HTMLElement {
-    const deploy = btn({ class: "primary", "data-testid": "btn-k8s-deploy-first" }, "plus", t("gui.k8s.deploy"));
-    deploy.onclick = () => void this.openDeploy();
-    const apply = btn({ "data-testid": "btn-k8s-apply-yaml" }, "download", t("gui.k8s.apply_yaml"));
-    apply.onclick = () => this.k8sPickYaml();
-    const stack = btn({ "data-testid": "btn-k8s-import-first" }, "layers", t("gui.k8s.import"));
-    stack.onclick = () => void this.openImport();
-    return el("section", { class: "k8s-deploy-empty", "data-testid": "k8s-deploy-empty" },
-      el("h3", { text: t("gui.k8s.deploy.title") }),
-      el("p", { text: t("gui.k8s.deploy.body") }),
-      el("div", { class: "row" }, deploy, stack, apply),
-    );
-  }
-
-  private async k8sCopyContext(): Promise<void> {
-    const ctx = this.st.k8s?.status.context ?? "";
-    if (!ctx) return;
-    try {
-      await navigator.clipboard.writeText(`kubectl config use-context ${ctx}`);
-    } catch {
-      /* 剪貼簿不可用時仍顯示指令，使用者可手動複製 */
-    }
-    this.notify(fmt(t("gui.k8s.context_copied"), ctx));
-  }
-
-  /** 選一個 YAML／JSON 檔，交給 kubectl apply。 */
-  private k8sPickYaml(): void {
-    const input = el("input", { type: "file", accept: ".yaml,.yml,.json", "data-testid": "k8s-apply-file" }) as HTMLInputElement;
-    input.onchange = async () => {
-      const f = input.files?.[0];
-      if (!f) return;
-      if (f.size > 1 << 20) {
-        this.st.lastError = t("gui.k8s.apply_too_large");
-        this.renderBanner();
-        return;
-      }
-      await this.k8sMutate("k8s:apply", async () => {
-        const r = await api.k8sApply(await f.text());
-        this.k8sApplyOutput = r.output;
-      }, "");
-      if (this.k8sApplyOutput) this.notify(fmt(t("gui.k8s.apply_done"), this.k8sApplyOutput.split("\n").join("; ")));
-      this.k8sApplyOutput = undefined;
-    };
-    input.click();
-  }
-  private k8sApplyOutput?: string;
-
-  private buildDeployDialog(): HTMLDialogElement {
-    const d = el("dialog", { class: "deploy-dialog", "data-testid": "deploy-dialog" }) as HTMLDialogElement;
-    const mk = (testid: string, extra: Record<string, string> = {}) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid, ...extra }) as HTMLInputElement;
-    const image = mk("deploy-image", { list: "deploy-images", placeholder: "myapp:latest" });
-    const datalist = el("datalist", { id: "deploy-images" });
-    const name = mk("deploy-name", { placeholder: "myapp" });
-    const port = mk("deploy-port", { inputmode: "numeric", placeholder: "8080" });
-    const replicas = mk("deploy-replicas", { inputmode: "numeric" });
-    replicas.value = "1";
-    const hostPort = mk("deploy-hostport", { inputmode: "numeric", placeholder: t("gui.k8s.deploy.same_as_container") });
-    type Expose = "loadbalancer" | "nodeport" | "none";
-    const exposeRadios = {} as Record<Expose, HTMLInputElement>;
-    const exposeGroup = el("div", { class: "expose-group cols", role: "radiogroup", "aria-label": t("gui.k8s.deploy.expose"), "data-testid": "deploy-expose" });
-    const exposeOpts: [Expose, string, string][] = [
-      ["loadbalancer", "gui.k8s.deploy.expose_lb", "gui.k8s.deploy.expose_lb_d"],
-      ["nodeport", "gui.k8s.deploy.expose_np", "gui.k8s.deploy.expose_np_d"],
-      ["none", "gui.k8s.deploy.expose_none", "gui.k8s.deploy.expose_none_d"],
-    ];
-    for (const [v, label, hint] of exposeOpts) {
-      const radio = el("input", { type: "radio", name: "deploy-expose", value: v, id: `deploy-expose-${v}`, "data-testid": `deploy-expose-${v}` }) as HTMLInputElement;
-      radio.checked = v === "loadbalancer";
-      exposeRadios[v] = radio;
-      exposeGroup.append(el("label", { class: "expose-opt", for: radio.id }, radio, el("span", {}, el("b", { text: t(label) }), el("small", { text: t(hint) }))));
-    }
-    const hostField = el("label", { class: "field", "data-testid": "deploy-hostport-field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.host_port") }), textField(hostPort));
-    const exposeMode = (): Expose => (Object.keys(exposeRadios) as Expose[]).find((k) => exposeRadios[k].checked) ?? "loadbalancer";
-    const syncExpose = () => {
-      hostField.hidden = exposeMode() !== "loadbalancer";
-    };
-    for (const r of Object.values(exposeRadios)) r.onchange = () => {
-      syncExpose();
-      err.hidden = true;
-    };
-    const err = el("div", { class: "field-error", "data-testid": "deploy-error", hidden: "" });
-    const submit = btn({ class: "primary", type: "submit", "data-testid": "deploy-submit" }, "play", t("gui.k8s.deploy.submit"));
-    const cancel = btn({ type: "button", "data-testid": "deploy-cancel" }, "close", t("gui.cancel"));
-    let nameEdited = false;
-    const NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-    /** 由 image 推一個合法名稱：去掉 registry 路徑與 tag。 */
-    const suggest = (img: string) => img.split("/").pop()!.split(":")[0]!.split("@")[0]!.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
-    image.oninput = () => {
-      if (!nameEdited) name.value = suggest(image.value.trim());
-      err.hidden = true;
-    };
-    name.oninput = () => {
-      nameEdited = true;
-      err.hidden = true;
-    };
-    const validate = (): string => {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image.value.trim())) return t("gui.k8s.deploy.err_image");
-      if (!NAME_RE.test(name.value.trim()) || name.value.trim().length > 63) return t("gui.k8s.deploy.err_name");
-      const p = port.value.trim();
-      if (p !== "" && !(/^\d+$/.test(p) && +p >= 1 && +p <= 65535)) return t("gui.k8s.deploy.err_port");
-      if (exposeMode() !== "none" && p === "") return t("gui.k8s.deploy.err_port_req");
-      const h = hostPort.value.trim();
-      if (exposeMode() === "loadbalancer" && h !== "" && !(/^\d+$/.test(h) && +h >= 1 && +h <= 65535)) return t("gui.k8s.deploy.err_port");
-      if (!/^\d+$/.test(replicas.value.trim()) || +replicas.value < 1 || +replicas.value > 100) return t("gui.k8s.deploy.err_replicas");
-      return "";
-    };
-    cancel.onclick = () => d.close();
-    const form = el("form", { method: "dialog", class: "add-machine-form" },
-      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.image") }), textField(image), datalist),
-      el("div", { class: "deploy-grid name-row" },
-        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.name") }), textField(name)),
-        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.replicas") }), textField(replicas)),
-      ),
-      el("div", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.expose") }), exposeGroup),
-      el("div", { class: "deploy-grid" },
-        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.port") }), textField(port)),
-        hostField,
-      ),
-      el("p", { class: "field-hint", text: t("gui.k8s.deploy.hint") }),
-      err,
-      el("div", { class: "row" }, cancel, submit),
-    );
-    form.noValidate = true;
-    form.onsubmit = async (ev) => {
-      ev.preventDefault();
-      const bad = validate();
-      if (bad) {
-        err.textContent = bad;
-        err.hidden = false;
-        return;
-      }
-      submit.disabled = true;
-      submit.querySelector(".label")!.textContent = t("gui.k8s.deploy.deploying");
-      try {
-        const mode = exposeMode();
-        const res = await api.k8sDeploy({
-          image: image.value.trim(),
-          name: name.value.trim(),
-          port: port.value.trim() ? +port.value : undefined,
-          expose: mode,
-          host_port: mode === "loadbalancer" && hostPort.value.trim() ? +hostPort.value : undefined,
-          replicas: +replicas.value,
-        });
-        d.close();
-        let msg = fmt(t("gui.k8s.deploy.done"), res.name);
-        if (res.expose === "loadbalancer" && res.host_port) {
-          msg = res.port_changed
-            ? fmt(t("gui.k8s.deploy.done_moved"), res.name, String(res.host_port), hostPort.value.trim() || port.value.trim())
-            : fmt(t("gui.k8s.deploy.done_url"), res.name, String(res.host_port));
-        } else if (res.node_port) {
-          msg = fmt(t("gui.k8s.deploy.done_url"), res.name, String(res.node_port));
-        }
-        this.notify(msg, { sticky: true });
-        await this.refresh();
-      } catch (e) {
-        err.textContent = e instanceof ApiError ? e.message : String(e);
-        err.hidden = false;
-      } finally {
-        submit.disabled = false;
-        submit.querySelector(".label")!.textContent = t("gui.k8s.deploy.submit");
-      }
-    };
-    d.addEventListener("close", () => {
-      nameEdited = false;
-      exposeRadios.loadbalancer.checked = true;
-      hostPort.value = "";
-      syncExpose();
-    });
-    syncExpose();
-    d.append(el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.deploy.dialog") })), form);
-    return d;
-  }
-
-  /** Import：先選來源（Windows 或 WSL distro）與檔案，再預覽 Compose 轉換結果與警告，最後 Deploy。
-   *  選到 k8s manifest（沒有 services）時改走 kubectl apply。檔案瀏覽與讀取都在後端（含同資料夾的 .env）。 */
-  private buildImportDialog(): ImportDialog {
-    const d = el("dialog", { class: "deploy-dialog import-dialog", "data-testid": "import-dialog" }) as ImportDialog;
-    const SRC_KEY = "wsld.import.src";
-    let sources: FileSources = { drives: [], wsl: [] };
-    let kind = "wsl";
-    let source = "";
-    let dir = "";
-    let parent = "";
-    let selected = "";
-    let preview: ComposePreview | undefined;
-    let seq = 0;
-    const sep = () => (kind === "windows" ? "\\" : "/");
-    const join = (base: string, name: string) => base.replace(/[\\/]+$/, "") + sep() + name;
-    const mk = (testid: string) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid }) as HTMLInputElement;
-    const errBox = el("div", { class: "field-error", "data-testid": "import-error", hidden: "" });
-    const showErr = (m: string) => {
-      errBox.textContent = m;
-      errBox.hidden = !m;
-    };
-    const msg = (e: unknown) => (e instanceof ApiError ? e.message : String(e));
-
-    // ---- 步驟 1：來源與檔案
-    const kindLabel = el("span", { class: "field-label", id: "import-kind-label", text: t("gui.k8s.import.kind") });
-    const srcLabel = el("span", { class: "field-label", id: "import-source-label" });
-    const kindDd = dropdown({ testid: "import-kind", labelledby: "import-kind-label" }, [], kind, (v) => {
-      kind = v;
-      source = "";
-      fillSources();
-      void load("");
-    });
-    const srcDd = dropdown({ testid: "import-source", labelledby: "import-source-label" }, [], "", (v) => {
-      source = v;
-      void load("");
-    });
-    const ownerHint = el("p", { class: "field-hint", "data-testid": "import-owner-hint", hidden: "" });
-    const crumb = el("div", { class: "import-path mono", "data-testid": "import-path" });
-    const list = el("div", { class: "import-list", "data-testid": "import-list" });
-    const stoppedBtn = btn({ type: "button", "data-testid": "import-start" }, "play", t("gui.k8s.import.start_browse"));
-    const stopped = el("div", { class: "import-stopped", "data-testid": "import-stopped", hidden: "" }, el("span", { text: t("gui.k8s.import.stopped_note") }), stoppedBtn);
-    const step1 = el("div", { class: "import-step" },
-      el("div", { class: "deploy-grid" }, el("div", { class: "field" }, kindLabel, kindDd.el), el("div", { class: "field" }, srcLabel, srcDd.el)),
-      ownerHint, crumb, list, stopped,
-      el("p", { class: "field-hint", text: t("gui.k8s.import.hint") }),
-    );
-
-    const fillSources = () => {
-      const opts: DropdownOption[] = kind === "wsl"
-        ? sources.wsl.map((x): DropdownOption => [x.name, x.running ? x.name : `${x.name} (${t("gui.k8s.import.stopped_tag")})`])
-        : sources.drives.map((x): DropdownOption => [x, x]);
-      if (!opts.some(([v]) => v === source)) source = opts[0]?.[0] ?? "";
-      srcDd.setOptions(opts, source, t("gui.k8s.import.no_source"));
-      srcLabel.textContent = kind === "wsl" ? t("gui.k8s.import.distro") : t("gui.k8s.import.drive");
-      ownerHint.hidden = !(kind === "wsl" && sources.owner);
-      ownerHint.textContent = sources.owner ? fmt(t("gui.k8s.import.owner_hint"), sources.owner) : "";
-    };
-
-    const renderList = (entries: FileEntry[]) => {
-      const rows: HTMLElement[] = [];
-      if (parent) {
-        const up = el("button", { type: "button", class: "import-item dim", "data-testid": "import-up" }, icon("chevron-left"), el("span", { text: t("gui.k8s.import.up") }));
-        up.onclick = () => void load(parent);
-        rows.push(up);
-      }
-      for (const e of entries) {
-        const full = join(dir, e.name);
-        const row = el("button", { type: "button", class: `import-item${full === selected ? " on" : ""}`, "data-testid": `import-item-${e.name}`, "data-kind": e.dir ? "dir" : "file" },
-          icon(e.dir ? "folder" : "file"), el("span", { text: e.name }), el("small", { text: e.dir ? "" : humanSize(e.size ?? 0) }));
-        row.onclick = () => {
-          if (e.dir) return void load(full);
-          selected = full;
-          list.querySelectorAll(".import-item.on").forEach((x) => x.classList.remove("on"));
-          row.classList.add("on");
-          crumb.textContent = full;
-          syncButtons();
-        };
-        row.ondblclick = () => {
-          if (!e.dir) void toPreview();
-        };
-        rows.push(row);
-      }
-      if (!entries.length) rows.push(el("div", { class: "import-empty", text: t("gui.k8s.import.empty") }));
-      list.replaceChildren(...rows);
-    };
-
-    const load = async (path: string, start = false) => {
-      const mine = ++seq;
-      stopped.hidden = true;
-      showErr("");
-      selected = "";
-      syncButtons();
-      if (!source) {
-        list.replaceChildren(el("div", { class: "import-empty", text: t("gui.k8s.import.no_source") }));
-        crumb.textContent = "";
-        return;
-      }
-      try {
-        const r = await api.fsList(kind, source, path, start);
-        if (mine !== seq) return;
-        dir = r.path;
-        parent = r.parent;
-        crumb.textContent = dir;
-        renderList(r.entries);
-        saveJSON(SRC_KEY, { kind, source });
-      } catch (e) {
-        if (mine !== seq) return;
-        list.replaceChildren();
-        if (e instanceof ApiError && e.code === "stopped") stopped.hidden = false;
-        else showErr(msg(e));
-      }
-    };
-    stoppedBtn.onclick = () => {
-      void api.fsSources().then((s) => (sources = s)).catch(() => undefined);
-      void load("", true);
-    };
-
-    // ---- 步驟 2：預覽
-    const nameIn = mk("import-stack-name");
-    const nsIn = mk("import-namespace");
-    const readLine = el("div", { class: "import-read", "data-testid": "import-read" });
-    const svcBox = el("div", { class: "import-services", "data-testid": "import-services" });
-    const warnBox = el("div", { class: "import-warn", "data-testid": "import-warnings", hidden: "" });
-    const plainNote = el("p", { class: "field-hint", "data-testid": "import-plain-env", text: t("gui.k8s.import.plain_env") });
-    const orderLine = el("div", { class: "import-order", "data-testid": "import-order" });
-    const yamlBox = el("pre", { class: "import-yaml mono", "data-testid": "import-yaml", hidden: "" });
-    const manifestNote = el("p", { class: "import-manifest", "data-testid": "import-manifest", text: t("gui.k8s.import.manifest_note"), hidden: "" });
-    const composeParts = el("div", { class: "import-step" },
-      el("div", { class: "deploy-grid" },
-        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.import.stack_name") }), textField(nameIn)),
-        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.import.namespace") }), textField(nsIn))),
-      readLine, el("div", { class: "field-label", text: t("gui.k8s.import.services") }), svcBox, orderLine, warnBox, plainNote, yamlBox);
-    const step2 = el("div", { class: "import-step" }, manifestNote, composeParts);
-
-    const mask = (y: string) => y.replace(/("name": "[^"]*(?:PASSWORD|SECRET|TOKEN|KEY)[^"]*",\s*"value": )"[^"]*"/gi, '$1"••••"');
-    const renderPreview = () => {
-      const p = preview!;
-      manifestNote.hidden = p.kind !== "manifest";
-      composeParts.hidden = p.kind !== "compose";
-      if (p.kind !== "compose" || !p.spec) return;
-      readLine.textContent = fmt(t("gui.k8s.import.read"), [selectedName(), ...p.read_files].join(", "));
-      const byName = new Map(p.spec.services.map((s) => [s.name, s]));
-      svcBox.replaceChildren(...(p.order ?? []).map((n) => {
-        const s = byName.get(n)!;
-        const bits = [s.image];
-        if (s.depends_on?.length) bits.push(fmt(t("gui.k8s.import.depends"), s.depends_on.join(", ")));
-        if (s.env?.length) bits.push(fmt(t("gui.k8s.import.env_n"), String(s.env.length)));
-        if (s.volumes?.length) bits.push(fmt(t("gui.k8s.import.volumes_n"), String(s.volumes.length)));
-        if ((s.replicas ?? 1) > 1) bits.push(`replicas ${s.replicas}`);
-        const exposure = s.expose === "loadbalancer" ? `localhost:${s.host_port}` : s.expose === "nodeport" ? "NodePort" : s.port ? `${t("gui.k8s.import.cluster_only")} :${s.port}` : t("gui.k8s.import.cluster_only");
-        return el("div", { class: "import-svc", "data-testid": `import-svc-${n}` }, el("b", { text: n }), el("span", { text: bits.join(" · ") }), el("small", { text: exposure }));
-      }));
-      orderLine.textContent = `${t("gui.k8s.import.order")}: ${(p.order ?? []).join(" → ")}`;
-      warnBox.hidden = p.warnings.length === 0;
-      warnBox.replaceChildren(el("b", { text: fmt(t("gui.k8s.import.warnings"), String(p.warnings.length)) }), ...p.warnings.map((w) => el("div", { text: w })));
-      plainNote.hidden = !p.spec.services.some((s) => s.env?.length);
-      yamlBox.textContent = mask(p.yaml ?? "");
-    };
-    const selectedName = () => selected.split(/[\\/]/).pop() ?? selected;
-
-    // ---- 流程
-    const cancel = btn({ type: "button", "data-testid": "import-cancel" }, "close", t("gui.cancel"));
-    const next = btn({ class: "primary", type: "button", "data-testid": "import-next" }, "chevron-right", t("gui.k8s.import.next"));
-    const back = btn({ type: "button", "data-testid": "import-back" }, "chevron-left", t("gui.k8s.import.back"));
-    const yamlToggle = btn({ type: "button", "data-testid": "import-view-yaml" }, "file", t("gui.k8s.import.view_yaml"));
-    const submit = btn({ class: "primary", type: "button", "data-testid": "import-submit" }, "play", t("gui.k8s.import.deploy"));
-    let step: 1 | 2 = 1;
-    const syncButtons = () => {
-      step1.hidden = step !== 1;
-      step2.hidden = step !== 2;
-      next.hidden = step !== 1;
-      next.disabled = !selected;
-      back.hidden = step !== 2;
-      submit.hidden = step !== 2;
-      yamlToggle.hidden = step !== 2 || preview?.kind !== "compose";
-      submit.querySelector(".label")!.textContent = preview?.kind === "manifest" ? t("gui.k8s.import.apply") : t("gui.k8s.import.deploy");
-    };
-    const fetchPreview = async () => {
-      showErr("");
-      try {
-        const r = await api.composePreview({ kind, name: source, path: selected, stack_name: nameIn.value.trim() || undefined, namespace: nsIn.value.trim() || undefined });
-        preview = r;
-        if (r.kind === "compose" && r.spec) {
-          nameIn.value = r.spec.name;
-          nsIn.value = r.spec.namespace ?? r.spec.name;
-        }
-        renderPreview();
-        return true;
-      } catch (e) {
-        showErr(msg(e));
-        return false;
-      }
-    };
-    const toPreview = async () => {
-      if (!selected) return;
-      nameIn.value = "";
-      nsIn.value = "";
-      if (!(await fetchPreview())) return;
-      step = 2;
-      syncButtons();
-    };
-    next.onclick = () => void toPreview();
-    back.onclick = () => {
-      step = 1;
-      showErr("");
-      syncButtons();
-    };
-    cancel.onclick = () => d.close();
-    nameIn.onchange = () => void fetchPreview();
-    nsIn.onchange = () => void fetchPreview();
-    yamlToggle.onclick = () => {
-      yamlBox.hidden = !yamlBox.hidden;
-      yamlToggle.querySelector(".label")!.textContent = yamlBox.hidden ? t("gui.k8s.import.view_yaml") : t("gui.k8s.import.hide_yaml");
-    };
-    submit.onclick = async () => {
-      if (!preview) return;
-      submit.disabled = true;
-      const label = submit.querySelector(".label")!;
-      const prev = label.textContent;
-      label.textContent = t("gui.k8s.import.deploying");
-      try {
-        if (preview.kind === "manifest") {
-          const r = await api.k8sApply(preview.manifest ?? "");
-          d.close();
-          this.notify(fmt(t("gui.k8s.apply_done"), r.output.split("\n").join("; ")));
-        } else {
-          const res = await api.k8sStack(preview.spec!);
-          d.close();
-          const urls = res.services.map((r) => (r.host_port ? `${r.name} → http://localhost:${r.host_port}` : r.node_port ? `${r.name} → http://localhost:${r.node_port}` : "")).filter(Boolean);
-          this.notify([fmt(t("gui.k8s.import.done"), res.name, String(res.services.length)), ...urls].join("; "), { sticky: true });
-        }
-        await this.refresh();
-      } catch (e) {
-        showErr(msg(e));
-      } finally {
-        submit.disabled = false;
-        label.textContent = prev;
-      }
-    };
-
-    d.begin = async () => {
-      step = 1;
-      preview = undefined;
-      selected = "";
-      showErr("");
-      try {
-        sources = await api.fsSources();
-      } catch (e) {
-        sources = { drives: [], wsl: [] };
-        showErr(msg(e));
-      }
-      const kinds: DropdownOption[] = [];
-      if (sources.wsl.length) kinds.push(["wsl", "WSL"]);
-      if (sources.drives.length) kinds.push(["windows", "Windows"]);
-      const last = loadJSON<{ kind: string; source: string }>(SRC_KEY, { kind: "", source: "" });
-      kind = kinds.some(([v]) => v === last.kind) ? last.kind : (kinds[0]?.[0] ?? "wsl");
-      source = last.kind === kind ? last.source : "";
-      kindDd.setOptions(kinds, kind, t("gui.k8s.import.no_source"));
-      fillSources();
-      syncButtons();
-      d.showModal();
-      await load("");
-    };
-    d.append(
-      el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.import.title") })),
-      el("div", { class: "add-machine-form" }, step1, step2, errBox, el("div", { class: "row" }, yamlToggle, el("span", { class: "spacer" }), cancel, back, next, submit)),
-    );
-    syncButtons();
-    return d;
-  }
-
-  private async openImport(): Promise<void> {
-    await this.root.querySelector<ImportDialog>('[data-testid="import-dialog"]')!.begin();
-  }
-
-  private async openDeploy(): Promise<void> {
-    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="deploy-dialog"]')!;
-    for (const id of ["deploy-image", "deploy-name", "deploy-port"]) d.querySelector<HTMLInputElement>(`[data-testid="${id}"]`)!.value = "";
-    d.querySelector<HTMLInputElement>('[data-testid="deploy-replicas"]')!.value = "1";
-    d.querySelector<HTMLElement>('[data-testid="deploy-error"]')!.hidden = true;
-    const list = d.querySelector<HTMLElement>("#deploy-images")!;
-    try {
-      const imgs = await api.images();
-      const tags = imgs.flatMap((i) => i.RepoTags ?? []).filter((x) => x && x !== "<none>:<none>");
-      list.replaceChildren(...[...new Set(tags)].map((tag) => el("option", { value: tag })));
-    } catch {
-      /* 取不到本機映像清單時仍可手動輸入 */
-    }
-    d.showModal();
-    d.querySelector<HTMLInputElement>('[data-testid="deploy-image"]')!.focus();
-  }
-
-  /** 全部 namespace 的資源（卡片、架構圖、各分頁共用）。 */
-  private k8sRes(): K8sResources {
-    const x = this.st.k8sExtras;
-    return { pods: this.st.k8sPods, deployments: this.st.k8sDeployments, services: this.st.k8sServices, statefulsets: x.statefulsets, ingresses: x.ingresses, configmaps: x.configmaps, pvcs: x.pvcs, others: x.others };
-  }
-
-  /** Namespace flow card 格：每個 namespace 一張卡，內容是 Ingress → Service → Workload → Pods 的數量流程。 */
-  private k8sResources(): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources", "data-testid": "k8s-resources" });
-    if (this.k8sListError) {
-      wrap.append(el("div", { class: "empty", "data-testid": "k8s-list-error", text: this.k8sListError }));
-      return wrap;
-    }
-    if (this.st.k8sNamespaces.length === 0) {
-      wrap.append(el("div", { class: "empty", "data-testid": "empty", text: t("gui.empty.k8s_namespaces") }));
-      return wrap;
-    }
-    // 頁籤：Workloads（default 與自建）／System（kube-*，Kubernetes 內建）。各自佔滿內容區，不互搶空間。
-    const res = this.k8sRes();
-    const viewBar = tabs({
-      testid: "k8s-view-tabs",
-      selected: this.k8sView,
-      items: (["apps", "namespaces"] as const).map((id) => ({ id, testid: `k8s-view-${id}`, label: t(`gui.k8s.view.${id}`) })),
-      onSelect: (id) => {
-        this.k8sView = id === "namespaces" ? "namespaces" : "apps";
-        saveJSON(LS_K8S_VIEW, this.k8sView);
-        this.renderKubernetes();
-      },
-    });
-    wrap.append(this.k8sView === "apps" ? el("div", { class: "k8s-viewbar" }, viewBar, this.k8sShowSystemToggle()) : viewBar);
-    if (this.k8sView === "apps") {
-      wrap.append(this.k8sAppsView());
-      return wrap;
-    }
-    const groups: Record<K8sGroup, string[]> = {
-      workloads: this.st.k8sNamespaces.filter((ns) => !isSystemNs(ns)),
-      system: this.st.k8sNamespaces.filter(isSystemNs),
-    };
-    const sysAbnormal = groups.system.some((ns) => {
-      const h = summarizeNamespace(ns, res).health;
-      return h === "warn" || h === "error";
-    });
-    const bar = tabs({
-      testid: "k8s-group-tabs",
-      selected: this.k8sGroup,
-      bordered: true,
-      items: (["workloads", "system"] as K8sGroup[]).map((id) => ({
-        id, testid: `k8s-group-${id}`, label: t(`gui.k8s.group.${id}`), count: groups[id].length,
-        dot: id === "system" && sysAbnormal ? t("gui.k8s.group.abnormal") : undefined,
-      })),
-      onSelect: (id) => this.k8sSelectGroup(id as K8sGroup),
-    });
-    const panel = el("div", { class: "k8s-ns-panel" }, bar);
-    wrap.append(panel);
-    const grid = el("div", { class: "k8s-ns-grid", "data-testid": "k8s-ns-grid" });
-    for (const ns of groups[this.k8sGroup]) grid.append(this.k8sNsCard(ns));
-    if (this.k8sGroup === "workloads" && groups.workloads.length === 1 && groups.workloads[0] === "default") {
-      grid.append(el("div", { class: "k8s-ns-hint", "data-testid": "k8s-ns-hint" }, el("strong", { text: t("gui.k8s.ns.hint_title") }), el("span", { text: t("gui.k8s.ns.hint_body") })));
-    }
-    panel.append(grid);
-    return wrap;
-  }
-
-  // ---- Apps 視圖（預設）：一個 Deployment＋它的 Service／Pods 合成一列 -------------------
-
-  private k8sAppsView(): HTMLElement {
-    const wrap = el("div", { class: "k8s-apps", "data-testid": "k8s-apps" });
-    const apps = buildApps(this.k8sRes(), this.k8sShowSystem);
-    if (apps.length === 0) {
-      wrap.append(this.k8sDeployEmpty());
-      return wrap;
-    }
-    const cards = el("div", { class: "k8s-app-list", role: "list" });
-    for (const a of apps) cards.append(this.k8sAppCard(a));
-    wrap.append(cards);
-    return wrap;
-  }
-
-  /** 顯示系統元件的開關：與 Apps／Namespaces 頁籤同一列，靠右。 */
-  private k8sShowSystemToggle(): HTMLElement {
-    const showSys = el("input", { type: "checkbox", "data-testid": "k8s-show-system" }) as HTMLInputElement;
-    showSys.checked = this.k8sShowSystem;
-    showSys.onchange = () => {
-      this.k8sShowSystem = showSys.checked;
-      saveJSON(LS_K8S_SHOWSYS, this.k8sShowSystem);
-      showSys.blur(); // 輪詢重繪會略過仍有 input 焦點的清單
-      this.renderKubernetes();
-    };
-    return el("label", { class: "k8s-opt k8s-showsys" }, showSys, t("gui.k8s.apps.show_system"));
-  }
-
-  private k8sAppCard(a: K8sApp): HTMLElement {
-    const key = `k8s-app:${a.namespace}/${a.name}`;
-    const id = `${a.namespace}/${a.name}`;
-    const open = this.k8sExpandedApps.has(id);
-    const toggle = el("button", { type: "button", class: "app-toggle", "data-testid": "btn-app-expand", "aria-expanded": String(open), "aria-label": open ? t("gui.k8s.apps.collapse") : t("gui.k8s.apps.expand"), text: open ? "▾" : "▸" });
-    toggle.onclick = () => {
-      if (open) this.k8sExpandedApps.delete(id);
-      else this.k8sExpandedApps.add(id);
-      toggle.blur(); // renderKubernetes 會略過仍聚焦且 aria-expanded=true 的元素，不先失焦就無法折疊
-      this.renderKubernetes();
-    };
-    const statusText = a.status === "stopped" ? t("gui.k8s.apps.status.stopped") : fmt(t(`gui.k8s.apps.status.${a.status}`), a.ready);
-    const status = el("span", { class: `app-status ${a.status}`, "data-testid": "app-status", "data-status": a.status, text: a.reason ? `${statusText} · ${a.reason}` : statusText });
-
-    const urlCell = el("span", { class: "app-urls", "data-testid": "app-urls" });
-    for (const u of a.urls) {
-      const link = el("a", { href: u.href, class: "app-url", "data-testid": "app-url-link", "data-port": String(u.port), text: `${u.label} ↗` });
-      link.onclick = (ev) => {
-        ev.preventDefault();
-        void api.k8sOpen(u.port).catch((err) => {
-          this.st.lastError = err instanceof ApiError ? err.message : String(err);
-          this.renderBanner();
-        });
-      };
-      urlCell.append(link);
-    }
-    const addUrl = el("button", { type: "button", class: "app-add-url", "data-testid": a.urls.length ? "btn-app-edit-url" : "btn-app-add-url", text: a.urls.length ? t("gui.k8s.apps.edit_url") : `＋ ${t("gui.k8s.apps.add_url")}` });
-    addUrl.onclick = () => void this.openExpose(a);
-    urlCell.append(addUrl);
-
-    const restart = iconBtn({ "data-testid": "btn-app-restart" }, "refresh", t("gui.k8s.restart"));
-    restart.disabled = this.st.busy.has(key);
-    restart.onclick = () => void this.k8sMutate(key, () => api.k8sRestart(a.namespace, a.name), fmt(t("gui.k8s.restarted"), a.name));
-    const rm = iconBtn({ "data-testid": "btn-app-delete", class: "danger" }, "trash", t("gui.k8s.apps.delete"));
-    rm.disabled = this.st.busy.has(key);
-    rm.onclick = () => void this.k8sDeleteApp(a);
-
-    const card = el("div", { class: "k8s-app-card k8s-app-row", role: "listitem", "data-testid": "k8s-app-row", "data-name": a.name, "data-ns": a.namespace, "data-status": a.status, "data-expanded": String(open) },
-      el("div", { class: "k8s-app-main" },
-        el("span", { class: "app-name-cell" }, toggle,
-          el("span", { class: "app-name-wrap" },
-            el("span", { class: "app-name", "data-testid": "app-name", text: a.name }),
-            el("span", { class: "app-sub muted", "data-testid": "app-sub", text: [a.image, a.namespace].filter(Boolean).join(" · "), title: a.image }),
-          )),
-        status, urlCell, el("span", { class: "app-actions" }, restart, rm),
-      ),
-    );
-    if (open) card.append(this.k8sAppDetail(a));
-    return card;
-  }
-
-  /** 展開的一列：副本數調整與 Pods（Logs／Exec）。 */
-  private k8sAppDetail(a: K8sApp): HTMLElement {
-    const { stepper, apply } = this.k8sScaleControls(a.deployment);
-    const pods = a.pods.length
-      ? a.pods.map((p) => {
-          const logs = iconBtn({ "data-testid": `btn-pod-logs-${p.name}` }, "logs", t("gui.logs"));
-          logs.onclick = () => this.openPodLogs(p.namespace, p.name);
-          const term = iconBtn({ "data-testid": `btn-pod-term-${p.name}` }, "terminal", t("gui.terminal"));
-          term.disabled = p.status !== "Running";
-          term.onclick = () => this.openPodTerminal(p.namespace, p.name);
-          return el("div", { class: "app-pod", "data-testid": "app-pod", "data-name": p.name },
-            el("span", { class: "mono", text: p.name, title: p.name }),
-            el("span", { class: `state ${podStateClass(p.status)}`, text: p.status }),
-            el("span", { class: "muted mono", text: p.ip ?? "" }),
-            el("span", { class: "app-actions" }, logs, term),
-          );
-        })
-      : [el("div", { class: "muted", text: t("gui.k8s.apps.no_pods") })];
-    return el("div", { class: "k8s-app-detail", "data-testid": "app-detail" },
-      el("div", { class: "app-scale" }, el("span", { class: "muted", text: t("gui.k8s.replicas") }), stepper, apply),
-      ...pods,
-    );
-  }
-
-  /** 刪除 app：Deployment 與「只指向這個 app」的 Service 一起刪（共用的 Service 保留）。 */
-  private async k8sDeleteApp(a: K8sApp): Promise<void> {
-    const key = `k8s-app:${a.namespace}/${a.name}`;
-    const others = buildApps(this.k8sRes(), true).filter((x) => x.namespace === a.namespace && x.name !== a.name);
-    const own = a.services.filter((sv) => !others.some((o) => o.services.some((s2) => s2.name === sv.name)));
-    await this.resourceAction(key, fmt(t("gui.k8s.apps.confirm_delete"), a.name), async () => {
-      await api.k8sDelete("deployments", a.namespace, a.name);
-      for (const sv of own) await api.k8sDelete("services", sv.namespace, sv.name);
-      if (this.st.k8sDetail?.name === a.name) this.st.k8sDetail = undefined;
-      this.k8sExpandedApps.delete(`${a.namespace}/${a.name}`);
-      return fmt(t("gui.k8s.apps.deleted"), a.name);
-    });
-  }
-
-  private buildExposeDialog(): HTMLDialogElement {
-    const d = el("dialog", { "data-testid": "expose-dialog" }) as HTMLDialogElement;
-    const mk = (testid: string, extra: Record<string, string> = {}) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid, ...extra }) as HTMLInputElement;
-    const hostPort = mk("expose-hostport", { inputmode: "numeric", placeholder: t("gui.k8s.deploy.same_as_container") });
-    const port = mk("expose-port", { inputmode: "numeric", placeholder: t("gui.k8s.expose.auto_port") });
-    const err = el("div", { class: "field-error", "data-testid": "expose-error", hidden: "" });
-    const title = el("h2", { "data-testid": "expose-title" });
-    type Mode = "loadbalancer" | "nodeport";
-    const radios = {} as Record<Mode, HTMLInputElement>;
-    const group = el("div", { class: "expose-group", role: "radiogroup", "aria-label": t("gui.k8s.deploy.expose") });
-    for (const [v, label, hint] of [["loadbalancer", "gui.k8s.deploy.expose_lb", "gui.k8s.deploy.expose_lb_d"], ["nodeport", "gui.k8s.deploy.expose_np", "gui.k8s.deploy.expose_np_d"]] as [Mode, string, string][]) {
-      const r = el("input", { type: "radio", name: "expose-mode", value: v, id: `expose-mode-${v}`, "data-testid": `expose-mode-${v}` }) as HTMLInputElement;
-      radios[v] = r;
-      group.append(el("label", { class: "expose-opt", for: r.id }, r, el("span", {}, el("b", { text: t(label) }), el("small", { text: t(hint) }))));
-    }
-    const hostField = el("label", { class: "field", "data-testid": "expose-hostport-field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.host_port") }), textField(hostPort));
-    const mode = (): Mode => (radios.nodeport.checked ? "nodeport" : "loadbalancer");
-    const sync = () => {
-      hostField.hidden = mode() !== "loadbalancer";
-    };
-    for (const r of Object.values(radios)) r.onchange = () => {
-      sync();
-      err.hidden = true;
-    };
-    const submit = btn({ class: "primary", type: "submit", "data-testid": "expose-submit" }, "check", t("gui.k8s.expose.submit"));
-    const cancel = btn({ type: "button", "data-testid": "expose-cancel" }, "close", t("gui.cancel"));
-    cancel.onclick = () => d.close();
-    const valid = (v: string) => v === "" || (/^\d+$/.test(v) && +v >= 1 && +v <= 65535);
-    const form = el("form", { method: "dialog", class: "add-machine-form" },
-      el("div", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.deploy.expose") }), group),
-      hostField,
-      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.expose.container_port") }), textField(port)),
-      err,
-      el("div", { class: "row" }, cancel, submit),
-    );
-    form.noValidate = true;
-    form.onsubmit = async (ev) => {
-      ev.preventDefault();
-      const target = this.k8sExposeTarget;
-      if (!target) return;
-      if (!valid(port.value.trim()) || (mode() === "loadbalancer" && !valid(hostPort.value.trim()))) {
-        err.textContent = t("gui.k8s.deploy.err_port");
-        err.hidden = false;
-        return;
-      }
-      submit.disabled = true;
-      try {
-        const res = await api.k8sExpose({
-          namespace: target.namespace,
-          name: target.name,
-          expose: mode(),
-          port: port.value.trim() ? +port.value : undefined,
-          host_port: mode() === "loadbalancer" && hostPort.value.trim() ? +hostPort.value : undefined,
-        });
-        d.close();
-        const shown = res.expose === "loadbalancer" ? res.host_port : res.node_port;
-        if (shown) {
-          this.notify(res.port_changed ? fmt(t("gui.k8s.expose.done_moved"), res.name, String(shown), hostPort.value.trim() || port.value.trim()) : fmt(t("gui.k8s.expose.done"), res.name, String(shown)), { sticky: true });
-        }
-        await this.refresh();
-      } catch (e) {
-        err.textContent = e instanceof ApiError ? e.message : String(e);
-        err.hidden = false;
-      } finally {
-        submit.disabled = false;
-      }
-    };
-    d.append(el("div", { class: "dialog-head" }, title), form);
-    // openExpose 需要設定標題與預設值
-    (d as HTMLDialogElement & { prep?: (a: K8sApp) => void }).prep = (a: K8sApp) => {
-      const lb = a.services.find((sv) => sv.type === "LoadBalancer");
-      const np = a.services.find((sv) => sv.type === "NodePort");
-      title.textContent = fmt(t(a.urls.length ? "gui.k8s.expose.title_edit" : "gui.k8s.expose.title"), a.name);
-      radios.loadbalancer.checked = !np || !!lb || !a.urls.length;
-      radios.nodeport.checked = !radios.loadbalancer.checked;
-      hostPort.value = lb?.ports[0] ? String(lb.ports[0].port) : "";
-      port.value = "";
-      err.hidden = true;
-      sync();
-    };
-    return d;
-  }
-
-  private k8sExposeTarget?: K8sApp;
-
-  private async openExpose(a: K8sApp): Promise<void> {
-    const d = this.root.querySelector<HTMLDialogElement & { prep?: (a: K8sApp) => void }>('[data-testid="expose-dialog"]')!;
-    this.k8sExposeTarget = a;
-    d.prep?.(a);
-    d.showModal();
-  }
-
-  private k8sNsCard(ns: string): HTMLElement {
-    const sum = summarizeNamespace(ns, this.k8sRes());
-    const node = (kind: string, label: string, value: string, n: number) =>
-      el("div", { class: `ns-node${n === 0 ? " zero" : ""}`, "data-kind": kind },
-        el("span", { class: "ns-node-label", text: label }),
-        el("span", { class: "ns-node-value", "data-testid": `k8s-ns-node-${kind}`, text: value }),
-      );
-    const arrow = () => el("span", { class: "ns-arrow", "aria-hidden": "true", text: "→" });
-    const open = this.st.k8sNs === ns;
-    // 系統 namespace 沒有 Service／Workload／Pod 時，流程圖只會是一排 0：改為直接列出裡面實際有的東西
-    const flowless = isSystemNs(ns) && sum.ingresses + sum.services + sum.workloads + sum.pods === 0;
-    const chips = [...sum.others.map((o) => [o.kind, o.count] as const), ...(sum.configMaps ? [["ConfigMap", sum.configMaps] as const] : []), ...(sum.pvcs ? [["PVC", sum.pvcs] as const] : [])];
-    const flowlessBody = el("span", { class: "ns-items", "data-testid": "k8s-ns-items" },
-      ...(chips.length ? chips.map(([k, n]) => el("span", { class: "ns-chip", "data-kind": k, text: `${k} ${n}` })) : [el("span", { class: "muted", text: t("gui.k8s.health.empty") })]),
-    );
-    const card = el("button", { type: "button", class: "k8s-ns-card", "data-testid": `k8s-ns-card-${ns}`, "data-ns": ns, "data-health": sum.health, "aria-pressed": String(open) },
-      el("span", { class: "ns-head" },
-        el("span", { class: "ns-name", "data-testid": "k8s-ns-name", text: ns, title: ns }),
-        el("span", { class: "ns-head-tags" },
-          // 健康狀態只在異常時標示；正常不顯示，避免每張卡都貼狀態
-          ...(sum.health === "warn" || sum.health === "error" ? [el("span", { class: `ns-health ${sum.health}`, "data-testid": "k8s-ns-health", text: t(`gui.k8s.health.${sum.health}`) })] : []),
-          el("span", { class: "ns-kind", "data-testid": "k8s-ns-kind", text: t(`gui.k8s.ns.kind.${ns === "default" ? "default" : isSystemNs(ns) ? "system" : "user"}`) }),
-        ),
-      ),
-      ...(flowless ? [flowlessBody] : [el("span", { class: "ns-flow" },
-        ...(sum.ingresses > 0 ? [node("ingresses", t("gui.k8s.node.ingresses"), String(sum.ingresses), sum.ingresses), arrow()] : []),
-        node("services", t("gui.k8s.node.services"), String(sum.services), sum.services),
-        arrow(),
-        node("workloads", t("gui.k8s.node.workloads"), String(sum.workloads), sum.workloads),
-        arrow(),
-        node("pods", t("gui.k8s.node.pods"), `${sum.podsReady}/${sum.pods}`, sum.pods),
-      )]),
-      ...(sum.nodePorts.length ? [el("span", { class: "ns-exposed", "data-testid": "k8s-ns-exposed", text: `NodePort ${sum.nodePorts.join(", ")}`, title: t("gui.k8s.exposed") })] : []),
-      ...(flowless ? [] : [el("span", { class: "ns-foot muted", "data-testid": "k8s-ns-foot", text: fmt(t("gui.k8s.ns.foot"), String(sum.configMaps), String(sum.pvcs)) })]),
-      ...(!flowless && sum.others.length ? [el("span", { class: "ns-others muted", "data-testid": "k8s-ns-others", text: sum.others.map((o) => `${o.kind} ${o.count}`).join(" · "), title: sum.others.map((o) => `${o.kind} ${o.count}`).join("\n") })] : []),
-    );
-    card.onclick = () => this.k8sSelectNs(ns);
-    return card;
-  }
-
-  private k8sEmpty(key: string): HTMLElement {
-    return el("div", { class: "empty", "data-testid": "empty", text: t(key) });
-  }
-
-  // ---- Pods 分頁 -----------------------------------------------------------------
-
-  private k8sPodsTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
-    const pods = this.st.k8sPods.filter((p) => p.namespace === ns);
-    if (pods.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_pods")), wrap;
-    const g = buildNamespaceGraph(ns, this.k8sRes());
-    const search = el("input", { type: "search", class: "k8s-search", placeholder: t("gui.k8s.pods.search"), value: this.st.k8sPodQuery, "data-testid": "k8s-pod-search", "aria-label": t("gui.k8s.pods.search") }) as HTMLInputElement;
-    const filter = dropdown({ testid: "k8s-pod-status" }, [["", t("gui.k8s.pods.status_all")], ["notready", t("gui.k8s.pods.status_notready")]] as DropdownOption[], this.st.k8sPodFilter, (v) => {
-      this.st.k8sPodFilter = v as "" | "notready";
-      fill();
-    });
-    const host = el("div", { class: "k8s-table-host" });
-    const fill = () => {
-      const q = this.st.k8sPodQuery.trim().toLowerCase();
-      const rows = pods.filter((p) => (!q || p.name.toLowerCase().includes(q)) && (this.st.k8sPodFilter !== "notready" || !(p.status === "Running" && p.ready.split("/")[0] === p.ready.split("/")[1])));
-      if (rows.length === 0) return host.replaceChildren(this.k8sEmpty("gui.empty.k8s_pods"));
-      const { table: tbl, tbody } = this.k8sTable("pods", K8S_POD_COLS);
-      for (const p of rows) {
-        const key = `k8s-pod:${p.namespace}/${p.name}`;
-        const logs = iconBtn({ "data-testid": `btn-pod-logs-${p.name}` }, "logs", t("gui.logs"));
-        logs.onclick = () => this.openPodLogs(p.namespace, p.name);
-        const term = iconBtn({ "data-testid": `btn-pod-term-${p.name}` }, "terminal", t("gui.terminal"));
-        term.disabled = p.status !== "Running";
-        term.onclick = () => this.openPodTerminal(p.namespace, p.name);
-        const rm = iconBtn({ "data-testid": `btn-pod-rm-${p.name}`, class: "danger" }, "trash", t("gui.remove"));
-        rm.disabled = this.st.busy.has(key);
-        rm.onclick = () =>
-          void this.resourceAction(key, fmt(t("gui.k8s.confirm.delete"), "pod", p.name), async () => {
-            await api.k8sDelete("pods", p.namespace, p.name);
-            if (this.st.panel?.k8s?.pod === p.name) this.closePanel();
-            return fmt(t("gui.k8s.deleted"), p.name);
-          });
-        const owner = ownerOf(g, p);
-        tbody.append(
-          el("tr", { "data-testid": "pod-row", "data-name": p.name, "data-status": p.status },
-            el("td", { class: "name-cell two-line" },
-              el("span", { class: "ct-name mono", "data-testid": "pod-name", text: p.name, title: p.name }),
-              el("span", { class: "sub muted", "data-testid": "pod-owner", text: [owner || t("gui.k8s.pods.no_owner"), p.node].filter(Boolean).join(" · ") }),
-            ),
-            el("td", {}, el("span", { class: `state ${podStateClass(p.status)}`, "data-testid": "pod-status", text: p.status })),
-            this.k8sCell("pod-ready", p.ready),
-            this.k8sCell("pod-restarts", String(p.restarts), p.restarts > 0 ? "warn-text" : ""),
-            this.k8sCell("pod-age", ageText(p.created_at), "muted"),
-            el("td", { class: "actions" }, logs, term, rm),
-          ),
-        );
-      }
-      host.replaceChildren(tbl);
-    };
-    search.addEventListener("input", () => {
-      this.st.k8sPodQuery = search.value;
-      fill();
-    });
-    fill();
-    wrap.append(el("div", { class: "k8s-toolbar" }, search, filter.el), host);
-    return wrap;
-  }
-
-  private k8sTable(tab: string, base: Col[]) {
-    return this.table("kubernetes", base.filter((c) => c.key !== "namespace").map((c) => ({ ...c, key: `${tab}-${c.key}` })));
-  }
-
-  private k8sCell(testid: string, text: string, extra = ""): HTMLElement {
-    return el("td", { "data-testid": testid, class: extra, text, title: text });
-  }
-
-  // ---- Workloads 分頁（Deployment／StatefulSet 卡片）-------------------------------
-
-  /** 副本數調整器：−／＋ 只改輸入值，按「套用」才真的 scale（避免連點就直接改動叢集）；另含 rollout restart。 */
-  private k8sScaleControls(d: K8sDeployment): { stepper: HTMLElement; apply: HTMLButtonElement; restart: HTMLButtonElement } {
-    const key = `k8s-dep:${d.namespace}/${d.name}`;
-    const input = el("input", { type: "number", min: "0", max: "100", step: "1", value: String(d.replicas), "data-testid": `deploy-replicas-${d.name}`, "aria-label": t("gui.k8s.replicas") }) as HTMLInputElement;
-    const apply = iconBtn({ "data-testid": `btn-scale-${d.name}` }, "check", t("gui.k8s.scale"));
-    const sync = () => {
-      const n = Number(input.value);
-      apply.disabled = this.st.busy.has(key) || input.value === "" || !input.checkValidity() || n === d.replicas;
-    };
-    input.addEventListener("input", sync);
-    const step = (delta: number) => {
-      input.value = String(Math.min(100, Math.max(0, (Number(input.value) || 0) + delta)));
-      sync();
-    };
-    const dec = el("button", { type: "button", class: "stepper-btn", "data-testid": `btn-replicas-dec-${d.name}`, "aria-label": t("gui.decrease"), text: "−" });
-    const inc = el("button", { type: "button", class: "stepper-btn", "data-testid": `btn-replicas-inc-${d.name}`, "aria-label": t("gui.increase"), text: "+" });
-    dec.onclick = () => step(-1);
-    inc.onclick = () => step(1);
-    sync();
-    apply.onclick = () => {
-      const n = Number(input.value);
-      void this.k8sMutate(key, () => api.k8sScale(d.namespace, d.name, n), fmt(t("gui.k8s.scaled"), d.name, String(n)));
-    };
-    const restart = iconBtn({ "data-testid": `btn-restart-${d.name}` }, "refresh", t("gui.k8s.restart"));
-    restart.disabled = this.st.busy.has(key);
-    restart.onclick = () => void this.k8sMutate(key, () => api.k8sRestart(d.namespace, d.name), fmt(t("gui.k8s.restarted"), d.name));
-    return { stepper: el("span", { class: "stepper" }, dec, el("span", { class: "tf num replicas" }, input), inc), apply, restart };
-  }
-
-  private k8sDeleteDeployment(d: K8sDeployment): HTMLButtonElement {
-    const key = `k8s-dep:${d.namespace}/${d.name}`;
-    const rm = iconBtn({ "data-testid": `btn-deploy-rm-${d.name}`, class: "danger" }, "trash", t("gui.remove"));
-    rm.disabled = this.st.busy.has(key);
-    rm.onclick = () =>
-      void this.resourceAction(key, fmt(t("gui.k8s.confirm.delete"), "deployment", d.name), async () => {
-        await api.k8sDelete("deployments", d.namespace, d.name);
-        if (this.st.k8sDetail?.name === d.name) this.st.k8sDetail = undefined;
-        return fmt(t("gui.k8s.deleted"), d.name);
-      });
-    return rm;
-  }
-
-  private readyBar(ready: string): HTMLElement {
-    const [rdy, want] = ready.split("/").map(Number);
-    const pct = want > 0 ? Math.min(100, Math.round((rdy / want) * 100)) : 0;
-    const full = want > 0 && rdy === want;
-    return el("span", { class: `deploy-bar${full || want === 0 ? "" : " warn"}`, "data-testid": "deploy-bar", role: "img", "aria-label": ready }, el("span", { style: `width:${pct}%` }));
-  }
-
-  private k8sWorkloadsTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
-    const deployments = this.st.k8sDeployments.filter((d) => d.namespace === ns);
-    const sets = this.st.k8sExtras.statefulsets.filter((s) => s.namespace === ns);
-    if (deployments.length + sets.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_workloads")), wrap;
-    const list = el("div", { class: "deploy-cards", "data-testid": "deploy-cards" });
-    for (const d of deployments) {
-      const c = this.k8sScaleControls(d);
-      const open = el("button", { type: "button", class: "ct-name link", "data-testid": "deploy-name", text: d.name, title: d.name });
-      open.onclick = () => this.k8sOpenDetail(ns, d.name);
-      list.append(
-        el("div", { class: "deploy-card", "data-testid": "deploy-row", "data-name": d.name },
-          el("div", { class: "deploy-main" },
-            el("div", { class: "deploy-title" }, open, el("span", { class: "kind-chip", text: "Deployment" })),
-            d.image ? el("div", { class: "mono muted deploy-image", "data-testid": "deploy-image", text: d.image, title: d.image }) : el("div"),
-            el("div", { class: "deploy-ready-line" },
-              this.readyBar(d.ready),
-              el("span", { class: "deploy-ready", "data-testid": "deploy-ready", text: d.ready }),
-              el("span", { class: "muted", text: fmt(t("gui.k8s.deploy.meta"), String(d.up_to_date), String(d.available), ageText(d.created_at)) }),
-            ),
-          ),
-          el("div", { class: "deploy-actions" }, c.stepper, c.apply, c.restart, this.k8sDeleteDeployment(d)),
-        ),
-      );
-    }
-    for (const s of sets) {
-      list.append(
-        el("div", { class: "deploy-card", "data-testid": "sts-row", "data-name": s.name },
-          el("div", { class: "deploy-main" },
-            el("div", { class: "deploy-title" }, el("span", { class: "ct-name", "data-testid": "sts-name", text: s.name, title: s.name }), el("span", { class: "kind-chip", text: "StatefulSet" })),
-            s.image ? el("div", { class: "mono muted deploy-image", text: s.image, title: s.image }) : el("div"),
-            el("div", { class: "deploy-ready-line" }, this.readyBar(s.ready), el("span", { class: "deploy-ready", "data-testid": "sts-ready", text: s.ready }), el("span", { class: "muted", text: ageText(s.created_at) })),
-          ),
-        ),
-      );
-    }
-    wrap.append(list);
-    return wrap;
-  }
-
-  // ---- Services 分頁（含 Ingress 路由）---------------------------------------------
-
-  private k8sServicesTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
-    const services = this.st.k8sServices.filter((s) => s.namespace === ns);
-    if (services.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_services")), wrap;
-    const g = buildNamespaceGraph(ns, this.k8sRes());
-    const { table: tbl, tbody } = this.k8sTable("services", K8S_SERVICE_COLS);
-    for (const sv of services) {
-      const key = `k8s-svc:${sv.namespace}/${sv.name}`;
-      const ports = sv.ports.map((p) => `${p.port}${p.node_port ? `:${p.node_port}` : ""}/${p.protocol}`).join(", ");
-      const np = sv.ports.find((p) => p.node_port && (p.protocol === "" || p.protocol === "TCP"));
-      const kids: HTMLElement[] = [];
-      if (np?.node_port) {
-        const port = np.node_port;
-        const open = iconBtn({ "data-testid": `btn-svc-open-${sv.name}` }, "globe", t("gui.k8s.open"));
-        open.onclick = () =>
-          void api.k8sOpen(port).catch((err) => {
-            this.st.lastError = err instanceof ApiError ? err.message : String(err);
-            this.renderBanner();
-          });
-        kids.push(open);
-      }
-      const builtin = sv.namespace === "default" && sv.name === "kubernetes";
-      const rm = iconBtn({ "data-testid": `btn-svc-rm-${sv.name}`, class: "danger" }, "trash", t("gui.remove"));
-      rm.disabled = builtin || this.st.busy.has(key);
-      if (!builtin) {
-        rm.onclick = () =>
-          void this.resourceAction(key, fmt(t("gui.k8s.confirm.delete"), "service", sv.name), async () => {
-            await api.k8sDelete("services", sv.namespace, sv.name);
-            return fmt(t("gui.k8s.deleted"), sv.name);
-          });
-      }
-      kids.push(rm);
-      const targets = serviceTargets(g, sv);
-      tbody.append(
-        el("tr", { "data-testid": "svc-row", "data-name": sv.name },
-          el("td", { class: "name-cell two-line" },
-            el("span", { class: "ct-name", "data-testid": "svc-name", text: sv.name, title: sv.name }),
-            el("span", { class: "sub muted", "data-testid": "svc-target", text: targets.length ? `→ ${targets.join(", ")}` : "" }),
-          ),
-          el("td", {}, el("span", { class: "kind-chip svc", "data-testid": "svc-type", text: sv.type })),
-          this.k8sCell("svc-ip", sv.cluster_ip, "mono muted"),
-          this.k8sCell("svc-ports", ports, "mono"),
-          this.k8sCell("svc-endpoints", sv.selector && Object.keys(sv.selector).length ? String(endpointCount(sv, this.st.k8sPods)) : "–"),
-          this.k8sCell("svc-age", ageText(sv.created_at), "muted"),
-          el("td", { class: "actions" }, ...kids),
-        ),
-      );
-    }
-    wrap.append(tbl);
-    const rules = this.st.k8sExtras.ingresses.filter((i) => i.namespace === ns).flatMap((i) => i.rules.map((r) => ({ ing: i.name, ...r })));
-    if (rules.length) {
-      wrap.append(
-        el("h3", { class: "k8s-section", text: t("gui.k8s.ingress_routes") }),
-        el("div", { class: "route-list", "data-testid": "ingress-routes" },
-          ...rules.map((r) =>
-            el("div", { class: "route", "data-testid": "ingress-route", "data-service": r.service },
-              el("span", { class: "kind-chip ing", text: "Ingress" }),
-              el("span", { class: "mono route-path", text: `${r.host ?? ""}${r.path}` }),
-              el("span", { class: "ns-arrow", "aria-hidden": "true", text: "→" }),
-              el("span", { class: "mono route-target", text: `${r.service}:${r.port}` }),
-            ),
-          ),
-        ),
-      );
-    }
-    return wrap;
-  }
-
-  // ---- Config／Storage 分頁 ----------------------------------------------------------
-
-  private k8sConfigTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
-    const items = this.st.k8sExtras.configmaps.filter((c) => c.namespace === ns);
-    if (items.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_config")), wrap;
-    const g = buildNamespaceGraph(ns, this.k8sRes());
-    const { table: tbl, tbody } = this.k8sTable("config", K8S_CONFIG_COLS);
-    for (const c of items) {
-      tbody.append(
-        el("tr", { "data-testid": "cm-row", "data-name": c.name },
-          el("td", { class: "name-cell" }, el("span", { class: "ct-name", "data-testid": "cm-name", text: c.name, title: c.name })),
-          el("td", {}, el("span", { class: "kind-chip cm", text: "ConfigMap" })),
-          this.k8sCell("cm-keys", String(c.keys)),
-          this.k8sCell("cm-used", usedBy(g, `cm:${c.name}`).join(", ") || "–"),
-          this.k8sCell("cm-age", ageText(c.created_at), "muted"),
-        ),
-      );
-    }
-    wrap.append(tbl);
-    return wrap;
-  }
-
-  private k8sStorageTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
-    const items = this.st.k8sExtras.pvcs.filter((c) => c.namespace === ns);
-    if (items.length === 0) return wrap.append(this.k8sEmpty("gui.empty.k8s_storage")), wrap;
-    const g = buildNamespaceGraph(ns, this.k8sRes());
-    const { table: tbl, tbody } = this.k8sTable("storage", K8S_STORAGE_COLS);
-    for (const p of items) {
-      tbody.append(
-        el("tr", { "data-testid": "pvc-row", "data-name": p.name },
-          el("td", { class: "name-cell" }, el("span", { class: "ct-name", "data-testid": "pvc-name", text: p.name, title: p.name })),
-          el("td", {}, el("span", { class: `state ${p.status === "Bound" ? "running" : p.status === "Pending" ? "pending" : "failed"}`, "data-testid": "pvc-status", text: p.status })),
-          this.k8sCell("pvc-size", p.size ?? "–"),
-          this.k8sCell("pvc-class", p.storage_class ?? "–", "mono"),
-          this.k8sCell("pvc-used", usedBy(g, `pvc:${p.name}`).join(", ") || "–"),
-          this.k8sCell("pvc-age", ageText(p.created_at), "muted"),
-        ),
-      );
-    }
-    wrap.append(tbl);
-    return wrap;
-  }
-
-  /** 沒有專屬分頁的資源（Lease、Role、Secret…）的唯讀表；沒有時回 null。 */
-  private k8sOthersTable(ns: string): HTMLElement | null {
-    const items = this.st.k8sExtras.others.filter((c) => c.namespace === ns);
-    if (items.length === 0) return null;
-    const { table: tbl, tbody } = this.k8sTable("others", K8S_OTHER_COLS);
-    for (const o of [...items].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))) {
-      tbody.append(
-        el("tr", { "data-testid": "other-row", "data-name": o.name, "data-kind": o.kind },
-          el("td", { class: "name-cell" }, el("span", { class: "ct-name", "data-testid": "other-name", text: o.name, title: o.name })),
-          el("td", {}, el("span", { class: "kind-chip cm", "data-testid": "other-kind", text: o.kind })),
-          this.k8sCell("other-age", ageText(o.created_at), "muted"),
-        ),
-      );
-    }
-    return tbl;
-  }
-
-  /** Other 分頁。 */
-  private k8sOthersTab(ns: string): HTMLElement {
-    const wrap = el("div", { class: "k8s-resources" });
-    const tbl = this.k8sOthersTable(ns);
-    if (!tbl) return wrap.append(this.k8sEmpty("gui.empty.k8s_others")), wrap;
-    wrap.append(tbl);
-    return wrap;
-  }
-
-  // ---- 右側面板 ------------------------------------------------------------------------
-
-  /** 右側面板（寬度 50%）：選到 namespace 時顯示「Architecture／Pods／Workloads／Services／Config／Storage」；點 Deployment 進入詳情。 */
-  private renderK8sSide(): void {
-    const side = this.root.querySelector<HTMLElement>('[data-testid="k8s-side"]');
-    const body = this.root.querySelector<HTMLElement>('[data-testid="k8s-body"]');
-    if (!side || !body) return;
-    const k = this.st.k8s;
-    const ns = this.st.k8sNs;
-    const visible = !!ns && !!k && k.enabled && k.status.state === "ready" && !k.op && !this.k8sListError;
-    side.hidden = !visible;
-    body.classList.toggle("with-side", visible);
-    if (!visible) {
-      side.replaceChildren();
-      return;
-    }
-    const sum = summarizeNamespace(ns, this.k8sRes());
-    const close = iconBtn({ "data-testid": "k8s-side-close" }, "close", t("gui.k8s.side.close"));
-    close.onclick = () => this.k8sSelectNs("");
-    const detail = this.st.k8sDetail && this.st.k8sDetail.ns === ns ? this.st.k8sDeployments.find((d) => d.namespace === ns && d.name === this.st.k8sDetail?.name) : undefined;
-    if (this.st.k8sDetail && !detail) this.st.k8sDetail = undefined; // 該 Deployment 已不存在或換了 namespace
-    if (detail) {
-      const back = iconBtn({ "data-testid": "k8s-detail-back" }, "chevron-left", t("gui.k8s.detail.back"));
-      back.onclick = () => {
-        this.st.k8sDetail = undefined;
-        this.renderK8sSide();
-      };
-      const crumbs = el("div", { class: "k8s-crumbs" }, back, el("span", { class: "muted", text: ns }), el("span", { class: "muted", text: "/" }), el("span", { class: "muted", text: t("gui.k8s.tab.workloads") }), el("span", { class: "muted", text: "/" }), el("strong", { "data-testid": "k8s-side-title", text: detail.name }));
-      side.replaceChildren(el("div", { class: "k8s-side-head" }, crumbs, close), el("div", { class: "k8s-side-body", "data-testid": "k8s-side-body" }, this.k8sDeploymentDetail(detail)));
-      return;
-    }
-    const head = el("div", { class: "k8s-side-head" },
-      el("div", { class: "k8s-side-titles" },
-        el("strong", { "data-testid": "k8s-side-title", text: ns }),
-        ...(sum.health === "warn" || sum.health === "error" ? [el("span", { class: `ns-health ${sum.health}`, text: t(`gui.k8s.health.${sum.health}`) })] : []),
-        el("span", { class: "muted", "data-testid": "k8s-side-sub", text: fmt(t("gui.k8s.side.sub"), String(sum.pods), String(sum.workloads), String(sum.services)) }),
-      ),
-      close,
-    );
-    const tabs = this.segmented(
-      "k8s-tabs",
-      K8S_TABS.map((id) => ({ id, label: t(`gui.k8s.tab.${id}`) })),
-      this.st.k8sTab,
-      (id) => {
-        this.st.k8sTab = id as K8sTab;
-        saveJSON(LS_K8S_TAB, id);
-        this.renderK8sSide();
-      },
-    );
-    const content = el("div", { class: "k8s-side-body", "data-testid": "k8s-side-body" });
-    const tab = this.st.k8sTab;
-    content.append(tab === "architecture" ? this.k8sArchitecture(ns) : tab === "pods" ? this.k8sPodsTab(ns) : tab === "workloads" ? this.k8sWorkloadsTab(ns) : tab === "services" ? this.k8sServicesTab(ns) : tab === "config" ? this.k8sConfigTab(ns) : tab === "storage" ? this.k8sStorageTab(ns) : this.k8sOthersTab(ns));
-    side.replaceChildren(head, el("div", { class: "k8s-side-tabs" }, tabs), content);
-    if (tab === "architecture") this.layoutArchitecture(content);
-  }
-
-  /** 選取（或再點一次取消）namespace，更新卡片選取狀態與側欄。 */
-  /** 切換 Workloads／System 頁籤；已開的 namespace 不在新頁籤時一併關閉側欄。 */
-  private k8sSelectGroup(g: K8sGroup): void {
-    if (this.k8sGroup === g) return;
-    this.k8sGroup = g;
-    saveJSON(LS_K8S_GROUP, g);
-    if (this.st.k8sNs && isSystemNs(this.st.k8sNs) !== (g === "system")) {
-      this.st.k8sNs = "";
-      this.st.k8sDetail = undefined;
-    }
-    this.renderKubernetes();
-  }
-
-  private k8sSelectNs(ns: string): void {
-    this.st.k8sNs = this.st.k8sNs === ns ? "" : ns;
-    this.st.k8sDetail = undefined;
-    this.renderKubernetes();
-  }
-
-  private k8sOpenDetail(ns: string, name: string): void {
-    this.st.k8sDetail = { ns, name };
-    this.st.k8sDetailData = undefined;
-    this.renderK8sSide();
-    void this.refreshK8sDetail();
-  }
-
-  /** 抓 rollout 歷史與事件；失敗時詳情頁仍顯示其他區塊。 */
-  private async refreshK8sDetail(): Promise<void> {
-    const d = this.st.k8sDetail;
-    if (!d) return;
-    try {
-      const data = await api.k8sDeploymentDetail(d.ns, d.name);
-      if (this.st.k8sDetail?.name !== d.name || this.st.k8sDetail.ns !== d.ns) return;
-      this.st.k8sDetailData = data;
-    } catch {
-      this.st.k8sDetailData = { revisions: [], events: [] };
-    }
-    this.renderK8sSide();
-  }
-
-  // ---- Deployment 詳情 ---------------------------------------------------------------
-
-  private k8sDeploymentDetail(d: K8sDeployment): HTMLElement {
-    const g = buildNamespaceGraph(d.namespace, this.k8sRes());
-    const col = g.columns.find((c) => c.workload?.id === `dep:${d.name}`);
-    const pods = col?.pods ?? [];
-    const [rdy, want] = d.ready.split("/").map(Number);
-    const available = want === 0 || rdy === want;
-    const c = this.k8sScaleControls(d);
-    const root = el("div", { class: "k8s-detail", "data-testid": "k8s-detail" });
-    const card = (label: string, ...kids: (Node | string)[]) => el("div", { class: "detail-card" }, el("span", { class: "muted", text: label }), ...kids);
-    const cms = [...new Set(pods.flatMap((p) => p.config_maps ?? []))];
-    const strategy = d.strategy
-      ? [d.strategy, d.max_surge ? `maxSurge ${d.max_surge}` : "", d.max_unavailable ? `maxUnavailable ${d.max_unavailable}` : ""].filter(Boolean)
-      : [];
-    root.append(
-      el("div", { class: "detail-title" },
-        el("strong", { class: "detail-name", text: d.name }),
-        el("span", { class: "kind-chip", text: "Deployment" }),
-        el("span", { class: `ns-health ${available ? "ok" : "warn"}`, "data-testid": "detail-status", text: t(available ? "gui.k8s.detail.available" : "gui.k8s.detail.unavailable") }),
-      ),
-      el("div", { class: "deploy-actions detail-actions" }, c.stepper, c.apply, c.restart, this.k8sDeleteDeployment(d)),
-      el("div", { class: "detail-cards" },
-        card(t("gui.k8s.detail.replicas"), el("strong", { class: "detail-big", "data-testid": "detail-replicas", text: `${rdy} / ${d.replicas}` }), this.readyBar(d.ready)),
-        card(t("gui.k8s.detail.strategy"), el("strong", { "data-testid": "detail-strategy", text: strategy[0] ?? "–" }), el("span", { class: "muted", text: strategy.slice(1).join(" · ") })),
-        card(t("gui.k8s.detail.image"), el("strong", { class: "mono", "data-testid": "detail-image", text: d.image ?? "–", title: d.image ?? "" }), el("span", { class: "muted", "data-testid": "detail-env", text: cms.length ? fmt(t("gui.k8s.detail.env"), cms.join(", ")) : "" })),
-      ),
-    );
-    const data = this.st.k8sDetailData;
-    const section = (title: string, testid: string, rows: HTMLElement[], emptyKey: string) =>
-      el("section", { class: "detail-section" }, el("h3", { class: "k8s-section", text: title }), el("div", { class: "detail-rows", "data-testid": testid }, ...(rows.length ? rows : [el("div", { class: "muted detail-empty", text: data ? t(emptyKey) : t("gui.loading") })])));
-    root.append(
-      section(
-        t("gui.k8s.detail.history"),
-        "detail-history",
-        (data?.revisions ?? []).map((r) =>
-          el("div", { class: "detail-row", "data-testid": "detail-rev", "data-current": String(r.current) },
-            el("strong", { class: "rev-no", text: `#${r.revision}` }),
-            el("span", { class: "mono rev-image", text: r.image }),
-            el("span", { class: "muted", text: ageText(r.created_at) }),
-            el("span", { class: `kind-chip${r.current ? "" : " muted-chip"}`, text: t(r.current ? "gui.k8s.detail.current" : "gui.k8s.detail.previous") }),
-          ),
-        ),
-        "gui.k8s.detail.no_history",
-      ),
-      section(
-        fmt(t("gui.k8s.detail.pods"), String(pods.length)),
-        "detail-pods",
-        pods.map((p) => {
-          const logs = iconBtn({ "data-testid": `btn-detail-pod-logs-${p.name}` }, "logs", t("gui.logs"));
-          logs.onclick = () => this.openPodLogs(p.namespace, p.name);
-          return el("div", { class: "detail-row", "data-testid": "detail-pod", "data-name": p.name },
-            el("span", { class: "mono rev-image", text: p.name }),
-            el("span", { class: p.restarts > 0 ? "warn-text" : "muted", text: fmt(t("gui.k8s.detail.restarts"), String(p.restarts)) }),
-            el("span", { class: `state ${podStateClass(p.status)}`, text: p.status }),
-            logs,
-          );
-        }),
-        "gui.empty.k8s_pods",
-      ),
-      section(
-        t("gui.k8s.detail.events"),
-        "detail-events",
-        (data?.events ?? []).map((e) =>
-          el("div", { class: "detail-row", "data-testid": "detail-event" },
-            el("strong", { class: "event-reason", text: e.reason }),
-            el("span", { class: "event-msg", text: e.message, title: e.message }),
-            el("span", { class: "muted", text: ageText(e.last_seen) }),
-          ),
-        ),
-        "gui.k8s.detail.no_events",
-      ),
-    );
-    return root;
-  }
-
-  // ---- 架構圖 ---------------------------------------------------------------------------
-
-  /** 架構圖：Ingress → Service → workload（每個一欄，下接其 Pods）← ConfigMap／PVC；連線以 SVG 疊在上面。 */
-  private k8sArchitecture(ns: string): HTMLElement {
-    const g = buildNamespaceGraph(ns, this.k8sRes());
-    const root = el("div", { class: "arch", "data-testid": "arch" });
-    if (g.ingresses.length + g.services.length + g.columns.length + g.mounts.length === 0) {
-      // 圖是空的但 namespace 裡有 Lease／Role 等資源：直接列出，不要只說「沒有資源」
-      const others = this.k8sOthersTable(ns);
-      if (others) root.append(el("p", { class: "muted", "data-testid": "arch-only-others", text: t("gui.k8s.arch.only_others") }), others);
-      else root.append(this.k8sEmpty("gui.k8s.arch.empty"));
-      return root;
-    }
-    const node = (cls: string, testid: string, name: string, nodeId: string, kind: string, sub: string, tag: "div" | "button" = "div") =>
-      el(tag, { class: `arch-node ${cls}`, "data-testid": testid, "data-name": name, "data-node": nodeId, ...(tag === "button" ? { type: "button" } : {}) },
-        el("span", { class: "arch-kind", text: kind }),
-        el("strong", { text: name, title: name }),
-        el("span", { class: "muted", text: sub }),
-      );
-    const rows: HTMLElement[] = [];
-    if (g.ingresses.length) {
-      rows.push(el("div", { class: "arch-row" }, ...g.ingresses.map((i) => node("ing", "arch-ing", i.name, `ing:${i.name}`, "Ingress", [...new Set(i.rules.map((r) => r.host).filter(Boolean))].join(", ")))));
-    }
-    if (g.services.length) {
-      rows.push(
-        el("div", { class: "arch-row arch-services" }, ...g.services.map((s) => {
-          const n = node("svc", "arch-svc", s.name, `svc:${s.name}`, "Service", [s.type, s.ports.map((p) => `${p.port}/${p.protocol}`).join(", ")].filter(Boolean).join(" · "));
-          const exposed = nodePortsOf(s);
-          if (exposed.length) {
-            n.classList.add("exposed");
-            n.append(el("span", { class: "arch-exposed", "data-testid": "arch-exposed", text: `NodePort ${exposed.join(", ")}`, title: t("gui.k8s.exposed") }));
-          }
-          return n;
-        })),
-      );
-    }
-    const cols = el("div", { class: "arch-cols" }, ...g.columns.map((c) => {
-      const w = c.workload;
-      const col = el("div", { class: "arch-col" });
-      if (w) {
-        const isDep = w.kind === "Deployment";
-        const n = node(isDep ? "dep" : "sts", isDep ? "arch-deploy" : "arch-sts", w.name, w.id, w.kind, [w.ready, w.image].filter(Boolean).join(" · "), isDep ? "button" : "div");
-        if (isDep) n.onclick = () => this.k8sOpenDetail(ns, w.name);
-        col.append(n);
-      }
-      const group = el("div", { class: "arch-node pods", "data-testid": "arch-pods", "data-owner": w?.name ?? "", "data-node": `pods:${w?.name ?? ""}` },
-        el("span", { class: "arch-kind", text: w ? "Pods" : t("gui.k8s.arch.orphans") }),
-        ...c.pods.map((p) => {
-          const chip = el("button", { type: "button", class: "arch-pod", "data-testid": "arch-pod", "data-name": p.name, title: `${p.name} · ${p.status}` },
-            el("span", { class: `state ${podStateClass(p.status)}` }),
-            el("span", { class: "mono", text: p.name }),
-          );
-          chip.onclick = () => this.openPodLogs(p.namespace, p.name);
-          return chip;
-        }),
-      );
-      if (c.pods.length === 0) group.append(el("span", { class: "muted", text: t("gui.k8s.arch.no_pods") }));
-      col.append(group);
-      return col;
-    }));
-    rows.push(cols);
-    if (g.mounts.length) {
-      rows.push(el("div", { class: "arch-row arch-mounts" }, ...g.mounts.map((m) => node(m.kind === "ConfigMap" ? "cm" : "pvc", "arch-mount", m.name, m.id, m.kind === "ConfigMap" ? "ConfigMap" : "PVC", m.detail))));
-    }
-    const edges = [...g.edges];
-    for (const c of g.columns) if (c.workload && c.pods.length) edges.push({ from: c.workload.id, to: `pods:${c.workload.name}` });
-    root.dataset.edges = JSON.stringify(edges);
-    root.append(svgEl("svg", { class: "arch-edges", "aria-hidden": "true" }) as unknown as Node, ...rows);
-    return root;
-  }
-
-  /** 依實際版面量測各方塊位置，畫出曲線連線（往下或往上）；視窗縮放時重畫。 */
-  private layoutArchitecture(content: HTMLElement): void {
-    const root = content.querySelector<HTMLElement>(".arch");
-    const svg = root?.querySelector<SVGSVGElement>(".arch-edges");
-    if (!root || !svg) return;
-    const draw = () => {
-      if (!root.isConnected) return;
-      const origin = root.getBoundingClientRect();
-      svg.setAttribute("width", String(root.scrollWidth));
-      svg.setAttribute("height", String(root.scrollHeight));
-      const pos = (id: string) => {
-        const n = root.querySelector<HTMLElement>(`[data-node="${CSS.escape(id)}"]`);
-        if (!n) return undefined;
-        const r = n.getBoundingClientRect();
-        return { x: r.left - origin.left + r.width / 2, top: r.top - origin.top, bottom: r.bottom - origin.top };
-      };
-      const edges = JSON.parse(root.dataset.edges ?? "[]") as { from: string; to: string; label?: string; mount?: boolean }[];
-      svg.replaceChildren(
-        ...edges.flatMap((e) => {
-          const a = pos(e.from);
-          const b = pos(e.to);
-          if (!a || !b) return [];
-          // 起點在上方 → 由 a 底部連到 b 頂部；起點在下方（掛載）→ 由 a 頂部連到 b 底部
-          const down = a.bottom <= b.top + 1;
-          const [y1, y2] = down ? [a.bottom, b.top] : [a.top, b.bottom];
-          const my = (y1 + y2) / 2;
-          const path = svgEl("path", { class: `arch-edge${e.mount ? " mount" : ""}`, "data-testid": "arch-edge", "data-from": e.from, "data-to": e.to, d: `M ${a.x} ${y1} C ${a.x} ${my}, ${b.x} ${my}, ${b.x} ${y2}`, fill: "none" });
-          if (e.label) {
-            const title = svgEl("title");
-            title.textContent = e.label;
-            path.append(title);
-          }
-          return [path];
-        }),
-      );
-    };
-    requestAnimationFrame(draw);
-    new ResizeObserver(draw).observe(root);
-  }
-
   // ---- 設定側欄 --------------------------------------------------------------
 
   private applyTheme(theme: string): void {
@@ -5130,78 +3381,6 @@ const NETWORK_COLS: Col[] = [
   { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
 ];
 
-const K8S_POD_COLS: Col[] = [
-  { key: "name", label: "gui.col.name", def: 260, min: 120, resizable: true },
-  { key: "namespace", label: "gui.col.namespace", def: 130, min: 90, resizable: true },
-  { key: "status", label: "gui.col.state", def: 150, min: 110, resizable: true },
-  { key: "ready", label: "gui.col.ready", def: 80, min: 64, resizable: true },
-  { key: "restarts", label: "gui.col.restarts", def: 100, min: 84, resizable: true },
-  { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
-  { key: "actions", label: "gui.col.actions", def: 130, min: 100, resizable: false },
-];
-
-const K8S_SERVICE_COLS: Col[] = [
-  { key: "name", label: "gui.col.name", def: 200, min: 100, resizable: true },
-  { key: "namespace", label: "gui.col.namespace", def: 130, min: 90, resizable: true },
-  { key: "type", label: "gui.col.type", def: 110, min: 80, resizable: true },
-  { key: "ip", label: "gui.col.cluster_ip", def: 120, min: 90, resizable: true },
-  { key: "ports", label: "gui.col.ports", def: 160, min: 90, resizable: true },
-  { key: "endpoints", label: "gui.col.endpoints", def: 100, min: 70, resizable: true },
-  { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
-  { key: "actions", label: "gui.col.actions", def: 80, min: 60, resizable: false },
-];
-
-const K8S_CONFIG_COLS: Col[] = [
-  { key: "name", label: "gui.col.name", def: 240, min: 120, resizable: true },
-  { key: "type", label: "gui.col.type", def: 110, min: 80, resizable: true },
-  { key: "keys", label: "gui.col.keys", def: 70, min: 50, resizable: true },
-  { key: "used", label: "gui.col.used_by", def: 160, min: 90, resizable: true },
-  { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
-];
-
-const K8S_OTHER_COLS: Col[] = [
-  { key: "name", label: "gui.col.name", def: 280, min: 120, resizable: true },
-  { key: "type", label: "gui.col.type", def: 130, min: 80, resizable: true },
-  { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
-];
-
-const K8S_STORAGE_COLS: Col[] = [
-  { key: "name", label: "gui.col.name", def: 200, min: 120, resizable: true },
-  { key: "status", label: "gui.col.state", def: 100, min: 80, resizable: true },
-  { key: "size", label: "gui.col.size", def: 80, min: 60, resizable: true },
-  { key: "class", label: "gui.col.storage_class", def: 120, min: 80, resizable: true },
-  { key: "used", label: "gui.col.used_by", def: 140, min: 90, resizable: true },
-  { key: "age", label: "gui.col.age", def: 60, min: 50, resizable: true },
-];
-
-function emptyK8sExtras(): K8sExtras {
-  return { statefulsets: [], ingresses: [], configmaps: [], pvcs: [], others: [] };
-}
-
-/** 舊版存的分頁名（deployments）與無效值一律收斂到有效分頁。 */
-function normalizeK8sTab(v: string): K8sTab {
-  if (v === "deployments") return "workloads";
-  return (K8S_TABS as string[]).includes(v) ? (v as K8sTab) : "architecture";
-}
-
-/** Pod 狀態 → 狀態點樣式（與容器列共用 .state）。 */
-function podStateClass(status: string): string {
-  if (status === "Running" || status === "Succeeded" || status === "Completed") return "running";
-  if (["Pending", "ContainerCreating", "PodInitializing", "Terminating"].includes(status) || status.startsWith("Init:")) return "pending";
-  return "failed";
-}
-
-/** kubectl 風格的年齡：45s／12m／5h／3d。 */
-function ageText(iso: string): string {
-  const t0 = new Date(iso).getTime();
-  if (Number.isNaN(t0)) return "";
-  const sec = Math.max(0, (Date.now() - t0) / 1000);
-  if (sec < 60) return `${Math.floor(sec)}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 48 * 3600) return `${Math.floor(sec / 3600)}h`;
-  return `${Math.floor(sec / 86400)}d`;
-}
-
 const MACHINE_COLS: Col[] = [
   { key: "name", label: "gui.col.name", def: 240, min: 100, resizable: true },
   { key: "state", label: "gui.col.state", def: 110, min: 70, resizable: true },
@@ -5213,22 +3392,12 @@ const MACHINE_COLS: Col[] = [
 const LS_COLS = "wsld.colWidths";
 const LS_COLLAPSED = "wsld.collapsedGroups";
 const LS_VIEW = "wsld.view";
-const LS_K8S_TAB = "wsld.k8s.tab";
-const LS_K8S_GROUP = "wsld.k8s.group";
-const LS_K8S_ADDCTX = "wsld.k8s.addcontext";
-const LS_K8S_VIEW = "wsld.k8s.view";
-const LS_K8S_SHOWSYS = "wsld.k8s.showsystem";
-const LS_K8S_GROUP_SEEN = "wsld.k8s.groupSeen";
 const LABEL_PROJECT = "com.docker.compose.project";
 const LABEL_SERVICE = "com.docker.compose.service";
 
-/** k3s（--docker）建立的容器（k8s_<容器>_<pod>_<ns>_…）摺成一個虛擬群組；不是 compose 專案。 */
-const K8S_GROUP = "k8s:k3s";
-const LABEL_K8S_POD = "io.kubernetes.pod.name";
-const isK8sContainer = (c: Container): boolean => name(c).startsWith("k8s_") || !!c.Labels?.[LABEL_K8S_POD];
 
 interface Group {
-  project: string; // "" = 未分組；K8S_GROUP = k3s 容器
+  project: string; // "" = 未分組
   items: Container[];
 }
 
@@ -5238,15 +3407,13 @@ function groupContainers(cs: Container[]): Group[] | null {
   let anyCompose = false;
   for (const c of cs) {
     let p = c.Labels?.[LABEL_PROJECT] ?? "";
-    if (!p && isK8sContainer(c)) p = K8S_GROUP;
     if (p) anyCompose = true;
     (byProject.get(p) ?? byProject.set(p, []).get(p)!).push(c);
   }
   if (!anyCompose) return null;
   const groups: Group[] = [...byProject.entries()]
     .filter(([p]) => p !== "")
-    // k3s 群組排在 compose 專案之後、未分組之前
-    .sort(([a], [b]) => (a === K8S_GROUP ? 1 : 0) - (b === K8S_GROUP ? 1 : 0) || a.localeCompare(b))
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([project, items]) => ({ project, items: items.sort((a, b) => (a.Labels?.[LABEL_SERVICE] ?? name(a)).localeCompare(b.Labels?.[LABEL_SERVICE] ?? name(b))) }));
   const rest = byProject.get("");
   if (rest) groups.push({ project: "", items: rest.sort((a, b) => name(a).localeCompare(name(b))) });

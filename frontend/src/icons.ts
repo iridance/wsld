@@ -2,7 +2,7 @@
 export type IconName =
   | "power" | "refresh" | "settings" | "play" | "stop" | "logs" | "terminal" | "save" | "close" | "chevron-down" | "chevron-right" | "chevron-left"
   | "containers" | "images" | "volumes" | "networks" | "machines" | "trash" | "broom" | "plus" | "info" | "folder" | "github"
-  | "search" | "minus" | "check" | "globe" | "shield" | "kubernetes" | "edit" | "shrink" | "download" | "reset" | "layers" | "file";
+  | "search" | "minus" | "check" | "globe" | "shield" | "edit" | "shrink" | "download" | "reset" | "layers" | "file";
 
 const PATHS: Record<IconName, string> = {
   layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/>',
@@ -33,7 +33,6 @@ const PATHS: Record<IconName, string> = {
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/>',
-  kubernetes: '<path d="M12 2l8.5 4.5v9L12 20l-8.5-4.5v-9z"/><circle cx="12" cy="11" r="2.6"/><path d="M12 8.4V5"/><path d="M14.3 9.7l3-1.7"/><path d="M14.3 12.3l3 1.7"/><path d="M12 13.6V17"/><path d="M9.7 12.3l-3 1.7"/><path d="M9.7 9.7l-3-1.7"/>',
   shrink: '<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/>',
   download: '<path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/>',
   reset: '<path d="M4 12a8 8 0 1 1 2.3 5.7"/><path d="M4 20v-5h5"/>',

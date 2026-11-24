@@ -404,67 +404,6 @@ SCRIPT
   [ "$status" -ne 0 ]
 }
 
-# ---------- k3s ----------
-
-@test "k3s_install_exec uses docker runtime, no traefik, readable kubeconfig" {
-  run wsld_k3s_install_exec
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"--docker"* ]]
-  [[ "$output" == *"--disable traefik"* ]]
-  [[ "$output" == *"--write-kubeconfig-mode 644"* ]]
-}
-
-@test "k3s_install_exec adds --https-listen-port only for a valid port" {
-  run wsld_k3s_install_exec debian 26443
-  [[ "$output" == *"--https-listen-port 26443"* ]]
-  for bad in "" abc 80 70000 "26443;rm"; do
-    run wsld_k3s_install_exec debian "$bad"
-    [[ "$output" != *"https-listen-port"* ]]
-  done
-}
-
-@test "k3s_install_exec adds --node-name only when given one" {
-  run wsld_k3s_install_exec debian
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"--node-name debian"* ]]
-  run wsld_k3s_install_exec
-  [[ "$output" != *"--node-name"* ]]
-}
-
-@test "k3s_node_name makes a valid lowercase k8s node name from the distro name" {
-  run wsld_k3s_node_name Ubuntu-26.04
-  [ "$output" = "ubuntu-26.04" ]
-  run wsld_k3s_node_name "My_Distro 1"
-  [ "$output" = "my-distro-1" ]
-  run wsld_k3s_node_name "_-weird-_"
-  [ "$output" = "weird" ]
-  run wsld_k3s_node_name "$(printf 'a%.0s' $(seq 1 70))"
-  [ "${#output}" -eq 63 ]
-}
-
-@test "k3s_node_name falls back to WSL_DISTRO_NAME, empty when unusable" {
-  WSL_DISTRO_NAME=Debian run wsld_k3s_node_name
-  [ "$output" = "debian" ]
-  WSL_DISTRO_NAME="" run wsld_k3s_node_name
-  [ -z "$output" ]
-}
-
-@test "render_k3s_dropin orders k3s after docker.service" {
-  run wsld_render_k3s_dropin
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"[Unit]"* ]]
-  [[ "$output" == *"After=docker.service"* ]]
-  [[ "$output" == *"Requires=docker.service"* ]]
-}
-
-@test "k3s_installed checks the binary path" {
-  run wsld_k3s_installed "$TMPD/none"
-  [ "$status" -ne 0 ]
-  printf '#!/bin/sh\n' > "$TMPD/k3s"; chmod +x "$TMPD/k3s"
-  run wsld_k3s_installed "$TMPD/k3s"
-  [ "$status" -eq 0 ]
-}
-
 # ---------- shared engine（專用 dockerd distro）----------
 
 @test "parse_args role defaults to empty (legacy self-contained docker)" {

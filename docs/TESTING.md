@@ -18,9 +18,9 @@ Playwright 的 Chromium 在無 sudo 的 WSL 可能缺 `libnss3` `libnspr4` `liba
 | 層 | 工具 | 範圍 | 說明 |
 |---|---|---|---|
 | Bootstrap 腳本 | bats、shellcheck、Pester | `scripts/lib/*`、`scripts/tests/*` | 純函式：埠選擇、daemon.json、wsl.conf、參數、`wsl -l -v` 解析 |
-| Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli,gui,lan,k8s,host}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
+| Go core | `go test ./...` | `internal/{config,dockerapi,wsl,lifecycle,doctor,i18n,cli,gui,lan,host}`、`scripts`（embed bundle） | 全部以 fake／httptest，不碰真 WSL 或 Docker |
 | GUI 橋接 | `go test ./internal/gui` | `/api/*` HTTP + WebSocket（token、CORS、logs 串流、exec、images／volumes／networks／machines） | `FakeEngine`／`FakeLifecycle`／`FakeWSL`／`lan.FakeHost` |
-| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（`list`、`columns`、`groups`、`panels`、`settings`、`shell`、`views`、`info`、`lan`、`k8s`、`disk`、`vhd`） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
+| GUI 畫面 | Playwright | `frontend/tests/*.spec.ts`（`list`、`columns`、`groups`、`panels`、`settings`、`shell`、`views`、`info`、`lan`、`disk`、`vhd`） | `wsld-gui-testhost` 服務 `frontend/dist` + fake；見 `docs/GUI.md` |
 | CLI／GUI 端到端 | 手動／CI Windows runner | `dist/wsld.exe`、`dist/wsld-gui.exe` | 見下方「實機驗收」與 `docs/GUI.md` |
 
 ## Go 測試設計
@@ -65,22 +65,6 @@ DOCKER_HOST=tcp://127.0.0.1:23750 docker run -d -p 8080:80 nginx:alpine
 # 另一台設備：http://<內網IP>:8080 → nginx 首頁；curl http://<內網IP>:23750/_ping → 必須連不到（API 不轉發）
 # 區網關閉時容器頁 nginx 列的地球按鈕開 http://localhost:8080；開啟後改開 http://<內網IP>:8080；停掉容器：該位址消失；關閉開關：另一台設備連不到，本機 127.0.0.1:8080 仍可用
 ```
-
-本機 Kubernetes（k3s；需 Windows 端裝有 `kubectl`）：
-
-```bash
-./dist/wsld.exe k8s on                # 首次安裝＋啟動（不寫 Windows kubeconfig；要用再 `k8s kubeconfig`）
-kubectl --context wsld-Ubuntu-26.04 get nodes   # Windows 與 WSL 內皆 Ready
-docker build -t poc-web:local . && kubectl --context wsld-Ubuntu-26.04 create deployment poc-web --image=poc-web:local --dry-run=client -o yaml   # 改 imagePullPolicy: Never 後 apply → Running
-./dist/wsld.exe k8s status && ./dist/wsld.exe doctor   # k3s OK；記憶體／node IP／埠
-# wsl --shutdown → ./dist/wsld.exe start：k3s 自動恢復（node Ready、pod 還在）
-./dist/wsld.exe k8s on --machine <另一台>   # 必須拒絕並指出目前開啟者
-./dist/wsld.exe k8s off                # 釋放 6443 與記憶體；Containers 頁沒有殘留 k8s_* 容器
-./dist/wsld.exe k8s reset --yes        # 乾淨叢集（先 on）；既有 kubeconfig 的其他 context 不受影響（~\.kube\config.wsld-bak 為原檔備份）
-# GUI：Kubernetes 頁一鍵啟動→Ready；Pods 列表、logs 串流、終端、刪除；Deployment 調副本數；Service NodePort 地球鈕；一鍵停止→Off
-```
-
-2026-11-21（0.16.0）k3s 實機：以拋棄式 distro、隔離的 `WSLD_CONFIG`／`USERPROFILE` 跑 CLI 全流程（見 ROADMAP「實機發現」的 5 個問題與修正）；GUI Kubernetes 頁與 Windows `kubectl.exe` 仍待手測。
 
 2026-09-06 於 Ubuntu-26.04（WSL2）實測：Docker CE 29.8.0、Compose v5.5.1、埠 23750、doctor 11 OK。
 同日 `wsld-gui.exe` 實測：WebView2 開窗、已連線、列出 `nginx:alpine` 容器（埠去重）、按 X 縮 Tray、`--tray` 隱藏啟動。

@@ -63,19 +63,3 @@ export function group(page: Page, project: string) {
 export function row(page: Page, name: string) {
   return page.locator(`[data-testid="container-row"][data-name="${name}"]`);
 }
-
-/** k8s 假叢集：delay＝每個動作延遲 ms、fail＝啟動失敗、installed＝預先標記該 distro 已安裝 k3s。 */
-export async function k8sScenario(request: APIRequestContext, opts: { delay?: number; fail?: boolean; installed?: string; shop?: boolean } = {}): Promise<void> {
-  const q = new URLSearchParams();
-  if (opts.delay) q.set("delay", String(opts.delay));
-  if (opts.fail) q.set("fail", "1");
-  if (opts.installed) q.set("installed", opts.installed);
-  if (opts.shop) q.set("shop", "1");
-  expect((await request.post(`/__test/k8s?${q.toString()}`)).ok()).toBeTruthy();
-}
-
-export async function k8sState(request: APIRequestContext): Promise<{ running: string; calls: string[] }> {
-  const r = await request.get("/__test/k8s");
-  expect(r.ok()).toBeTruthy();
-  return (await r.json()) as { running: string; calls: string[] };
-}

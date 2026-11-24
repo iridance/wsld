@@ -97,7 +97,6 @@ func main() {
 		forwarder.Close()
 	}
 
-	k8sCluster := gui.NewFakeK8sCluster()
 	var winMu sync.Mutex
 	var windowActions []string
 
@@ -110,9 +109,6 @@ func main() {
 		LAN:             lanMgr,
 		Forwarder:       forwarder,
 		Shell:           gui.FakeDistroShell{},
-		K8sFor:          func(d string) gui.K8s { return k8sCluster.For(d) },
-		K8sStream:       &gui.FakeCommandStream{},
-		KubeconfigPath:  filepath.Join(os.TempDir(), "wsld-testhost-kube", "config"),
 		LoadConfig:      func() (config.Config, error) { return config.Load(*cfgPath) },
 		SaveConfig:      func(c config.Config) error { return config.Save(*cfgPath, c) },
 		Assets:          spaHandler(*dist),
@@ -371,31 +367,12 @@ func main() {
 		srv.SelfInWSL = false
 		life.Broken = false
 		life.ResetStarts()
-		k8sCluster.Reset()
-		srv.ResetK8sState()
 		_ = auto.Set(false)
 		i18n.Set(i18n.Lang(*lang))
 		winMu.Lock()
 		windowActions = nil
 		winMu.Unlock()
 		ok(w)
-	})
-	// k8s 場景：?delay=<ms> 讓每個動作變慢（觀察 starting 狀態）、?fail=1 讓啟動失敗、?installed=<distro> 預先安裝
-	mux.HandleFunc("POST /__test/k8s", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		ms, _ := strconv.Atoi(q.Get("delay"))
-		k8sCluster.Configure(time.Duration(ms)*time.Millisecond, q.Get("fail") == "1")
-		if q.Get("shop") == "1" {
-			k8sCluster.SeedShop()
-		}
-		if d := q.Get("installed"); d != "" {
-			k8sCluster.SetInstalled(d)
-		}
-		ok(w)
-	})
-	mux.HandleFunc("GET /__test/k8s", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"running": k8sCluster.Running(), "calls": k8sCluster.Called()})
 	})
 	mux.HandleFunc("GET /__test/window", func(w http.ResponseWriter, r *http.Request) {
 		winMu.Lock()

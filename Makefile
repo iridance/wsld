@@ -57,7 +57,7 @@ readme-shots: build-frontend
 test-scripts: lint-scripts test-scripts-bash test-scripts-ps
 
 lint-scripts:
-	shellcheck -x -P SCRIPTDIR scripts/02-bootstrap-docker.sh scripts/03-k3s.sh scripts/lib/bootstrap-lib.sh
+	shellcheck -x -P SCRIPTDIR scripts/02-bootstrap-docker.sh scripts/lib/bootstrap-lib.sh
 
 test-scripts-bash:
 	bats scripts/tests

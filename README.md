@@ -50,7 +50,7 @@ wsld init
 ### CLI
 
 ```powershell
-# 沒有 start／use：需要 Docker 的指令（ps、logs、exec、k8s…）會自動帶起共用 engine，首次使用會自動建立 wsld-engine
+# 沒有 start／use：需要 Docker 的指令（ps、logs、exec…）會自動帶起共用 engine，首次使用會自動建立 wsld-engine
 wsld init --distro <d> --role engine   # 專用 dockerd distro：全部 distro 共用同一個引擎
 wsld init --distro <d> --role client   # 只裝 docker CLI，連到共用 engine
 wsld unmanage <distro>     # 停 docker 並刪 profile（保留 WSL）
@@ -64,7 +64,6 @@ wsld stop-ct <ct> / wsld start-ct <ct>
 wsld exec <ct> [cmd…]
 wsld doctor                # 健康檢查 + 建議
 wsld lan on|off|status     # 區網存取（wsld-gui 在內網 IP 轉發容器埠）
-wsld k8s on|off|status     # 選用的單節點 k3s（與 docker 共用映像檔；reset／kubeconfig／uninstall 見 OPERATIONS）
 ```
 
 也可以直接用一般 `docker`：
@@ -85,7 +84,7 @@ wsld-gui.exe           # 開主視窗；按 X 縮到系統匣
 wsld-gui.exe --tray    # 只留系統匣
 ```
 
-側欄切 Containers／Images／Volumes／Networks／Machines／Kubernetes／Settings；標題列可開資料夾、終端；開啟 wsld-gui 就會自動帶起引擎（首次自動建立 wsld-engine）。細節：[GUI](docs/GUI.md)。
+側欄切 Containers／Images／Volumes／Networks／Machines／Settings；標題列可開資料夾、終端；開啟 wsld-gui 就會自動帶起引擎（首次自動建立 wsld-engine）。細節：[GUI](docs/GUI.md)。
 
 ### 重開機之後
 

@@ -192,6 +192,8 @@ Extra ≠ 0.5／v2.0 完成條件
 
 ### 本機 Kubernetes（k3s）
 
+> **狀態：已自 main 移出，改在 `feat/k8s` 分支維護，不隨下次 release 發布**（0.16.0–0.19.0 曾發布）。以下為該分支的規劃紀錄。
+
 **目標**：每台 machine 可選開啟**單節點 k3s**（預設關），以 `--docker` 與該 distro 的 dockerd 共用映像檔：`docker build` 完 k8s 直接可用、不必架 registry；Windows 側 `kubectl` 透過 `127.0.0.1:6443` 連線。不做完整 k8s（kubeadm）／minikube／kind。
 
 > 0.16.0 已交付：SPEC §1.5 已移出非目標，新增 §4.6。依版號原則屬功能變更（b 位進位）。

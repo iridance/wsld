@@ -32,7 +32,6 @@ import (
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/host"
 	"github.com/iridance/wsld/internal/i18n"
-	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
@@ -132,16 +131,8 @@ func main() {
 		NewEngine:       func(c config.Config) gui.Engine { return dockerClient(c) },
 		NewLifecycle:    func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:    gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
-		K8sFor: func(distro string) gui.K8s {
-			port := 0
-			if c, err := config.Load(cfgPath); err == nil {
-				port = c.K8sAPIPort
-			}
-			return &k8s.Manager{WSL: wsl.ExecRunner{}, Distro: distro, Bundle: scripts.K3sBundle(), APIPort: port, AsyncProbes: true}
-		},
-		K8sStream: gui.HostCommandStream{},
-		LAN:       &lan.Manager{Host: lan.NewHost(), Exe: exe},
-		Forwarder: &lan.Forwarder{},
+		LAN:             &lan.Manager{Host: lan.NewHost(), Exe: exe},
+		Forwarder:       &lan.Forwarder{},
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {
@@ -152,7 +143,7 @@ func main() {
 	lanCtx, stopLAN := context.WithCancel(context.Background())
 	defer stopLAN()
 	go srv.RunLAN(lanCtx, 3*time.Second)
-	// 啟動 wsld 就是啟動引擎：首次使用先建立 wsld-engine，之後帶起 docker 與（設定為 k8s 的）k3s；
+	// 啟動 wsld 就是啟動引擎：首次使用先建立 wsld-engine，之後帶起 docker；
 	// 之後由 Supervise 持續確認，engine 掉了（WSL 關閉、當機）自動拉起，失敗退避重試。
 	superviseCtx, stopSupervise := context.WithCancel(context.Background())
 	defer stopSupervise()

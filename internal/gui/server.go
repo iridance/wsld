@@ -24,7 +24,6 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/doctor"
 	"github.com/iridance/wsld/internal/i18n"
-	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
@@ -104,12 +103,6 @@ type Server struct {
 	KeepAlive *wsl.KeepAlive
 	// SelfInWSL：wsld-gui 的執行檔位於 WSL 檔案系統（\\wsl.localhost\…）；此時拒絕 wsl --shutdown。
 	SelfInWSL bool
-	// K8sFor 取得指定 distro 的 k3s 管理器（nil → /api/k8s 回 501）。
-	K8sFor func(distro string) K8s
-	// K8sStream 開啟 kubectl logs／exec 串流（nil → 501）。
-	K8sStream CommandStream
-	// KubeconfigPath 是匯出 kubeconfig 的目標（空 = %USERPROFILE%\.kube\config；測試用）。
-	KubeconfigPath string
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
 
@@ -127,14 +120,6 @@ type Server struct {
 	engineMu  sync.RWMutex
 
 	lanMu sync.Mutex // 序列化區網轉發同步（背景迴圈與 API 共用）
-
-	k8sMu      sync.Mutex // 保護下列背景作業狀態（同一時間只跑一個 k3s 作業）
-	k8sOp      string
-	k8sErr     string
-	k8sWarn    string
-	k8sStep    string                // 啟動作業目前所在步驟（k8s.Step*）
-	k8sErrStep string                // 上一次失敗發生在哪個步驟
-	k8sLast    map[string]k8s.Status // 各機器最近一次確定的狀態（查詢逾時時沿用）
 
 	fwMu      sync.Mutex // 同一時間只跑一個防火牆 UAC
 	fwPending atomic.Bool
@@ -214,31 +199,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
 	mux.HandleFunc("POST /api/open-repo", s.handleOpenRepo)
 	mux.HandleFunc("POST /api/open-local", s.handleOpenLocal)
-	mux.HandleFunc("GET /api/k8s", s.handleK8sGet)
-	mux.HandleFunc("POST /api/k8s/on", s.handleK8sOn)
-	mux.HandleFunc("POST /api/k8s/off", s.handleK8sOff)
-	mux.HandleFunc("POST /api/k8s/reset", s.handleK8sReset)
-	mux.HandleFunc("POST /api/k8s/kubeconfig", s.handleK8sKubeconfig)
-	mux.HandleFunc("POST /api/k8s/open", s.handleK8sOpen)
-	mux.HandleFunc("POST /api/k8s/deploy", s.handleK8sDeploy)
-	mux.HandleFunc("POST /api/k8s/expose", s.handleK8sExpose)
-	mux.HandleFunc("POST /api/k8s/apply", s.handleK8sApply)
-	mux.HandleFunc("POST /api/k8s/stack", s.handleK8sStack)
-	mux.HandleFunc("POST /api/k8s/compose/preview", s.handleComposePreview)
-	mux.HandleFunc("GET /api/fs/sources", s.handleFSSources)
-	mux.HandleFunc("GET /api/fs/list", s.handleFSList)
-	mux.HandleFunc("DELETE /api/k8s/stack/{ns}/{name}", s.handleK8sStackDelete)
-	mux.HandleFunc("GET /api/k8s/namespaces", s.handleK8sNamespaces)
-	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
-	mux.HandleFunc("GET /api/k8s/deployments", s.handleK8sDeployments)
-	mux.HandleFunc("GET /api/k8s/services", s.handleK8sServices)
-	mux.HandleFunc("GET /api/k8s/extras", s.handleK8sExtras)
-	mux.HandleFunc("GET /api/k8s/deployments/{ns}/{name}/detail", s.handleK8sDeploymentDetail)
-	mux.HandleFunc("GET /api/k8s/pods/{ns}/{name}/logs/stream", s.handleK8sLogsStream)
-	mux.HandleFunc("GET /api/k8s/pods/{ns}/{name}/exec", s.handleK8sExec)
-	mux.HandleFunc("POST /api/k8s/deployments/{ns}/{name}/restart", s.handleK8sRestart)
-	mux.HandleFunc("POST /api/k8s/deployments/{ns}/{name}/scale", s.handleK8sScale)
-	mux.HandleFunc("DELETE /api/k8s/{kind}/{ns}/{name}", s.handleK8sDelete)
 	if s.Assets != nil {
 		mux.Handle("/", s.Assets)
 	}
@@ -467,9 +427,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready(), Starting: starting, StartError: startErr})
 }
 
-// engineStartOpt 帶起 engine，成功後背景恢復 k3s。已有啟動進行中回 busy。
+// engineStartOpt 帶起 engine。已有啟動進行中回 busy。
 // reuse 為 true 時，若 engine 已在跑（關閉 app 不會停掉它，只放掉保活 session）
-// 就只補掛保活並在背景確認 k3s，不走完整啟動流程。檢查在 starting 旗標內進行，畫面不會空窗。
+// 就只補掛保活不走完整啟動流程。檢查在 starting 旗標內進行，畫面不會空窗。
 func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, busy bool) {
 	s.startMu.Lock()
 	if s.starting {
@@ -493,7 +453,6 @@ func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, bus
 	if reuse {
 		if cur := s.life().Status(ctx); cur.Ready() {
 			s.holdPrimary()
-			go s.resumeK8sIfDown()
 			return cur, nil, false
 		}
 	}
@@ -501,7 +460,6 @@ func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, bus
 	if err != nil {
 		return st, err, false
 	}
-	s.resumeK8s()
 	return st, nil, false
 }
 

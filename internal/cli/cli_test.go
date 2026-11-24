@@ -19,7 +19,7 @@ import (
 // ---- fakes -----------------------------------------------------------------
 
 type fakeRunner struct {
-	mu     sync.Mutex // k8s Status 會並行查詢
+	mu     sync.Mutex
 	resp   map[string]string
 	errs   map[string]error
 	calls  []string
@@ -596,4 +596,13 @@ func TestUnreachableEngineAfterStartRerunsInitOnceAndRetries(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("bootstrap must run exactly once after the first Start failed, ran %d times", n)
 	}
+}
+
+func (h *harness) cfg(t *testing.T) config.Config {
+	t.Helper()
+	c, err := config.Load(h.app.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
