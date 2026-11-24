@@ -15,6 +15,7 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/i18n"
 	"github.com/iridance/wsld/internal/lan"
+	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
 )
 
@@ -219,6 +220,7 @@ type Machine struct {
 	Managed     bool   `json:"managed"`
 	Ready       bool   `json:"ready"`
 	APIEndpoint string `json:"api_endpoint,omitempty"`
+	Role        string `json:"role,omitempty"`       // engine | client；空 = 獨立（自帶 dockerd）
 	DiskBytes   int64  `json:"disk_bytes,omitempty"` // 虛擬磁碟（ext4.vhdx）在 Windows 上的大小；取不到則省略
 	// DiskLimitBytes 是虛擬磁碟的容量上限（VHDX 標頭；取不到則省略）
 	DiskLimitBytes int64 `json:"disk_limit_bytes,omitempty"`
@@ -297,6 +299,7 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 			m.Managed = true
 			m.Ready = pm.Ready()
 			m.APIEndpoint = pm.APIEndpoint
+			m.Role = pm.Role
 		}
 		out = append(out, m)
 	}
@@ -476,65 +479,96 @@ func (s *Server) handleInstallDefaults(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) handleMachineUse(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if !wsl.ValidDistroName(name) {
-		writeErr(w, http.StatusBadRequest, "usage", errors.New("invalid distro name"))
+// handleMachineRole 把 distro 設為專用 engine 或 client（跑對應的 bootstrap），成功後寫回設定。
+// engine：整個系統只有一台 dockerd；client：只裝 docker CLI，經共用 socket 連 engine（需先有 engine）。
+func (s *Server) handleMachineRole(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.findDistro(w, r)
+	if !ok {
 		return
 	}
-	cfg := s.cfg()
-	if m, ok := cfg.FindMachine(name); ok {
-		_ = cfg.SetActive(m.Distro)
-	} else {
-		cfg.EnsureActive(config.Machine{Distro: name})
+	var body struct {
+		Role string `json:"role"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Role != config.RoleEngine && body.Role != config.RoleClient {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New("role must be engine or client"))
+		return
 	}
 	if s.SaveConfig == nil {
 		writeErr(w, http.StatusInternalServerError, "error", errors.New("config not writable"))
 		return
 	}
-	if err := s.SaveConfig(cfg); err != nil {
-		writeErr(w, http.StatusInternalServerError, "error", err)
+	cfg := s.cfg()
+	if eng, has := cfg.EngineMachine(); has && !strings.EqualFold(eng.Distro, d.Name) && body.Role == config.RoleEngine {
+		writeErr(w, http.StatusConflict, "conflict", fmt.Errorf("engine is already %q", eng.Distro))
 		return
 	}
-	s.BindActive(cfg)
-	s.holdPrimary() // 設為主要：主要機器不該被 WSL 閒置回收；原主要機器放掉
-
-	m, _ := cfg.ActiveMachine()
-	needBringUp := !m.Ready()
-	if !needBringUp && s.engine() != nil {
-		if err := s.engine().Ping(r.Context()); err != nil {
-			needBringUp = true
-		}
+	if _, has := cfg.EngineMachine(); !has && body.Role == config.RoleClient {
+		writeErr(w, http.StatusConflict, "conflict", errors.New("set up the engine first"))
+		return
 	}
-	if needBringUp {
-		// 首次設為主要，或 endpoint／API 不通：Init（重選可用埠）+ Start。
+	s.startMu.Lock()
+	if s.starting {
+		s.startMu.Unlock()
+		writeErr(w, http.StatusConflict, "conflict", errors.New("another start is in progress"))
+		return
+	}
+	s.starting = true
+	s.startMu.Unlock()
+	defer func() {
 		s.startMu.Lock()
-		if s.starting {
-			s.startMu.Unlock()
-			writeJSON(w, http.StatusAccepted, map[string]any{"active": cfg.Active, "ready": false, "starting": true})
+		s.starting = false
+		s.startMu.Unlock()
+	}()
+
+	var newCfg config.Config
+	switch life := s.life().(type) {
+	case *FakeLifecycle:
+		_ = life
+		if pm, ok := cfg.FindMachine(d.Name); !ok {
+			ep := cfg.APIEndpoint
+			if body.Role == config.RoleEngine || ep == "" {
+				ep = nextMachineEndpoint(cfg)
+			}
+			cfg.UpsertMachine(config.Machine{Distro: d.Name, User: "testuser", APIEndpoint: ep})
+		} else if body.Role == config.RoleClient {
+			cfg.UpsertMachine(config.Machine{Distro: d.Name, User: pm.User, APIEndpoint: cfg.APIEndpoint})
+		}
+		var err error
+		if body.Role == config.RoleEngine {
+			err = cfg.SetEngine(d.Name)
+			if err == nil {
+				_ = cfg.SetActive(d.Name)
+			}
+		} else {
+			err = cfg.SetClient(d.Name)
+		}
+		if err != nil {
+			writeErr(w, http.StatusConflict, "conflict", err)
 			return
 		}
-		s.starting = true
-		s.startMu.Unlock()
-		defer func() {
-			s.startMu.Lock()
-			s.starting = false
-			s.startMu.Unlock()
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		newCfg = cfg
+	case *lifecycle.Manager:
+		life.Cfg = cfg
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		if _, err := s.bringUpActive(ctx); err != nil {
+		got, err := life.Init(ctx, lifecycle.InitOptions{Distro: d.Name, Role: body.Role})
+		if err != nil {
 			writeEngineErr(w, err)
 			return
 		}
-		cfg = s.cfg()
-		m, _ = cfg.ActiveMachine()
+		newCfg = got
+	default:
+		writeErr(w, http.StatusNotImplemented, "error", errors.New("lifecycle unavailable"))
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"active":       cfg.Active,
-		"ready":        m.Ready(),
-		"api_endpoint": m.APIEndpoint,
-	})
+	if err := s.SaveConfig(newCfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, "error", err)
+		return
+	}
+	s.BindActive(newCfg)
+	s.holdPrimary() // engine 一律保活
+	writeJSON(w, http.StatusOK, map[string]any{"name": d.Name, "role": body.Role, "active": newCfg.Active})
 }
 
 // findDistro 驗證名稱並在 wsl --list 中找到 distro；找不到時已寫好錯誤回應。
@@ -571,8 +605,8 @@ func (s *Server) handleMachineStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "error", err)
 		return
 	}
-	if strings.EqualFold(d.Name, s.cfg().Active) {
-		_ = s.KeepAlive.Hold(d.Name) // 主要機器：保持執行
+	if shouldKeepAlive(s.cfg(), d.Name) {
+		_ = s.KeepAlive.Hold(d.Name) // 主要機器／engine：保持執行
 	}
 	if fl, ok := s.life().(*FakeLifecycle); ok && fl.Engine != nil && strings.EqualFold(d.Name, s.cfg().Active) {
 		fl.Engine.SetDown(false) // testhost：主要 distro 開機 → 引擎跟著起來
@@ -701,7 +735,7 @@ func (s *Server) runDiskOp(ctx context.Context, consent bool, name string, op fu
 			}
 		},
 		AfterWake: func(n string) {
-			if strings.EqualFold(n, cfg.Active) {
+			if shouldKeepAlive(cfg, n) {
 				_ = s.KeepAlive.Hold(n)
 			}
 			if fl != nil && fl.Engine != nil && strings.EqualFold(n, cfg.Active) {

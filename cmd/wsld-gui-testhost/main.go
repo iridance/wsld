@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -312,7 +313,37 @@ func main() {
 			"shutdowns": fwsl.Shutdowns(),
 		})
 	})
+	// 自動帶起（Supervise）：預設關閉，讓「引擎斷線」畫面可被觀察；on 時每 200ms 檢查、失敗 300ms 後重試。
+	var supMu sync.Mutex
+	var supCancel context.CancelFunc
+	stopSupervise := func() {
+		supMu.Lock()
+		defer supMu.Unlock()
+		if supCancel != nil {
+			supCancel()
+			supCancel = nil
+		}
+	}
+	mux.HandleFunc("POST /__test/supervise/{state}", func(w http.ResponseWriter, r *http.Request) {
+		stopSupervise()
+		if r.PathValue("state") == "on" {
+			supMu.Lock()
+			ctx, cancel := context.WithCancel(context.Background())
+			supCancel = cancel
+			supMu.Unlock()
+			srv.SuperviseBackoff = 300 * time.Millisecond
+			go srv.Supervise(ctx, 200*time.Millisecond)
+		}
+		ok(w)
+	})
+	// 新增一個（停止中的）假 distro，例如 Debian1，用來測 Engine／Client 角色。
+	mux.HandleFunc("POST /__test/distro", func(w http.ResponseWriter, r *http.Request) {
+		fwsl.AddDistro(r.URL.Query().Get("name"), "Stopped")
+		ok(w)
+	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {
+		stopSupervise()
+		srv.ResetStart()
 		reset()
 		resetLAN()
 		engine.Reset()

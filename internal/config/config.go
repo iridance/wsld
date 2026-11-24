@@ -34,7 +34,19 @@ type Machine struct {
 	APIEndpoint string `toml:"api_endpoint"`
 	// K8s：此 machine 開啟單節點 k3s（預設關；全部 machine 同時最多一台，見 Config.SetK8s）。
 	K8s bool `toml:"k8s,omitempty"`
+	// Role：engine = 專用 dockerd distro（全部 client 共用）；client = 只裝 docker CLI；"" = 舊式（自帶 dockerd）。
+	// 只能經 SetEngine／ClearEngine 改變。
+	Role string `toml:"role,omitempty"`
 }
+
+// Machine.Role 的合法值。
+const (
+	RoleEngine = "engine"
+	RoleClient = "client"
+)
+
+// IsEngine 表示此 machine 是共用 dockerd 的專用 distro。
+func (m Machine) IsEngine() bool { return m.Role == RoleEngine }
 
 // Ready 表示已 init（有 user 與合法 endpoint）。
 func (m Machine) Ready() bool {
@@ -159,11 +171,58 @@ func Load(path string) (Config, error) {
 		}}
 		c.Active = raw.Distro
 	}
+	c.migrateToEngine()
 	c.syncDerived()
 	if err := c.Validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return c, nil
+}
+
+// migrateToEngine 把舊設定（各 distro 自帶 dockerd、可切換 active）遷移成「一個 engine + 多個 client」：
+// 已有 engine 就不動；否則 k8s 所在機器（k3s --docker 必須與 dockerd 同 distro）優先，其次 active，再其次第一台已 init 的。
+// 其餘已 init 的機器成為 client，endpoint 改為 engine 的。從未 init 的占位 profile 不加角色。
+func (c *Config) migrateToEngine() {
+	if len(c.Machines) == 0 {
+		return
+	}
+	if _, ok := c.EngineMachine(); ok {
+		return
+	}
+	pick := -1
+	for i, m := range c.Machines {
+		if m.K8s && m.Ready() {
+			pick = i
+			break
+		}
+	}
+	if pick < 0 {
+		for i, m := range c.Machines {
+			if strings.EqualFold(m.Distro, c.Active) && m.Ready() {
+				pick = i
+				break
+			}
+		}
+	}
+	if pick < 0 {
+		for i, m := range c.Machines {
+			if m.Ready() {
+				pick = i
+				break
+			}
+		}
+	}
+	if pick < 0 {
+		return
+	}
+	c.Machines[pick].Role = RoleEngine
+	c.Active = c.Machines[pick].Distro
+	for i := range c.Machines {
+		if i != pick && c.Machines[i].Ready() && c.Machines[i].Role == "" {
+			c.Machines[i].Role = RoleClient
+			c.Machines[i].APIEndpoint = c.Machines[pick].APIEndpoint
+		}
+	}
 }
 
 // saveShape 只含 0.5 欄位（不寫舊扁平鍵）。
@@ -222,6 +281,14 @@ func (c Config) K8sMachine() (Machine, bool) {
 	return Machine{}, false
 }
 
+// K8sTarget 是「開啟 k8s」的預設目標：有 engine 就是 engine（k3s --docker 必須與 dockerd 同 distro），否則為 active。
+func (c Config) K8sTarget() (Machine, bool) {
+	if e, ok := c.EngineMachine(); ok {
+		return e, true
+	}
+	return c.ActiveMachine()
+}
+
 // SetK8s 開／關指定 machine 的 k3s。開啟時若另一台已開則拒絕（錯誤訊息指出目前開啟者）。
 func (c *Config) SetK8s(distro string, on bool) error {
 	idx := -1
@@ -235,11 +302,73 @@ func (c *Config) SetK8s(distro string, on bool) error {
 		return fmt.Errorf("machine %q not found", distro)
 	}
 	if on {
+		if eng, ok := c.EngineMachine(); ok && !strings.EqualFold(eng.Distro, c.Machines[idx].Distro) {
+			return fmt.Errorf("k8s must run on the engine %q (k3s --docker has to sit beside dockerd)", eng.Distro)
+		}
 		if cur, ok := c.K8sMachine(); ok && !strings.EqualFold(cur.Distro, c.Machines[idx].Distro) {
 			return fmt.Errorf("k8s is already enabled on %q (disable it first; all WSL2 distros share one network namespace)", cur.Distro)
 		}
 	}
 	c.Machines[idx].K8s = on
+	c.syncDerived()
+	return nil
+}
+
+// EngineMachine 回傳專用 engine distro（最多一台）。
+func (c Config) EngineMachine() (Machine, bool) {
+	for _, m := range c.Machines {
+		if m.IsEngine() {
+			return m, true
+		}
+	}
+	return Machine{}, false
+}
+
+// SetEngine 指定專用 engine distro；已有另一台 engine 時拒絕。
+func (c *Config) SetEngine(distro string) error {
+	idx := -1
+	for i := range c.Machines {
+		if strings.EqualFold(c.Machines[i].Distro, distro) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("machine %q not found", distro)
+	}
+	if cur, ok := c.EngineMachine(); ok && !strings.EqualFold(cur.Distro, c.Machines[idx].Distro) {
+		return fmt.Errorf("engine is already %q (clear it first)", cur.Distro)
+	}
+	if k, ok := c.K8sMachine(); ok && !strings.EqualFold(k.Distro, c.Machines[idx].Distro) {
+		return fmt.Errorf("k8s is enabled on %q; turn it off (or make that machine the engine) before choosing another engine", k.Distro)
+	}
+	c.Machines[idx].Role = RoleEngine
+	c.syncDerived()
+	return nil
+}
+
+// SetClient 把指定 machine 標為 client（共用 engine、不自帶 dockerd）。
+func (c *Config) SetClient(distro string) error {
+	for i := range c.Machines {
+		if strings.EqualFold(c.Machines[i].Distro, distro) {
+			if c.Machines[i].IsEngine() {
+				return fmt.Errorf("machine %q is the engine", c.Machines[i].Distro)
+			}
+			c.Machines[i].Role = RoleClient
+			c.syncDerived()
+			return nil
+		}
+	}
+	return fmt.Errorf("machine %q not found", distro)
+}
+
+// ClearEngine 取消 engine 角色（無 engine 時為 no-op）。
+func (c *Config) ClearEngine() error {
+	for i := range c.Machines {
+		if c.Machines[i].IsEngine() {
+			c.Machines[i].Role = ""
+		}
+	}
 	c.syncDerived()
 	return nil
 }
@@ -250,6 +379,7 @@ func (c *Config) UpsertMachine(m Machine) {
 		if strings.EqualFold(c.Machines[i].Distro, m.Distro) {
 			// k8s 旗標只能經 SetK8s 改變：Init 等流程會以新建的 Machine 覆寫 profile，不可因此清掉它
 			m.K8s = c.Machines[i].K8s
+			m.Role = c.Machines[i].Role // 同理：Role 只能經 SetEngine 改變
 			c.Machines[i] = m
 			c.syncDerived()
 			return
@@ -373,7 +503,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("active %q not in machines", c.Active)
 	}
 	seen := map[string]bool{}
-	k8sOn := ""
+	k8sOn, engineOn := "", ""
 	for _, m := range c.Machines {
 		if m.Distro == "" {
 			return errors.New("machine distro is required")
@@ -383,6 +513,15 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate machine %q", m.Distro)
 		}
 		seen[key] = true
+		if m.Role != "" && m.Role != RoleEngine && m.Role != RoleClient {
+			return fmt.Errorf("machine %q: unknown role %q", m.Distro, m.Role)
+		}
+		if m.IsEngine() {
+			if engineOn != "" {
+				return fmt.Errorf("engine set on both %q and %q (only one machine may be the engine)", engineOn, m.Distro)
+			}
+			engineOn = m.Distro
+		}
 		if m.K8s {
 			if k8sOn != "" {
 				return fmt.Errorf("k8s enabled on both %q and %q (only one machine may run k3s)", k8sOn, m.Distro)
@@ -398,6 +537,9 @@ func (c Config) Validate() error {
 				return fmt.Errorf("api_endpoint host %q is not loopback (only 127.0.0.1/localhost/::1 allowed)", host)
 			}
 		}
+	}
+	if engineOn != "" && k8sOn != "" && !strings.EqualFold(engineOn, k8sOn) {
+		return fmt.Errorf("k8s is enabled on %q but the engine is %q (k3s --docker must run beside dockerd)", k8sOn, engineOn)
 	}
 	return c.validateGlobals()
 }

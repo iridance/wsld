@@ -48,6 +48,17 @@ WSLD_API_PORT=23750
 WSLD_API_ENDPOINT=tcp://127.0.0.1:23750
 ```
 
+#### 角色：`--role engine|client`（可選）
+
+預設（省略 `--role`）是上表的獨立模式。共用 dockerd 的兩種角色：
+
+| 角色 | 與獨立模式的差異 |
+|---|---|
+| `--role engine` | 同上表安裝 dockerd；另外 `daemon.json` 的 `hosts` 多一個 `unix:///mnt/wsl/wsld/docker.sock`；`docker.service` drop-in 多 `ExecStartPre`（建 `/mnt/wsl/wsld`、清舊 socket，tmpfs 於 VM 重啟後清空）與 `ExecStartPost chmod 0666`（各 distro 的 docker GID 不同）；`/etc/wsl.conf` 加 `[interop] appendWindowsPath=false`（interop 保留，埠占用偵測需要 `netstat.exe`）；驗證階段確認共用 socket 已出現 |
+| `--role client` | 只裝 CLI 與 plugin（Debian：`docker-ce-cli`、`docker-buildx-plugin`、`docker-compose-plugin`；Arch／openSUSE 沒有獨立 CLI 套件，裝 `docker` 但不 enable）；不選埠、不寫 `daemon.json`；以目標使用者建立並切換 `docker context wsld`（指向共用 socket）。偵測到本機 `docker.service` 仍啟用只警告，不自動停用 |
+
+Windows 端對應 `wsld init --distro <d> --role engine|client`（client 需要先有 engine）。輸出的 `WSLD_API_PORT` 只在非 client 時有意義。
+
 ### 3. Windows 端驗證
 
 ```powershell
@@ -85,6 +96,7 @@ make test-scripts          # bats（bootstrap-lib）+ shellcheck + Pester（WslH
 ## 已知限制
 
 - `.ps1` 需 UTF-8 **含 BOM**（Windows PowerShell 5.1 才會正確讀取中文）；`.gitattributes` 已設定。
+- `--role client` 的 distro 內，`docker run -v <distro 內路徑>` 不可用（路徑在 engine 解析）；`/mnt/c/...` 與 named volume 可用。
 - 首次把使用者加入 `docker` 群組後，需重開 WSL shell 才能不加 `sudo` 使用 `docker`。
 - 只支援 Debian（apt）／Arch（pacman）／openSUSE（zypper）系；分類表中 `rhel`（Rocky、Alma、Fedora、Oracle）與 `azure`（Azure Linux）系會以 exit 5 結束。
 

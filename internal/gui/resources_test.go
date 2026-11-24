@@ -297,50 +297,17 @@ func TestMachinesListConfigOnlineInstall(t *testing.T) {
 	}
 }
 
-func TestMachineUseUnmanageUnregister(t *testing.T) {
+func TestMachineUnmanageUnregister(t *testing.T) {
 	e := newEnv(t, "")
 	e.s.WSL = NewFakeWSL()
-
-	resp, b := e.req(t, http.MethodPost, "/api/machines/docker-desktop/use", "")
-	if resp.StatusCode != 200 {
-		t.Fatalf("use = %d %s", resp.StatusCode, b)
-	}
-	c, err := e.s.LoadConfig()
-	if err != nil {
+	c, _ := e.s.LoadConfig()
+	c.UpsertMachine(config.Machine{Distro: "docker-desktop", User: "u", APIEndpoint: c.APIEndpoint})
+	_ = c.SetClient("docker-desktop")
+	if err := e.s.SaveConfig(c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Active != "docker-desktop" {
-		t.Fatalf("active = %q", c.Active)
-	}
-	m, ok := c.FindMachine("docker-desktop")
-	if !ok || !m.Ready() {
-		t.Fatalf("first use should init+start, got ok=%v m=%+v", ok, m)
-	}
-	if e.life.Distro != "docker-desktop" {
-		t.Fatalf("lifecycle not rebound: %q", e.life.Distro)
-	}
-	if e.life.Starts() < 1 {
-		t.Fatal("expected Start during first use")
-	}
-	_, b = e.req(t, http.MethodGet, "/api/meta", "")
-	var meta Meta
-	_ = json.Unmarshal(b, &meta)
-	if meta.Distro != "docker-desktop" || !meta.ActiveReady {
-		t.Fatalf("meta = %+v", meta)
-	}
 
-	// re-use primary (already managed+ready)
-	resp, _ = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/use", "")
-	if resp.StatusCode != 200 {
-		t.Fatal(resp.StatusCode)
-	}
-	c, _ = e.s.LoadConfig()
-	um, _ := c.FindMachine("Ubuntu-26.04")
-	if !um.Ready() {
-		t.Fatalf("Ubuntu should remain ready: %+v machines=%+v", um, c.Machines)
-	}
-
-	resp, _ = e.req(t, http.MethodPost, "/api/machines/docker-desktop/unmanage", "")
+	resp, _ := e.req(t, http.MethodPost, "/api/machines/docker-desktop/unmanage", "")
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("unmanage = %d", resp.StatusCode)
 	}
@@ -349,7 +316,7 @@ func TestMachineUseUnmanageUnregister(t *testing.T) {
 		t.Fatal("should be unmanaged")
 	}
 
-	resp, b = e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/unregister", `{"confirm":"nope"}`)
+	resp, b := e.req(t, http.MethodPost, "/api/machines/Ubuntu-26.04/unregister", `{"confirm":"nope"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("bad confirm = %d %s", resp.StatusCode, b)
 	}
@@ -967,4 +934,81 @@ func TestPrimaryKeepAlive(t *testing.T) {
 	_ = wsl.Wake(context.Background(), fw, "Ubuntu-26.04")
 	list()
 	waitHeld("Ubuntu-26.04")
+}
+
+// 只有 engine 保活；執行中的 client 不保活。
+func TestOnlyEngineIsKeptAlive(t *testing.T) {
+	e := newEnv(t, "")
+	fw := NewFakeWSL()
+	e.s.WSL = fw
+	e.s.KeepAlive = &wsl.KeepAlive{Spawner: fw}
+	cfg := e.s.cfg()
+	cfg.UpsertMachine(config.Machine{Distro: "Debian1", User: "u", APIEndpoint: cfg.APIEndpoint})
+	if err := cfg.SetClient("Debian1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	fw.AddDistro("Debian1", "Running")
+
+	e.req(t, http.MethodGet, "/api/machines", "")
+	deadline := time.Now().Add(2 * time.Second)
+	for strings.Join(e.s.KeepAlive.Held(), ",") != "Ubuntu-26.04" {
+		if time.Now().After(deadline) {
+			t.Fatalf("held = %v, want only the engine", e.s.KeepAlive.Held())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestMachineRoleEngineAndClient(t *testing.T) {
+	e := newEnv(t, "")
+	if err := config.Save(e.cfgP, config.Default()); err != nil { // 首次使用：尚無任何 machine
+		t.Fatal(err)
+	}
+	fw := NewFakeWSL()
+	fw.AddDistro("Debian1", "Running")
+	e.s.WSL = fw
+	role := func(name, body string) int {
+		resp, _ := e.req(t, http.MethodPost, "/api/machines/"+name+"/role", body)
+		return resp.StatusCode
+	}
+
+	if got := role("Ubuntu-26.04", `{"role":"bogus"}`); got != http.StatusBadRequest {
+		t.Fatalf("bogus role = %d", got)
+	}
+	if got := role("Nope", `{"role":"engine"}`); got != http.StatusNotFound {
+		t.Fatalf("unknown distro = %d", got)
+	}
+	if got := role("Debian1", `{"role":"client"}`); got != http.StatusConflict {
+		t.Fatalf("client without engine = %d", got)
+	}
+	if got := role("Ubuntu-26.04", `{"role":"engine"}`); got != http.StatusOK {
+		t.Fatalf("engine = %d", got)
+	}
+	if got := role("Debian1", `{"role":"engine"}`); got != http.StatusConflict {
+		t.Fatalf("second engine = %d", got)
+	}
+	if got := role("Debian1", `{"role":"client"}`); got != http.StatusOK {
+		t.Fatalf("client = %d", got)
+	}
+
+	_, b := e.req(t, http.MethodGet, "/api/machines", "")
+	var m MachinesResponse
+	_ = json.Unmarshal(b, &m)
+	roles := map[string]string{}
+	for _, x := range m.Machines {
+		roles[x.Name] = x.Role
+	}
+	if roles["Ubuntu-26.04"] != "engine" || roles["Debian1"] != "client" || roles["docker-desktop"] != "" {
+		t.Fatalf("roles = %v", roles)
+	}
+	c, _ := e.s.LoadConfig()
+	if c.Active != "Ubuntu-26.04" {
+		t.Fatalf("making a client must not steal active, got %q", c.Active)
+	}
+	if cm, _ := c.FindMachine("Debian1"); cm.APIEndpoint != c.APIEndpoint {
+		t.Fatalf("client shares the engine endpoint: %q vs %q", cm.APIEndpoint, c.APIEndpoint)
+	}
 }

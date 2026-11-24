@@ -561,3 +561,264 @@ func TestK8sAPIPortRoundTripAndValidation(t *testing.T) {
 		t.Fatal("port 80 should be rejected")
 	}
 }
+
+func TestEngineMachineNoneByDefault(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	if _, ok := c.EngineMachine(); ok {
+		t.Fatal("no engine by default")
+	}
+	if m, _ := c.FindMachine("A"); m.IsEngine() {
+		t.Fatal("default role is not engine")
+	}
+}
+
+func TestSetEngineAllowsOnlyOne(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "wsld-engine", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	c.EnsureActive(c.Machines[0])
+	if err := c.SetEngine("wsld-engine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetEngine("B"); err == nil || !strings.Contains(err.Error(), "wsld-engine") {
+		t.Fatalf("second engine must be rejected naming the first, got %v", err)
+	}
+	if m, ok := c.EngineMachine(); !ok || m.Distro != "wsld-engine" || m.Role != RoleEngine {
+		t.Fatalf("EngineMachine = %+v %v", m, ok)
+	}
+	if err := c.SetEngine("nope"); err == nil {
+		t.Fatal("unknown machine must error")
+	}
+	if err := c.ClearEngine(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.EngineMachine(); ok {
+		t.Fatal("engine cleared")
+	}
+}
+
+func TestValidateRejectsTwoEngines(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", Role: RoleEngine})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751", Role: RoleEngine})
+	c.EnsureActive(c.Machines[0])
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "engine") {
+		t.Fatalf("want engine conflict, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownRole(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", Role: "bogus"})
+	c.EnsureActive(c.Machines[0])
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown role must be rejected")
+	}
+}
+
+func TestValidateK8sMustBeOnEngineWhenEngineExists(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750", Role: RoleEngine})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751", Role: RoleClient, K8s: true})
+	c.EnsureActive(c.Machines[0])
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "k8s") {
+		t.Fatalf("k8s on a client must be rejected, got %v", err)
+	}
+}
+
+func TestUpsertMachinePreservesRole(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	if err := c.SetEngine("E"); err != nil {
+		t.Fatal(err)
+	}
+	c.UpsertMachine(Machine{Distro: "e", User: "u2", APIEndpoint: "tcp://127.0.0.1:23760"}) // Init 重寫 profile
+	if m, _ := c.FindMachine("E"); m.Role != RoleEngine || m.User != "u2" {
+		t.Fatalf("role must survive upsert: %+v", m)
+	}
+}
+
+func TestRoleRoundTripAndOmitWhenEmpty(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	c.EnsureActive(c.Machines[0])
+	if err := c.SetEngine("E"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if strings.Count(string(raw), "role") != 1 {
+		t.Fatalf("role written only for engine:\n%s", raw)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := got.EngineMachine(); !ok || m.Distro != "E" {
+		t.Fatalf("round trip lost engine: %+v", got.Machines)
+	}
+}
+
+func TestSetK8sMustBeOnEngineWhenEngineExists(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	_ = c.SetEngine("E")
+	_ = c.SetClient("B")
+	c.EnsureActive(c.Machines[0])
+	if err := c.SetK8s("B", true); err == nil || !strings.Contains(err.Error(), "E") {
+		t.Fatalf("k8s on a client must be rejected naming the engine, got %v", err)
+	}
+	if err := c.SetK8s("E", true); err != nil {
+		t.Fatalf("k8s on the engine must work: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetEngineRefusedWhileK8sRunsElsewhere(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
+	_ = c.SetK8s("A", true)
+	c.EnsureActive(c.Machines[0])
+	if err := c.SetEngine("E"); err == nil || !strings.Contains(err.Error(), "k8s") {
+		t.Fatalf("want k8s conflict, got %v", err)
+	}
+	if _, ok := c.EngineMachine(); ok {
+		t.Fatal("engine must not be set on failure")
+	}
+	if err := c.SetEngine("A"); err != nil {
+		t.Fatalf("promoting the k8s machine itself is fine: %v", err)
+	}
+}
+
+func TestK8sTargetPrefersEngineOverActive(t *testing.T) {
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "A", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "E", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.EnsureActive(c.Machines[0])
+	if m, ok := c.K8sTarget(); !ok || m.Distro != "A" {
+		t.Fatalf("no engine → active, got %+v %v", m, ok)
+	}
+	_ = c.SetEngine("E")
+	if m, ok := c.K8sTarget(); !ok || m.Distro != "E" {
+		t.Fatalf("engine → engine, got %+v %v", m, ok)
+	}
+}
+
+// ---- 舊設定（獨立模式、可切換 active）載入時遷移成 engine + client ----
+
+func writeCfg(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestLoadMigratesActiveMachineToEngineAndOthersToClients(t *testing.T) {
+	p := writeCfg(t, `active = "B"
+[[machines]]
+distro = "A"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23750"
+[[machines]]
+distro = "B"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23751"
+[[machines]]
+distro = "Placeholder"
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "B" {
+		t.Fatalf("active machine must become the engine, got %+v %v", e, ok)
+	}
+	a, _ := c.FindMachine("A")
+	if a.Role != RoleClient || a.APIEndpoint != "tcp://127.0.0.1:23751" {
+		t.Fatalf("ready non-active machine becomes a client sharing the engine endpoint: %+v", a)
+	}
+	if ph, _ := c.FindMachine("Placeholder"); ph.Role != "" {
+		t.Fatalf("never-initialised placeholder keeps no role: %+v", ph)
+	}
+}
+
+func TestLoadMigrationPrefersK8sMachineAsEngine(t *testing.T) {
+	p := writeCfg(t, `active = "A"
+[[machines]]
+distro = "A"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23750"
+[[machines]]
+distro = "K"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23751"
+k8s = true
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := c.EngineMachine(); e.Distro != "K" {
+		t.Fatalf("k3s --docker must stay beside its dockerd: engine = %q", e.Distro)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadFlatLegacyConfigBecomesEngine(t *testing.T) {
+	p := writeCfg(t, "distro = \"Ubuntu\"\nuser = \"irice\"\napi_endpoint = \"tcp://127.0.0.1:23750\"\n")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "Ubuntu" {
+		t.Fatalf("flat config → engine, got %+v %v", e, ok)
+	}
+}
+
+func TestLoadMigrationIsIdempotentAndKeepsExistingEngine(t *testing.T) {
+	p := writeCfg(t, `active = "A"
+[[machines]]
+distro = "A"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23750"
+role = "client"
+[[machines]]
+distro = "E"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23751"
+role = "engine"
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := c.EngineMachine(); e.Distro != "E" {
+		t.Fatalf("an existing engine must not be replaced: %q", e.Distro)
+	}
+	if a, _ := c.FindMachine("A"); a.Role != RoleClient {
+		t.Fatalf("A = %+v", a)
+	}
+}
+
+func TestEmptyConfigStaysEmpty(t *testing.T) {
+	c, err := Load(writeCfg(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.EngineMachine(); ok || len(c.Machines) != 0 {
+		t.Fatalf("empty config must stay empty: %+v", c)
+	}
+}

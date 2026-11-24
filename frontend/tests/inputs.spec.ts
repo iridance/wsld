@@ -135,6 +135,6 @@ test("dropdown: the open list is drawn by wsld and works with mouse and keyboard
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("lang-select-option-zh-TW")).toHaveClass(/active/);
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("btn-start-engine")).toHaveText("啟動引擎");
+  await expect(page.getByTestId("nav-containers")).toHaveText("容器");
   await expect(page.getByTestId("lang-select")).toHaveAttribute("data-value", "zh-TW");
 });

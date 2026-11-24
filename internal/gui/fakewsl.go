@@ -109,6 +109,13 @@ func (f *FakeWSL) SetConf(distro, conf string) {
 }
 
 // Shutdowns 回傳 wsl --shutdown 的次數。
+// AddDistro 新增一個假 distro（測試專用，例如 engine）。
+func (f *FakeWSL) AddDistro(name, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.distros = append(f.distros, wsl.Distro{Name: name, State: state, Version: 2})
+}
+
 func (f *FakeWSL) Shutdowns() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

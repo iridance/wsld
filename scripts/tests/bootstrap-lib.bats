@@ -464,3 +464,103 @@ SCRIPT
   run wsld_k3s_installed "$TMPD/k3s"
   [ "$status" -eq 0 ]
 }
+
+# ---------- shared engine（專用 dockerd distro）----------
+
+@test "parse_args role defaults to empty (legacy self-contained docker)" {
+  wsld_parse_args
+  [ -z "$WSLD_ROLE" ]
+}
+
+@test "parse_args accepts --role engine and client" {
+  wsld_parse_args --role engine
+  [ "$WSLD_ROLE" = "engine" ]
+  wsld_parse_args --role client
+  [ "$WSLD_ROLE" = "client" ]
+}
+
+@test "parse_args rejects unknown role" {
+  run wsld_parse_args --role bogus
+  [ "$status" -eq 2 ]
+}
+
+@test "daemon_json with shared socket lists unix, shared socket and loopback tcp" {
+  run wsld_render_daemon_json 23750 /mnt/wsl/wsld/docker.sock
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"unix:///var/run/docker.sock", "unix:///mnt/wsl/wsld/docker.sock", "tcp://127.0.0.1:23750"'* ]]
+  run wsld_validate_loopback_hosts "$output"
+  [ "$status" -eq 0 ]
+}
+
+@test "daemon_json without shared socket is unchanged" {
+  run wsld_render_daemon_json 23750
+  [[ "$output" != *"/mnt/wsl"* ]]
+}
+
+@test "engine override prepares the shared socket dir and opens its mode" {
+  run wsld_render_engine_override debian /mnt/wsl/wsld/docker.sock
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock"* ]]
+  [[ "$output" == *"ExecStartPre=/bin/mkdir -p /mnt/wsl/wsld"* ]]
+  [[ "$output" == *"ExecStartPre=/bin/rm -f /mnt/wsl/wsld/docker.sock"* ]]
+  [[ "$output" == *"ExecStartPost=/bin/chmod 0666 /mnt/wsl/wsld/docker.sock"* ]]
+}
+
+@test "engine override for suse lets dockerd manage containerd" {
+  run wsld_render_engine_override suse /mnt/wsl/wsld/docker.sock
+  [[ "$output" == *"ExecStart=/usr/bin/dockerd"* ]]
+  [[ "$output" != *"--containerd"* ]]
+}
+
+@test "ensure_ini_key creates section and key when file is absent" {
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  grep -q '^\[interop\]' "$TMPD/wsl.conf"
+  grep -q '^enabled=false' "$TMPD/wsl.conf"
+}
+
+@test "ensure_ini_key replaces an existing value and is idempotent" {
+  printf '[interop]\nenabled = true\nappendWindowsPath=true\n[user]\ndefault=irice\n' > "$TMPD/wsl.conf"
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  [ "$(grep -c '^enabled=false' "$TMPD/wsl.conf")" -eq 1 ]
+  ! grep -q 'enabled = true' "$TMPD/wsl.conf"
+  grep -q '^appendWindowsPath=true' "$TMPD/wsl.conf"
+  grep -q '^default=irice' "$TMPD/wsl.conf"
+}
+
+@test "ensure_ini_key adds a key to an existing section without touching other sections" {
+  printf '[boot]\nsystemd=true\n[interop]\nappendWindowsPath=true\n' > "$TMPD/wsl.conf"
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  awk '/^\[/{s=$0} s=="[interop]" && /^enabled=false/{f=1} END{exit f?0:1}' "$TMPD/wsl.conf"
+  grep -q '^systemd=true' "$TMPD/wsl.conf"
+}
+
+@test "ensure_ini_key does not match the same key in another section" {
+  printf '[boot]\nenabled=true\n' > "$TMPD/wsl.conf"
+  wsld_ensure_ini_key "$TMPD/wsl.conf" interop enabled false
+  grep -q '^enabled=true' "$TMPD/wsl.conf"
+  awk '/^\[/{s=$0} s=="[interop]" && /^enabled=false/{f=1} END{exit f?0:1}' "$TMPD/wsl.conf"
+}
+
+@test "client_packages debian installs only cli and plugins" {
+  run wsld_client_packages debian 1
+  [ "$output" = "docker-ce-cli docker-buildx-plugin docker-compose-plugin" ]
+  run wsld_client_packages debian 0
+  [ "$output" = "docker-ce-cli docker-buildx-plugin" ]
+}
+
+@test "client_packages arch and suse use the distro docker package" {
+  run wsld_client_packages arch 1
+  [[ "$output" == "docker "* ]] && [[ "$output" == *docker-compose* ]]
+  run wsld_client_packages suse 1
+  [[ "$output" == "docker "* ]] && [[ "$output" == *docker-compose* ]]
+}
+
+@test "client_packages rejects unknown family" {
+  run wsld_client_packages plan9 1
+  [ "$status" -ne 0 ]
+}
+
+@test "engine socket constant points under /mnt/wsl" {
+  [ "$WSLD_ENGINE_SOCK" = "/mnt/wsl/wsld/docker.sock" ]
+}

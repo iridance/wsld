@@ -163,11 +163,11 @@ test("Machines: lists local WSL distros with state, version and role badges", as
   const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
   await expect(u.getByTestId("machine-state")).toHaveText("Running");
   await expect(u.getByTestId("machine-version")).toHaveText("2");
-  await expect(u.getByTestId("machine-flag-active")).toBeVisible();
+  await expect(u.getByTestId("machine-flag-engine")).toBeVisible();
   await expect(u.getByTestId("machine-flag-default")).toBeVisible();
   const dd = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
   await expect(dd.getByTestId("machine-state")).toHaveText("Stopped");
-  await expect(dd.getByTestId("machine-flag-active")).toHaveCount(0);
+  await expect(dd.getByTestId("machine-flag-engine")).toHaveCount(0);
 });
 
 test("Machines: card icon is the distro logo, generic icon when unrecognised", async ({ page }) => {
@@ -178,19 +178,19 @@ test("Machines: card icon is the distro logo, generic icon when unrecognised", a
   await expect(dd.locator('.machine-icon svg[data-icon="machines"]')).toBeVisible();
 });
 
-test("Machines: primary machine is labelled Primary and others offer Set as primary", async ({ page }) => {
+test("Machines: the engine is labelled Engine and nothing offers Set as primary", async ({ page }) => {
   await go(page, "machines");
   const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(u.getByTestId("machine-flag-active")).toHaveText("primary");
-  await expect(page.getByTestId("btn-machine-use-docker-desktop")).toContainText("Set as primary");
+  await expect(u.getByTestId("machine-flag-engine")).toHaveText("Engine");
+  await expect(page.locator('[data-testid^="btn-machine-use-"]')).toHaveCount(0);
 });
 
-test("Machines: zh-TW labels the primary machine 主要 and the button 設為主要", async ({ page, request }) => {
+test("Machines: zh-TW keeps the Engine label", async ({ page, request }) => {
   await setLang(request, "zh-TW");
   await go(page, "machines");
   const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(u.getByTestId("machine-flag-active")).toHaveText("主要");
-  await expect(page.getByTestId("btn-machine-use-docker-desktop")).toContainText("設為主要");
+  await expect(u.getByTestId("machine-flag-engine")).toHaveText("Engine");
+  await expect(page.locator('[data-testid^="btn-machine-use-"]')).toHaveCount(0);
 });
 
 test("Machines: Info opens a right-side drawer with wsl.conf and usage bars", async ({ page, request }) => {
@@ -302,7 +302,7 @@ test("Machines: Add machine lists online distributions and installs the chosen o
   await expect(page.getByTestId("notice")).toContainText("Debian1 installed");
   await expect(page.getByTestId("notice")).not.toContainText("wsl -d");
   await expect(page.getByTestId("notice")).not.toContainText("no password");
-  await expect(page.getByTestId("notice")).toContainText("Set it as primary");
+  await expect(page.getByTestId("notice")).toContainText("Use shared engine");
   await expect(page.locator('[data-testid="machine-row"][data-name="Debian1"]')).toBeVisible();
   expect(await (await request.get("/__test/wsl/installed")).json()).toEqual(["Debian1"]);
   const acct = await (await request.get("/__test/wsl/account?distro=Debian1&user=irice")).json();
@@ -457,60 +457,6 @@ test("Machines: Remove distro uses trash icon, requires typing the name, and unr
   await expect(page.getByTestId("notice")).toContainText("docker-desktop");
 });
 
-test("Machines: Start engine shows Starting… pending on the active row until start finishes", async ({ page, request }) => {
-  await go(page, "machines");
-  await engine(request, "down");
-  await expect(page.getByTestId("btn-start-engine")).toBeEnabled({ timeout: 10_000 });
-
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  await page.route("**/api/engine/start", async (route) => {
-    await gate;
-    await route.continue();
-  });
-
-  const click = page.getByTestId("btn-start-engine").click();
-  const row = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(row).toHaveAttribute("data-pending", "starting");
-  await expect(row.getByTestId("machine-state")).toHaveText("Starting…");
-  await expect(page.getByTestId("btn-machine-term-Ubuntu-26.04")).toBeDisabled();
-  await expect(page.getByTestId("btn-machine-config-Ubuntu-26.04")).toBeDisabled();
-  await expect(page.getByTestId("btn-add-machine")).toBeDisabled();
-  await expect(page.locator('[data-testid="machine-row"][data-name="docker-desktop"]')).not.toHaveAttribute("data-pending", /.+/);
-
-  release();
-  await click;
-  await expect(row).not.toHaveAttribute("data-pending", /.+/);
-  await expect(row.getByTestId("machine-state")).toHaveText("Running");
-  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
-});
-
-test("Machines: Set as primary shows Switching… pending on the target row until use finishes", async ({ page }) => {
-  await go(page, "machines");
-
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  await page.route("**/api/machines/*/use", async (route) => {
-    await gate;
-    await route.continue();
-  });
-
-  const click = page.getByTestId("btn-machine-use-docker-desktop").click();
-  const row = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
-  await expect(row).toHaveAttribute("data-pending", "switching");
-  await expect(row.getByTestId("machine-state")).toHaveText("Switching…");
-  await expect(page.getByTestId("btn-machine-use-docker-desktop")).toBeDisabled();
-
-  release();
-  await click;
-  await expect(row).not.toHaveAttribute("data-pending", /.+/);
-  await expect(row).toHaveAttribute("data-active", "1");
-});
-
 test("Machines: Remove distro shows Removing… pending on the row until unregister finishes", async ({ page }) => {
   await go(page, "machines");
 
@@ -590,7 +536,7 @@ test("Machines: Start / Stop a non-primary distro toggles its state without a co
   await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected");
 });
 
-test("Machines: Stopping the primary distro confirms, disconnects the engine; Start brings it back", async ({ page }) => {
+test("Machines: Stopping the engine distro confirms and disconnects; Start brings it back", async ({ page }) => {
   await go(page, "machines");
   const row = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
   await expect(row).toHaveAttribute("data-state", "running");
@@ -598,7 +544,7 @@ test("Machines: Stopping the primary distro confirms, disconnects the engine; St
   // 取消 → 不停止
   await page.getByTestId("btn-machine-stop-Ubuntu-26.04").click();
   await expect(page.getByTestId("confirm-dialog")).toBeVisible();
-  await expect(page.getByTestId("confirm-text")).toContainText("primary distro");
+  await expect(page.getByTestId("confirm-text")).toContainText("engine distro");
   await page.getByTestId("confirm-cancel").click();
   await expect(row).toHaveAttribute("data-state", "running");
 
@@ -607,7 +553,6 @@ test("Machines: Stopping the primary distro confirms, disconnects the engine; St
   await page.getByTestId("confirm-ok").click();
   await expect(row).toHaveAttribute("data-state", "stopped");
   await expect(page.getByTestId("status-connection")).not.toHaveAttribute("data-state", "connected");
-  await expect(page.getByTestId("btn-start-engine")).toBeEnabled();
 
   await page.getByTestId("btn-machine-start-Ubuntu-26.04").click();
   await expect(row).toHaveAttribute("data-state", "running");
@@ -633,60 +578,4 @@ test("Machines: Terminal opens bottom panel exec session like containers", async
 
   await page.getByTestId("btn-panel-close").click();
   await expect(panel).toBeHidden();
-});
-
-test("Machines: Set as primary shows header Loading/Switching until complete", async ({ page }) => {
-  await open(page);
-  await page.getByTestId("nav-machines").click();
-
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  await page.route("**/api/machines/*/use", async (route) => {
-    await gate;
-    await route.continue();
-  });
-
-  const click = page.getByTestId("btn-machine-use-docker-desktop").click();
-  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "switching");
-  await expect(page.getByTestId("status-connection")).toHaveText("Switching…");
-  await expect(page.getByTestId("header-loading")).toHaveText("Loading…");
-  await expect(page.getByTestId("header-distro")).toHaveText("docker-desktop");
-  await expect(page.getByTestId("btn-start-engine")).toBeDisabled();
-  await expect(page.getByTestId("btn-open-folder")).toBeDisabled();
-  await expect(page.getByTestId("btn-open-terminal")).toBeDisabled();
-
-  release();
-  await click;
-  await expect(page.getByTestId("header-loading")).toHaveCount(0);
-  await expect(page.getByTestId("status-connection")).not.toHaveAttribute("data-state", "switching");
-  await expect(page.getByTestId("header-distro")).toHaveText("docker-desktop");
-  await expect(page.getByTestId("notice")).toContainText("docker-desktop");
-});
-
-test("Machines: Set as primary switches active, hard-cuts panels, and finishes init", async ({ page }) => {
-  await open(page);
-  // open a panel first
-  await page.getByTestId("btn-logs-web").click();
-  await expect(page.getByTestId("panel")).toBeVisible();
-  await page.getByTestId("nav-machines").click();
-  await page.getByTestId("btn-machine-use-docker-desktop").click();
-  await expect(page.locator('[data-testid="machine-row"][data-name="docker-desktop"][data-active="1"]')).toBeVisible();
-  await expect(page.getByTestId("notice")).toContainText("docker-desktop");
-  await expect(page.getByTestId("panel")).toBeHidden();
-  await expect(page.getByTestId("header-distro")).toHaveText("docker-desktop");
-  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 15_000 });
-  await expect(page.getByTestId("error-banner")).toBeHidden();
-  await expect(page.getByTestId("btn-start-engine")).toBeDisabled();
-});
-
-test("Machines: Set as primary on uninitialized distro auto inits and starts", async ({ page }) => {
-  await open(page);
-  await page.getByTestId("nav-machines").click();
-  await page.getByTestId("btn-machine-use-docker-desktop").click();
-  await expect(page.getByTestId("status-connection")).toHaveAttribute("data-state", "connected", { timeout: 15_000 });
-  await expect(page.getByTestId("error-banner")).toBeHidden();
-  await expect(page.getByTestId("header-distro")).toHaveText("docker-desktop");
-  await expect(page.getByTestId("btn-start-engine")).toBeDisabled();
 });

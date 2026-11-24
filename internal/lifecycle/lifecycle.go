@@ -199,7 +199,7 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 				return Status{}, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.docker_missing", m.Cfg.Distro))
 			}
 			m.print(i18n.T("lc.start_bootstrap", m.Cfg.Distro))
-			newCfg, err := m.Init(ctx, InitOptions{Distro: m.Cfg.Distro, User: m.Cfg.User})
+			newCfg, err := m.Init(ctx, InitOptions{Distro: m.Cfg.Distro, User: m.Cfg.User, Role: m.activeRole()})
 			if err != nil {
 				return m.Status(ctx), err
 			}
@@ -245,6 +245,8 @@ type InitOptions struct {
 	NoCompose     bool
 	InstallDistro string // 無 Ubuntu 時要安裝的名稱；空→"Ubuntu"
 	SkipInstall   bool
+	// Role：config.RoleEngine＝專用 dockerd distro；config.RoleClient＝只裝 CLI、共用 engine；空＝自帶 dockerd。
+	Role string
 	// VHDSizeGB：無 Ubuntu 時安裝的虛擬磁碟容量上限（GB）；0 = WSL 預設（1 TB）。
 	VHDSizeGB int
 	// Password 於需要「新建」Linux 使用者時呼叫，回傳其密碼（空 = 不設，帳號維持無密碼）。
@@ -300,6 +302,33 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		}
 		d = found
 	}
+
+	// 沒有獨立模式：未指定角色時，還沒有 engine 就成為 engine，已有 engine 就當 client（該 distro 本身就是 engine 時維持 engine）。
+	if opts.Role == "" {
+		switch cur, has := cfg.EngineMachine(); {
+		case !has || strings.EqualFold(cur.Distro, d.Name):
+			opts.Role = config.RoleEngine
+		default:
+			opts.Role = config.RoleClient
+		}
+	}
+
+	var engine config.Machine
+	switch opts.Role {
+	case config.RoleEngine:
+		if cur, ok := cfg.EngineMachine(); ok && !strings.EqualFold(cur.Distro, d.Name) {
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_engine_exists", cur.Distro))
+		}
+	case config.RoleClient:
+		cur, ok := cfg.EngineMachine()
+		if !ok || !cur.Ready() {
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_client_needs_engine", d.Name))
+		}
+		if strings.EqualFold(cur.Distro, d.Name) {
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_client_is_engine", d.Name))
+		}
+		engine = cur
+	}
 	cfg.Distro = d.Name
 
 	user := opts.User
@@ -337,6 +366,9 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	cfg.User = user
 
 	port := opts.Port
+	if opts.Role == config.RoleClient {
+		port = -1 // client 不跑 dockerd，不需要埠
+	}
 	if port == 0 {
 		// 重 init：優先沿用本 distro 既有埠；新 machine：避開其他 profile 已登記埠。
 		if m, ok := cfg.FindMachine(d.Name); ok && m.APIEndpoint != "" {
@@ -351,8 +383,11 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	}
 	busy := cfg.BusyAPIPorts(d.Name)
 
-	bootArgs := []string{"--user", user, "--port", strconv.Itoa(port)}
-	if len(busy) > 0 {
+	bootArgs := []string{"--user", user}
+	if opts.Role != config.RoleClient {
+		bootArgs = append(bootArgs, "--port", strconv.Itoa(port))
+	}
+	if len(busy) > 0 && opts.Role != config.RoleClient {
 		parts := make([]string, len(busy))
 		for i, p := range busy {
 			parts[i] = strconv.Itoa(p)
@@ -361,6 +396,9 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	}
 	if opts.NoCompose {
 		bootArgs = append(bootArgs, "--no-compose")
+	}
+	if opts.Role != "" {
+		bootArgs = append(bootArgs, "--role", opts.Role)
 	}
 	m.print(i18n.T("lc.init_running", d.Name))
 	// 先把 bundle 寫入 distro 暫存再執行，避免 `bash -s`+stdin 被 systemctl 等指令吞掉腳本。
@@ -385,6 +423,13 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 			return cfg, errors.New(i18n.T("lc.init_failed", err))
 		}
 	}
+	if opts.Role == config.RoleClient {
+		cfg.UpsertMachine(config.Machine{Distro: d.Name, User: user, APIEndpoint: engine.APIEndpoint})
+		if err := cfg.SetClient(d.Name); err != nil {
+			return cfg, err
+		}
+		return cfg, nil // 不動 active：client 沿用 engine 的 API
+	}
 	chosen, ok := ParseBootstrapPort(string(out))
 	if !ok {
 		return cfg, errors.New(i18n.T("lc.init_no_port"))
@@ -397,6 +442,11 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		User:        user,
 		APIEndpoint: config.EndpointForPort(chosen),
 	})
+	if opts.Role == config.RoleEngine {
+		if err := cfg.SetEngine(d.Name); err != nil {
+			return cfg, err
+		}
+	}
 	return cfg, nil
 }
 
@@ -424,4 +474,42 @@ func shellQuote(s string) string {
 		}
 	}
 	return s
+}
+
+// DefaultEngineDistro 是首次使用時自動建立的專用 engine distro 名稱。
+const DefaultEngineDistro = "wsld-engine"
+
+// EnsureEngine 確保有一個已 init 的 engine：已就緒就原樣回傳（不碰 WSL）；
+// 否則沿用 engine profile（或既有的 wsld-engine distro）跑 bootstrap；兩者都沒有就先 wsl --install 一個 wsld-engine。
+// opts 的 User／Password／VHDSizeGB 等照 Init 的語意傳入；Distro 與 Role 由本函式決定。
+func (m *Manager) EnsureEngine(ctx context.Context, opts InitOptions) (config.Config, error) {
+	cfg := m.Cfg
+	if e, ok := cfg.EngineMachine(); ok && e.Ready() {
+		return cfg, nil
+	}
+	name := DefaultEngineDistro
+	if e, ok := cfg.EngineMachine(); ok {
+		name = e.Distro
+	}
+	list, err := wsl.ListDistros(ctx, m.WSL)
+	if err != nil {
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.wsl_unavailable_init", err))
+	}
+	if _, found := wsl.FindDistro(list, name); !found {
+		m.print(i18n.T("lc.engine_installing", name))
+		if err := wsl.Install(ctx, m.WSL, "Ubuntu", name, opts.VHDSizeGB); err != nil {
+			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_install_failed", name, err))
+		}
+	}
+	opts.Distro, opts.Role = name, config.RoleEngine
+	m.Cfg = cfg
+	return m.Init(ctx, opts)
+}
+
+// activeRole 回傳 active machine 的 Role（重跑 bootstrap 時沿用，避免 engine 被當成獨立 docker 重裝）。
+func (m *Manager) activeRole() string {
+	if am, ok := m.Cfg.ActiveMachine(); ok {
+		return am.Role
+	}
+	return ""
 }

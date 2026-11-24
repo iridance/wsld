@@ -98,6 +98,8 @@ type Server struct {
 	DistroDisk func(name string) (int64, error)
 	// DistroDiskLimit 回傳 distro 虛擬磁碟的容量上限（Windows：wsl.VHDXLimit；nil＝不顯示）。
 	DistroDiskLimit func(name string) (int64, error)
+	// SuperviseBackoff 是自動帶起失敗後的重試間隔（0 = 30 秒；測試縮短）。
+	SuperviseBackoff time.Duration
 	// KeepAlive 替主要機器掛著常駐 wsl session，避免 WSL 在閒置約 20 秒後回收它（nil＝不保活）。
 	KeepAlive *wsl.KeepAlive
 	// SelfInWSL：wsld-gui 的執行檔位於 WSL 檔案系統（\\wsl.localhost\…）；此時拒絕 wsl --shutdown。
@@ -115,6 +117,8 @@ type Server struct {
 
 	startMu   sync.Mutex
 	starting  bool
+	startErr  string    // 最近一次自動帶起失敗的原因
+	nextTry   time.Time // 失敗後的退避：此時間之前不再自動重試
 	lastStart *lifecycle.Status
 	engineMu  sync.RWMutex
 
@@ -158,7 +162,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("POST /api/engine/start", s.handleEngineStart)
 	mux.HandleFunc("GET /api/containers", s.handleContainers)
 	mux.HandleFunc("POST /api/containers/{id}/start", s.handleContainerStart)
 	mux.HandleFunc("POST /api/containers/{id}/stop", s.handleContainerStop)
@@ -183,7 +186,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/machines/install", s.handleMachineInstall)
 	mux.HandleFunc("GET /api/machines/install/progress", s.handleInstallProgress)
 	mux.HandleFunc("GET /api/machines/install/defaults", s.handleInstallDefaults)
-	mux.HandleFunc("POST /api/machines/{name}/use", s.handleMachineUse)
+	mux.HandleFunc("POST /api/machines/{name}/role", s.handleMachineRole)
 	mux.HandleFunc("POST /api/machines/{name}/start", s.handleMachineStart)
 	mux.HandleFunc("POST /api/machines/{name}/stop", s.handleMachineStop)
 	mux.HandleFunc("POST /api/machines/{name}/unmanage", s.handleMachineUnmanage)
@@ -429,35 +432,20 @@ type StatusResponse struct {
 	lifecycle.Status
 	Ready    bool `json:"ready"`
 	Starting bool `json:"starting"`
+	// StartError 是最近一次自動帶起 engine 失敗的原因（成功後清空）；畫面據此顯示錯誤，使用者不需要手動啟動。
+	StartError string `json:"start_error,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.life().Status(r.Context())
 	s.startMu.Lock()
-	starting := s.starting
+	starting, startErr := s.starting, s.startErr
 	s.startMu.Unlock()
-	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready(), Starting: starting})
+	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready(), Starting: starting, StartError: startErr})
 }
 
-func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
-	st, err, busy := s.engineStart()
-	if busy {
-		writeJSON(w, http.StatusAccepted, map[string]any{"starting": true})
-		return
-	}
-	if err != nil {
-		writeEngineErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready()})
-}
-
-// engineStart：啟動 active machine 的引擎，成功後背景恢復 k3s。已有啟動進行中回 busy。
-func (s *Server) engineStart() (st lifecycle.Status, err error, busy bool) {
-	return s.engineStartOpt(false)
-}
-
-// engineStartOpt：reuse 為 true 時，若 engine 已在跑（關閉 app 不會停掉它，只放掉保活 session）
+// engineStartOpt 帶起 engine，成功後背景恢復 k3s。已有啟動進行中回 busy。
+// reuse 為 true 時，若 engine 已在跑（關閉 app 不會停掉它，只放掉保活 session）
 // 就只補掛保活並在背景確認 k3s，不走完整啟動流程。檢查在 starting 旗標內進行，畫面不會空窗。
 func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, busy bool) {
 	s.startMu.Lock()
@@ -470,9 +458,14 @@ func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, bus
 	defer func() {
 		s.startMu.Lock()
 		s.starting = false
+		if err != nil {
+			s.startErr = err.Error()
+		} else {
+			s.startErr = ""
+		}
 		s.startMu.Unlock()
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if reuse {
 		if cur := s.life().Status(ctx); cur.Ready() {
@@ -489,17 +482,61 @@ func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, bus
 	return st, nil, false
 }
 
-// AutoStart：程式啟動（開機自啟 --tray 或手動開啟）時自動帶起 active machine，
-// 等同使用者按 Start engine（含恢復設定為 k8s 的 k3s）。
-// 只在 active machine 已初始化過（有 user／endpoint）時執行：全新安裝不替使用者擅自初始化。
-// 同步執行直到完成；失敗只記錄，畫面上使用者仍可手動按 Start engine 看到錯誤。
+// AutoStart：程式啟動（開機自啟 --tray 或手動開啟）時自動帶起 engine；全新安裝（還沒有 engine）則先建立 wsld-engine。
+// 沒有「啟動引擎」按鈕：啟動 wsld 就是啟動引擎。同步執行直到完成；失敗記在 start_error 並由 Supervise 退避重試。
 func (s *Server) AutoStart() error {
-	am, ok := s.cfg().ActiveMachine()
-	if !ok || !am.Ready() {
-		return nil
-	}
 	_, err, _ := s.engineStartOpt(true)
 	return err
+}
+
+const defaultSuperviseBackoff = 30 * time.Second
+
+// ResetStart 清掉自動帶起的錯誤與退避（testhost 的 /__test/reset 用）。
+func (s *Server) ResetStart() {
+	s.startMu.Lock()
+	s.startErr, s.nextTry = "", time.Time{}
+	s.startMu.Unlock()
+}
+
+// Supervise 定期檢查 engine，沒起來就自動帶起（WSL 被關掉、engine 當掉、剛登入等）。
+// 使用者在 Machines 頁明確停止的 engine 不會被拉起；失敗後退避 30 秒再試。
+func (s *Server) Supervise(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			s.superviseOnce(now)
+		}
+	}
+}
+
+func (s *Server) superviseOnce(now time.Time) {
+	s.startMu.Lock()
+	busy, wait := s.starting, now.Before(s.nextTry)
+	s.startMu.Unlock()
+	if busy || wait {
+		return
+	}
+	for _, name := range keepAliveNames(s.cfg()) {
+		if s.KeepAlive.Paused(name) {
+			return
+		}
+	}
+	if s.life().Status(context.Background()).Ready() {
+		return
+	}
+	if _, err, _ := s.engineStartOpt(true); err != nil {
+		s.startMu.Lock()
+		backoff := s.SuperviseBackoff
+		if backoff <= 0 {
+			backoff = defaultSuperviseBackoff
+		}
+		s.nextTry = now.Add(backoff)
+		s.startMu.Unlock()
+	}
 }
 
 // bringUpActive：必要時 Init／補齊 profile，再 Start 引擎並寫回設定。
@@ -526,6 +563,11 @@ func (s *Server) bringUpActive(ctx context.Context) (lifecycle.Status, error) {
 // ensureActiveInitialized：補齊 active profile（Init），並在 API 不通時重選可用 endpoint。
 func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 	cfg := s.cfg()
+	if _, has := cfg.EngineMachine(); !has {
+		if err := s.createEngine(ctx, &cfg); err != nil {
+			return err
+		}
+	}
 	am, ok := cfg.ActiveMachine()
 	if !ok {
 		return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.no_active"))
@@ -559,7 +601,7 @@ func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 	}
 	if mgr, ok := s.life().(*lifecycle.Manager); ok {
 		mgr.Cfg = cfg
-		newCfg, err := mgr.Init(ctx, lifecycle.InitOptions{Distro: am.Distro})
+		newCfg, err := mgr.Init(ctx, lifecycle.InitOptions{Distro: am.Distro, Role: am.Role})
 		if err != nil {
 			return err
 		}
@@ -573,6 +615,42 @@ func (s *Server) ensureActiveInitialized(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.active_not_ready", am.Distro, am.Distro))
+}
+
+// createEngine 首次使用：建立並 init 專用 engine（wsld-engine），寫回設定。
+func (s *Server) createEngine(ctx context.Context, cfg *config.Config) error {
+	if s.SaveConfig == nil {
+		return errors.New("config not writable")
+	}
+	if _, ok := s.life().(ConfigMissingLifecycle); ok {
+		s.BindActive(*cfg)
+	}
+	switch life := s.life().(type) {
+	case *FakeLifecycle:
+		name := life.Distro
+		if name == "" {
+			name = lifecycle.DefaultEngineDistro
+		}
+		cfg.UpsertMachine(config.Machine{Distro: name, User: "testuser", APIEndpoint: nextMachineEndpoint(*cfg)})
+		if err := cfg.SetEngine(name); err != nil {
+			return err
+		}
+		_ = cfg.SetActive(name)
+	case *lifecycle.Manager:
+		life.Cfg = *cfg
+		got, err := life.EnsureEngine(ctx, lifecycle.InitOptions{})
+		if err != nil {
+			return err
+		}
+		*cfg = got
+	default:
+		return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.no_active"))
+	}
+	if err := s.SaveConfig(*cfg); err != nil {
+		return err
+	}
+	s.BindActive(*cfg)
+	return nil
 }
 
 // nextMachineEndpoint 選一個尚未被其他 machine 占用的 loopback 埠（測試／占位補齊用）。
@@ -1095,25 +1173,46 @@ func (s *Server) ListenLoopback() (string, func(), error) {
 	}, nil
 }
 
-// holdPrimary 讓主要機器保持執行：換手（放掉其他機器）並掛上保活 session。best-effort。
+// keepAliveNames 是需要常駐保活的 distro：專用 engine（client 要靠它，不能被 WSL 閒置回收）。
+// 尚未有 engine 的過渡設定（舊檔未遷移、測試）退回 active。
+func keepAliveNames(cfg config.Config) []string {
+	if e, ok := cfg.EngineMachine(); ok {
+		return []string{e.Distro}
+	}
+	if cfg.Active != "" {
+		return []string{cfg.Active}
+	}
+	return nil
+}
+
+// shouldKeepAlive 表示 name 屬於需保活的 distro。
+func shouldKeepAlive(cfg config.Config, name string) bool {
+	for _, n := range keepAliveNames(cfg) {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdPrimary 讓主要機器與 engine 保持執行：換手（放掉其他機器）並掛上保活 session。best-effort。
 func (s *Server) holdPrimary() {
 	if s.KeepAlive == nil {
 		return
 	}
-	if name := s.cfg().Active; name != "" {
-		_ = s.KeepAlive.HoldOnly(name)
-	}
+	_ = s.KeepAlive.HoldOnly(keepAliveNames(s.cfg())...)
 }
 
-// ensurePrimaryHeld 在主要機器已執行但沒被保活時補掛（GUI 啟動、WSL 重啟後使用者開了終端等）。
+// ensurePrimaryHeld 在主要機器／engine 已執行但沒被保活時補掛（GUI 啟動、WSL 重啟後使用者開了終端等）。
 // 使用者明確停止過的機器不會自動重掛。
 func (s *Server) ensurePrimaryHeld(list []wsl.Distro) {
 	if s.KeepAlive == nil {
 		return
 	}
-	active := s.cfg().Active
-	if d, ok := wsl.FindDistro(list, active); ok && strings.EqualFold(d.State, "Running") {
-		_ = s.KeepAlive.Ensure(d.Name)
+	for _, name := range keepAliveNames(s.cfg()) {
+		if d, ok := wsl.FindDistro(list, name); ok && strings.EqualFold(d.State, "Running") {
+			_ = s.KeepAlive.Ensure(d.Name)
+		}
 	}
 }
 
