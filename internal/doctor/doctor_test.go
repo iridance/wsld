@@ -271,24 +271,24 @@ const dk = "-d Ubuntu-26.04 -u root -- "
 
 const engSock = "/mnt/wsl/wsld/docker.sock"
 
-// engineEnv：engine = wsld-engine（active），client = Debian1（Running 或 Stopped）。
+// engineEnv：engine = docker-engine（active），client = Debian1（Running 或 Stopped）。
 func engineEnv(clientState string) (map[string]kv, Deps) {
 	r := map[string]kv{
-		"--list --verbose":                                                     {out: utf16("  NAME STATE VERSION\r\n* wsld-engine Running 2\r\n  Debian1 " + clientState + " 2\r\n")},
-		"-d wsld-engine -- true":                                               {},
-		"-d wsld-engine -- systemctl is-system-running":                        {out: "running\n"},
-		"-d wsld-engine -- systemctl is-active docker":                         {out: "active\n"},
-		"-d wsld-engine -- ss -Hltn":                                           {out: "LISTEN 0 4096 127.0.0.1:23750 0.0.0.0:*\n"},
-		"-d wsld-engine -- cat /etc/docker/daemon.json":                        {out: `{"hosts":["unix:///var/run/docker.sock","unix://` + engSock + `","tcp://127.0.0.1:23750"]}`},
-		"-d wsld-engine -- loginctl show-user irice --property=Linger --value": {out: "yes\n"},
-		"-d wsld-engine -- test -S " + engSock:                                 {},
+		"--list --verbose":                                                       {out: utf16("  NAME STATE VERSION\r\n* docker-engine Running 2\r\n  Debian1 " + clientState + " 2\r\n")},
+		"-d docker-engine -- true":                                               {},
+		"-d docker-engine -- systemctl is-system-running":                        {out: "running\n"},
+		"-d docker-engine -- systemctl is-active docker":                         {out: "active\n"},
+		"-d docker-engine -- ss -Hltn":                                           {out: "LISTEN 0 4096 127.0.0.1:23750 0.0.0.0:*\n"},
+		"-d docker-engine -- cat /etc/docker/daemon.json":                        {out: `{"hosts":["unix:///var/run/docker.sock","unix://` + engSock + `","tcp://127.0.0.1:23750"]}`},
+		"-d docker-engine -- loginctl show-user irice --property=Linger --value": {out: "yes\n"},
+		"-d docker-engine -- test -S " + engSock:                                 {},
 	}
 	cfg := config.Default()
-	cfg.UpsertMachine(config.Machine{Distro: "wsld-engine", User: "irice", APIEndpoint: "tcp://127.0.0.1:23750"})
+	cfg.UpsertMachine(config.Machine{Distro: "docker-engine", User: "irice", APIEndpoint: "tcp://127.0.0.1:23750"})
 	cfg.UpsertMachine(config.Machine{Distro: "Debian1", User: "bob", APIEndpoint: "tcp://127.0.0.1:23750"})
-	_ = cfg.SetEngine("wsld-engine")
+	_ = cfg.SetEngine("docker-engine")
 	_ = cfg.SetClient("Debian1")
-	_ = cfg.SetActive("wsld-engine")
+	_ = cfg.SetActive("docker-engine")
 	return r, Deps{WSL: &fakeRunner{resp: r}, Cfg: cfg, API: fakePinger{},
 		Dial: func(context.Context, string) error { return errors.New("refused") }}
 }
@@ -315,7 +315,7 @@ func TestEngineSocketPresentIsOK(t *testing.T) {
 
 func TestEngineSocketMissingWarns(t *testing.T) {
 	r, d := engineEnv("Stopped")
-	r["-d wsld-engine -- test -S "+engSock] = kv{err: errors.New("exit 1")}
+	r["-d docker-engine -- test -S "+engSock] = kv{err: errors.New("exit 1")}
 	rep := Run(context.Background(), d)
 	got := find(rep, "engine_socket")
 	if got.Level != Warn || !strings.Contains(got.Hint, "wsld") {
@@ -373,7 +373,7 @@ func TestStoppedClientIsNotWoken(t *testing.T) {
 // ---- 曝露（/mnt/wsl/distro/<名稱>）----
 
 const (
-	dFindmnt = "-d wsld-engine -- findmnt -rn -o TARGET"
+	dFindmnt = "-d docker-engine -- findmnt -rn -o TARGET"
 	dTools   = "-d Debian1 -- test -x /usr/local/sbin/wsld-expose"
 	dShim    = "-d Debian1 -- grep -q DISTRO_DEFAULT /usr/local/bin/docker"
 )

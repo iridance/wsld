@@ -28,7 +28,7 @@ Commands:
   version    Print version
 
 Commands that need Docker (ps, logs, start-ct, stop-ct, exec, migrate) bring the shared engine up by themselves;
-the first time they also create the wsld-engine distro.
+the first time they also create the docker-engine distro.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 WSL/engine not ready, 4 API unreachable
 Config: %s`,
@@ -54,7 +54,7 @@ Config: %s`,
   lan        區網存取（wsld-gui 在內網 IP 轉發 published 埠）：on|off|status；restore-nat 還原 0.9.0 的 mirrored
   version    顯示版本
 
-需要 Docker 的指令（ps、logs、start-ct、stop-ct、exec、migrate）會自動帶起共用 engine；首次使用時也會自動建立 wsld-engine distro。
+需要 Docker 的指令（ps、logs、start-ct、stop-ct、exec、migrate）會自動帶起共用 engine；首次使用時也會自動建立 docker-engine distro。
 
 退出碼：0 成功、1 一般錯誤、2 用法錯誤、3 WSL／引擎未就緒、4 API 連線失敗
 設定檔：%s`,

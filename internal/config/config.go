@@ -67,7 +67,7 @@ type Config struct {
 	Theme              string    `toml:"theme,omitempty"` // light | dark | system；"" = system
 	// LANAccess：wsld-gui 在內網 IP 上轉發容器 published 埠（Settings › Network）。
 	LANAccess bool `toml:"lan_access,omitempty"`
-	// EngineBase：新建 wsld-engine 時 `wsl --install -d` 用的發行版名稱（"" = DefaultEngineBase）。只影響新建，既有 engine 不動。
+	// EngineBase：新建 docker-engine 時 `wsl --install -d` 用的發行版名稱（"" = DefaultEngineBase）。只影響新建，既有 engine 不動。
 	EngineBase string `toml:"engine_base,omitempty"`
 
 	// 自 active machine 衍生，不寫入檔案（供 lifecycle／doctor 沿用欄位存取）。
@@ -177,7 +177,7 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// DefaultEngineBase 是新建 wsld-engine 預設使用的發行版（`wsl --install -d` 的名稱）：
+// DefaultEngineBase 是新建 docker-engine 預設使用的發行版（`wsl --install -d` 的名稱）：
 // Debian 的 rootfs 與常駐佔用比 Ubuntu 小，且有 systemd 與 Docker 官方 apt 來源。
 const DefaultEngineBase = "Debian"
 
@@ -190,10 +190,13 @@ func (c Config) EngineBaseOrDefault() string {
 }
 
 // DefaultEngineDistro 是專用 engine distro 的名稱（首次使用或遷移舊設定時建立）。
-const DefaultEngineDistro = "wsld-engine"
+const DefaultEngineDistro = "docker-engine"
+
+// legacyEngineDistro 是舊版預設名稱；舊設定遷移時若該 distro 已存在就沿用，不另建 docker-engine。
+const legacyEngineDistro = "wsld-engine"
 
 // migrateToEngine 把舊設定（各 distro 自帶 dockerd、可切換 active）遷移成「專用 engine + 多個 client」：
-// 已有 engine 就不動；否則一律改用專用的 wsld-engine（已存在就沿用，否則加一個尚未 init 的占位，啟動時自動建立），
+// 已有 engine 就不動；否則一律改用專用的 docker-engine（已存在就沿用，否則加一個尚未 init 的占位，啟動時自動建立），
 // 原本已 init 的機器全部變成 client（資料保留，之後用 wsld migrate 搬進 engine）。
 // 從未 init 的占位 profile 不加角色。沒有任何已 init 的機器（全新或空設定）時不動。
 func (c *Config) migrateToEngine() {
@@ -218,6 +221,14 @@ func (c *Config) migrateToEngine() {
 		if strings.EqualFold(m.Distro, DefaultEngineDistro) {
 			idx = i
 			break
+		}
+	}
+	if idx < 0 {
+		for i, m := range c.Machines {
+			if strings.EqualFold(m.Distro, legacyEngineDistro) {
+				idx = i
+				break
+			}
 		}
 	}
 	if idx < 0 {

@@ -2060,7 +2060,7 @@ export class App {
           el("article", { ...attrs, class: `${attrs.class} engine-card` },
             el("div", { class: "machine-head" },
               el("span", { class: "machine-icon", "aria-hidden": "true" }, distroLogo(d.name) ?? icon("machines")),
-              // 群組標題已是 Docker engine：不顯示 wsld-engine 名稱（只留給螢幕閱讀器）；沒有 tag 時不放標題欄，避免 icon 與 stat 之間多出空隙
+              // 群組標題已是 Docker engine：不顯示 docker-engine 名稱（只留給螢幕閱讀器）；沒有 tag 時不放標題欄，避免 icon 與 stat 之間多出空隙
               el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: d.name }),
               ...(flags.length ? [el("div", { class: "machine-title" }, el("div", { class: "machine-name-row" }, ...flags))] : []),
             ),
@@ -2113,7 +2113,7 @@ export class App {
     });
     const block = engineProgressBlock();
     updateInstallProgress(block, p);
-    const name = p.name || "wsld-engine";
+    const name = p.name || "docker-engine";
     return el("article", { class: "machine-card engine-card engine-build", "data-testid": "engine-build", "data-name": name, "data-phase": phase, "aria-label": name },
       el("div", { class: "machine-head" },
         el("span", { class: "machine-icon", "aria-hidden": "true" }, distroLogo(name) ?? icon("machines")),

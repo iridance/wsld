@@ -564,20 +564,20 @@ func TestStatusSteadyStateSkipsWSLProbes(t *testing.T) {
 
 func TestInitEngineRolePassesFlagAndMarksEngine(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose":                    {{out: utf16("  NAME STATE VERSION\r\n  wsld-engine Running 2\r\n")}},
-		"-d wsld-engine -u root -- id -u bob": {{out: "1000\n"}},
-		"-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
+		"--list --verbose":                      {{out: utf16("  NAME STATE VERSION\r\n  docker-engine Running 2\r\n")}},
+		"-d docker-engine -u root -- id -u bob": {{out: "1000\n"}},
+		"-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), API: &fakePinger{}, Bundle: []byte("B"), Sleep: func(time.Duration) {}}
-	cfg, err := m.Init(context.Background(), InitOptions{Distro: "wsld-engine", User: "bob", Role: config.RoleEngine})
+	cfg, err := m.Init(context.Background(), InitOptions{Distro: "docker-engine", User: "bob", Role: config.RoleEngine})
 	if err != nil {
 		t.Fatal(err)
 	}
 	em, ok := cfg.EngineMachine()
-	if !ok || em.Distro != "wsld-engine" || em.APIEndpoint != "tcp://127.0.0.1:23750" {
+	if !ok || em.Distro != "docker-engine" || em.APIEndpoint != "tcp://127.0.0.1:23750" {
 		t.Fatalf("engine machine = %+v %v", em, ok)
 	}
-	if cfg.Active != "wsld-engine" {
+	if cfg.Active != "docker-engine" {
 		t.Fatalf("a fresh engine becomes active, got %q", cfg.Active)
 	}
 }
@@ -638,13 +638,13 @@ func TestInitClientRoleSharesEngineEndpointAndKeepsActive(t *testing.T) {
 	}
 }
 
-// ---- EnsureEngine：首次使用自動建立 wsld-engine ----
+// ---- EnsureEngine：首次使用自動建立 docker-engine ----
 
 func TestEnsureEngineNoopWhenEngineReady(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{}}
 	cfg := config.Default()
-	cfg.UpsertMachine(config.Machine{Distro: "wsld-engine", User: "u", APIEndpoint: config.EndpointForPort(23750)})
-	_ = cfg.SetEngine("wsld-engine")
+	cfg.UpsertMachine(config.Machine{Distro: "docker-engine", User: "u", APIEndpoint: config.EndpointForPort(23750)})
+	_ = cfg.SetEngine("docker-engine")
 	m := &Manager{WSL: fr, Cfg: cfg, Bundle: []byte("B")}
 	got, err := m.EnsureEngine(context.Background(), InitOptions{})
 	if err != nil {
@@ -653,7 +653,7 @@ func TestEnsureEngineNoopWhenEngineReady(t *testing.T) {
 	if len(fr.calls) != 0 {
 		t.Fatalf("a ready engine must not touch WSL: %v", fr.calls)
 	}
-	if e, _ := got.EngineMachine(); e.Distro != "wsld-engine" {
+	if e, _ := got.EngineMachine(); e.Distro != "docker-engine" {
 		t.Fatalf("cfg = %+v", got.Machines)
 	}
 }
@@ -666,23 +666,23 @@ func TestEnsureEngineInstallsWsldEngineWhenMissing(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
 		"--list --verbose": {
 			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n")},
-			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n  wsld-engine Stopped 2\r\n")},
+			{out: utf16("  NAME STATE VERSION\r\n* Debian1 Running 2\r\n  docker-engine Stopped 2\r\n")},
 		},
-		"--install -d Debian --name wsld-engine --vhd-size 100GB --no-launch": {{}},
-		"-d wsld-engine -- id -un":                                {{out: "root\n"}},
-		"-d wsld-engine -u root -- id -u irice":                   {{err: errors.New("no such user")}},
-		"-d wsld-engine -u root -- useradd -m -s /bin/bash irice": {{}},
-		"-d wsld-engine -u root -- usermod -aG sudo irice":        {{}},
-		"-d wsld-engine -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
-		"-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
+		"--install -d Debian --name docker-engine --vhd-size 100GB --no-launch": {{}},
+		"-d docker-engine -- id -un":                                {{out: "root\n"}},
+		"-d docker-engine -u root -- id -u irice":                   {{err: errors.New("no such user")}},
+		"-d docker-engine -u root -- useradd -m -s /bin/bash irice": {{}},
+		"-d docker-engine -u root -- usermod -aG sudo irice":        {{}},
+		"-d docker-engine -u root -- usermod -aG wheel irice":       {{err: errors.New("no wheel")}},
+		"-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	got, err := m.EnsureEngine(context.Background(), InitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !fr.called("--install -d Debian --name wsld-engine --vhd-size 100GB") {
-		t.Fatalf("wsld-engine must be installed: %v", fr.calls)
+	if !fr.called("--install -d Debian --name docker-engine --vhd-size 100GB") {
+		t.Fatalf("docker-engine must be installed: %v", fr.calls)
 	}
 	e, ok := got.EngineMachine()
 	if !ok || e.Distro != DefaultEngineDistro || e.User != "irice" || e.APIEndpoint != "tcp://127.0.0.1:23750" {
@@ -692,9 +692,9 @@ func TestEnsureEngineInstallsWsldEngineWhenMissing(t *testing.T) {
 
 func TestEnsureEngineReusesExistingWsldEngineDistro(t *testing.T) {
 	fr := &fakeRunner{resp: map[string][]resp{
-		"--list --verbose":                    {{out: utf16("  NAME STATE VERSION\r\n  wsld-engine Stopped 2\r\n")}},
-		"-d wsld-engine -u root -- id -u bob": {{out: "1000\n"}},
-		"-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
+		"--list --verbose":                      {{out: utf16("  NAME STATE VERSION\r\n  docker-engine Stopped 2\r\n")}},
+		"-d docker-engine -u root -- id -u bob": {{out: "1000\n"}},
+		"-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 23750 --role engine": {{out: "WSLD_API_PORT=23750\n"}},
 	}}
 	m := &Manager{WSL: fr, Cfg: config.Default(), Bundle: []byte("B"), Sleep: func(time.Duration) {}}
 	if _, err := m.EnsureEngine(context.Background(), InitOptions{User: "bob"}); err != nil {

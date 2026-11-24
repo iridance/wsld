@@ -8,7 +8,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 | 方式 | 行為 |
 |---|---|
-| GUI | 開 `wsld-gui.exe` 就自動帶起 engine（首次使用先建立 `wsld-engine`），之後每 5 秒檢查一次，引擎掉了（WSL 被關、當機）會自動拉起；失敗後退避 30 秒再試，原因顯示在橫幅。沒有「啟動引擎」按鈕 |
+| GUI | 開 `wsld-gui.exe` 就自動帶起 engine（首次使用先建立 `docker-engine`），之後每 5 秒檢查一次，引擎掉了（WSL 被關、當機）會自動拉起；失敗後退避 30 秒再試，原因顯示在橫幅。沒有「啟動引擎」按鈕 |
 | CLI | 需要 Docker 的指令（`ps`、`logs`、`start-ct`、`stop-ct`、`exec`）會自動喚醒 distro、確認 systemd、啟動 docker 並等到 API；已就緒時不碰 WSL。沒有 `wsld start`／`wsld use` |
 | 登入自啟 | 設定 →「開機自啟動」toggle（HKCU Run 值 `wsld`，預設關）。Tray 起來後會自動帶起引擎 |
 
@@ -130,7 +130,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 預設每個 distro 各自有一個 dockerd，image／volume／container 各存一份。要共用就指定**一個 engine**，其他當 **client**：
 
 - **GUI**：Machines 頁，沒有 engine 時其他機器顯示「設為 engine」；有 engine 後顯示「共用 engine」（設為 client）。卡片上有 Engine／Client 標籤。
-- **CLI**：`wsld init --distro wsld-engine --role engine`，再 `wsld init --distro Debian1 --role client`。建議 engine 用新裝的乾淨 distro，例如 `wsl --install -d Ubuntu --name wsld-engine`（GUI「新增機器」亦可）；也可以把已裝好 docker 的機器直接設為 engine，bootstrap 會沿用既有安裝並補上共用 socket（此路徑尚未實測）。
+- **CLI**：`wsld init --distro docker-engine --role engine`，再 `wsld init --distro Debian1 --role client`。建議 engine 用新裝的乾淨 distro，例如 `wsl --install -d Ubuntu --name docker-engine`（GUI「新增機器」亦可）；也可以把已裝好 docker 的機器直接設為 engine，bootstrap 會沿用既有安裝並補上共用 socket（此路徑尚未實測）。
 - **保活**：engine 由 wsld-gui 掛著 `wsl -d … -- sleep infinity`，避免 WSL 閒置回收。**只在 wsld-gui（含系統匣）執行時有效**；只用 CLI 時 engine 閒置後會被回收，下一個需要 Docker 的指令會自動再帶起。
 - **doctor**：多檢查 `engine_socket`（`/mnt/wsl/wsld/docker.sock` 存在）與各 `client_<distro>`（context 為 `wsld`、沒有本機 dockerd 並存）；停止中的 client 不會被喚醒檢查。
 
@@ -142,7 +142,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
   - **殘留**：來源 distro 被 `wsl --terminate` 或自行閒置停止後，掛載會殘留在其他 distro（磁碟仍被接著）。Supervise 與 `wsld doctor`（`expose_stale`）會偵測並清掉；絕不使用遞迴或 lazy 的卸載。
   - **已停止的容器**：重啟時路徑必須存在，所以引用曝露路徑的容器（即使已停止）會讓曝露一直保留；從 GUI 啟動這類容器前 wsld 會先補曝露（來源 distro 已停止則回 409，不會替你喚醒它）。`restart: always` 的容器在 WSL 重啟後可能先於曝露啟動，之後在 client 內執行一次 compose 或 `docker start` 即可。
 - **安全**：共用 socket 為 0666，同一 VM 內任何 distro 的任何使用者都等同 root；loopback TCP 本來就是如此。
-- **從舊版升級**：舊設定（各 distro 自帶 dockerd）載入時，原有已 init 的 distro 全部變成 client、資料原封不動，並新增專用的 `wsld-engine`，啟動 wsld 時自動 `wsl --install` 建立。接著用下面的 `wsld migrate` 把舊資料搬進 engine。
+- **從舊版升級**：舊設定（各 distro 自帶 dockerd）載入時，原有已 init 的 distro 全部變成 client、資料原封不動，並新增專用的 `docker-engine`，啟動 wsld 時自動 `wsl --install` 建立（舊版預設名稱 `wsld-engine` 若已存在則沿用，不另建）。接著用下面的 `wsld migrate` 把舊資料搬進 engine。
 - **遷移**：`wsld migrate [--distro <client>] [--images=false] [--volumes=false] [--dry-run]` 把 client 內舊的本機 dockerd 資料複製到 engine：有 tag 的 image 以 `docker save | docker load`、具名 volume 以 alpine 的 `tar` 串流複製，全部在 client distro 內經 docker context（`default` → `wsld`）完成，不經 Windows。不刪來源、不搬容器；沒 tag 的 image、匿名 volume 會列為略過。本機 dockerd 沒在跑會先嘗試啟動。確認資料無誤後再 `wsl -d <client> -u root -- systemctl disable --now docker docker.socket`（指令結尾會提示）。先用 `--dry-run` 看清單。
 - **磁碟**：所有 image 都在 engine 的 VHD，調整大小／釋放空間針對 engine（Machines 頁）。
 - 尚未在真實 WSL 長期驗證（`/mnt/wsl` 共用 socket 行為、保活）；遇到問題請先 `wsld doctor`。

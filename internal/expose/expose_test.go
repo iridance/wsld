@@ -73,12 +73,12 @@ func bind(src string) dockerapi.ContainerMount {
 
 const (
 	root     = "/mnt/wsl/distro"
-	findmnt  = "-d wsld-engine -- findmnt -rn -o TARGET"
-	umountDb = "-d wsld-engine -u root -- umount /mnt/wsl/distro/Debian1"
+	findmnt  = "-d docker-engine -- findmnt -rn -o TARGET"
+	umountDb = "-d docker-engine -u root -- umount /mnt/wsl/distro/Debian1"
 )
 
 func newMgr(r *fakeRunner, e *fakeEngine) *Manager {
-	return &Manager{WSL: r, Engine: e, EngineDistro: "wsld-engine"}
+	return &Manager{WSL: r, Engine: e, EngineDistro: "docker-engine"}
 }
 
 func TestMountPath(t *testing.T) {
@@ -196,14 +196,14 @@ func TestExposeRunsTheFixedHelperAsRoot(t *testing.T) {
 func TestGCReleasesStaleAndUnusedButKeepsRunningUsedOnes(t *testing.T) {
 	r := &fakeRunner{resp: map[string]string{
 		findmnt: "/mnt/wsl/distro/Debian1\n/mnt/wsl/distro/Used\n/mnt/wsl/distro/Gone\n/mnt/wsl/distro/Idle\n",
-		"-d wsld-engine -u root -- umount /mnt/wsl/distro/Gone": "",
-		"-d wsld-engine -u root -- umount /mnt/wsl/distro/Idle": "",
+		"-d docker-engine -u root -- umount /mnt/wsl/distro/Gone": "",
+		"-d docker-engine -u root -- umount /mnt/wsl/distro/Idle": "",
 	}}
 	e := &fakeEngine{containers: []dockerapi.Container{ct("a", "web", "running"), ct("g", "ghost", "exited")},
 		mounts: map[string][]dockerapi.ContainerMount{"a": {bind(root + "/Used/home/app")}, "g": {bind(root + "/Gone/home/app")}}}
 	list := []wsl.Distro{{Name: "Debian1", State: "Running"}, {Name: "Used", State: "Running"}, {Name: "Gone", State: "Stopped"}, {Name: "Idle", State: "Running"}}
 	// Debian1 掛著、沒有容器引用、Running → 也要放掉（用不到就不占著）
-	r.resp["-d wsld-engine -u root -- umount /mnt/wsl/distro/Debian1"] = ""
+	r.resp["-d docker-engine -u root -- umount /mnt/wsl/distro/Debian1"] = ""
 	got, err := newMgr(r, e).GC(context.Background(), list)
 	if err != nil {
 		t.Fatal(err)

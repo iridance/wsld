@@ -463,7 +463,7 @@ func (s *Server) engineStartOpt(reuse bool) (st lifecycle.Status, err error, bus
 	return st, nil, false
 }
 
-// AutoStart：程式啟動（開機自啟 --tray 或手動開啟）時自動帶起 engine；全新安裝（還沒有 engine）則先建立 wsld-engine。
+// AutoStart：程式啟動（開機自啟 --tray 或手動開啟）時自動帶起 engine；全新安裝（還沒有 engine）則先建立 docker-engine。
 // 沒有「啟動引擎」按鈕：啟動 wsld 就是啟動引擎。同步執行直到完成；失敗記在 start_error 並由 Supervise 退避重試。
 func (s *Server) AutoStart() error {
 	_, err, _ := s.engineStartOpt(true)
@@ -605,7 +605,7 @@ func (s *Server) ensureActiveInitialized(ctx context.Context, force bool) error 
 	return fmt.Errorf("%w: %s", lifecycle.ErrNotReady, i18n.T("cli.active_not_ready", am.Distro, am.Distro))
 }
 
-// createEngine 首次使用：建立並 init 專用 engine（wsld-engine），寫回設定。
+// createEngine 首次使用：建立並 init 專用 engine（docker-engine），寫回設定。
 func (s *Server) createEngine(ctx context.Context, cfg *config.Config) error {
 	if s.SaveConfig == nil {
 		return errors.New("config not writable")

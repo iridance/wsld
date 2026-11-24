@@ -577,7 +577,7 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
-// ensureEngine：沒有 engine 就自動建立 wsld-engine（首次）；engine 已就緒且 API 通就什麼都不做；否則 init／喚醒到 API 就緒。
+// ensureEngine：沒有 engine 就自動建立 docker-engine（首次）；engine 已就緒且 API 通就什麼都不做；否則 init／喚醒到 API 就緒。
 func (a *App) ensureEngine(ctx context.Context) error {
 	cfg, err := config.Load(a.ConfigPath)
 	if err != nil {

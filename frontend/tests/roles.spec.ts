@@ -67,7 +67,7 @@ test("Machines: the engine is a full-width stat card with its buttons on the rig
   await expect(card.getByTestId("machine-flag-engine")).toHaveCount(0); // 群組標題已是 Engine，不再加 badge
   const tb = (await page.getByTestId("btn-machine-term-Ubuntu-26.04").boundingBox())!;
   expect(tb.x).toBeGreaterThan(cb.x + cb.width / 2); // 按鈕在右半邊
-  await expect(card.getByTestId("machine-name")).toHaveClass(/sr-only/); // 不顯示 wsld-engine 名稱
+  await expect(card.getByTestId("machine-name")).toHaveClass(/sr-only/); // 不顯示 docker-engine 名稱
   const ib = (await card.locator(".machine-icon").boundingBox())!;
   expect(ib.x).toBeLessThan(tb.x);
 });
@@ -84,7 +84,7 @@ test("Machines: the API refuses to stop or remove the engine",async ({ request }
 });
 
 test("Machines: while the engine is being created its card shows steps and a progress bar", async ({ page }) => {
-  let snap: Record<string, unknown> = { active: true, distribution: "Ubuntu", name: "wsld-engine", phase: "downloading", downloaded: 90 * 1024 * 1024, total: 180 * 1024 * 1024, bytes_per_sec: 240 * 1024, elapsed_sec: 75 };
+  let snap: Record<string, unknown> = { active: true, distribution: "Ubuntu", name: "docker-engine", phase: "downloading", downloaded: 90 * 1024 * 1024, total: 180 * 1024 * 1024, bytes_per_sec: 240 * 1024, elapsed_sec: 75 };
   await page.route("**/api/status", async (route) => {
     const r = await route.fetch();
     await route.fulfill({ json: { ...(await r.json()), starting: true, ready: false } });

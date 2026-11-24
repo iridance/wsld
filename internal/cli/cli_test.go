@@ -464,16 +464,16 @@ func TestEngineCommandSkipsBringUpWhenAPIIsUp(t *testing.T) {
 	}
 }
 
-// 沒有任何 config 時，需要引擎的指令首次使用就自動建立 wsld-engine。
+// 沒有任何 config 時，需要引擎的指令首次使用就自動建立 docker-engine。
 func TestEngineCommandCreatesWsldEngineOnFirstUse(t *testing.T) {
 	h := newHarness(t, false)
-	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n  wsld-engine Running 2\r\n")
-	h.wsl.resp["-d wsld-engine -u root -- id -u irice"] = "1000\n"
-	h.wsl.resp["-d wsld-engine -- id -un"] = "irice\n"
-	h.wsl.resp["-d wsld-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine"] = "WSLD_API_PORT=23750\n"
-	h.wsl.resp["-d wsld-engine -- true"] = ""
-	h.wsl.resp["-d wsld-engine -- systemctl is-system-running"] = "running\n"
-	h.wsl.resp["-d wsld-engine -- systemctl is-active docker"] = "active\n"
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n  docker-engine Running 2\r\n")
+	h.wsl.resp["-d docker-engine -u root -- id -u irice"] = "1000\n"
+	h.wsl.resp["-d docker-engine -- id -un"] = "irice\n"
+	h.wsl.resp["-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine"] = "WSLD_API_PORT=23750\n"
+	h.wsl.resp["-d docker-engine -- true"] = ""
+	h.wsl.resp["-d docker-engine -- systemctl is-system-running"] = "running\n"
+	h.wsl.resp["-d docker-engine -- systemctl is-active docker"] = "active\n"
 	h.api.pingSeq = []error{errors.New("down")}
 	if code := h.run("ps"); code != 0 {
 		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
@@ -482,7 +482,7 @@ func TestEngineCommandCreatesWsldEngineOnFirstUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "wsld-engine" || !e.Ready() {
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "docker-engine" || !e.Ready() {
 		t.Fatalf("engine = %+v %v", e, ok)
 	}
 }

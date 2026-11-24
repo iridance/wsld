@@ -499,11 +499,11 @@ func shellQuote(s string) string {
 // DefaultEngineDistro 是首次使用時自動建立的專用 engine distro 名稱。
 const DefaultEngineDistro = config.DefaultEngineDistro
 
-// DefaultEngineVHDSizeGB 是新建 wsld-engine 的預設虛擬磁碟上限（呼叫端沒指定時使用；WSL 預設為 1 TB）。
+// DefaultEngineVHDSizeGB 是新建 docker-engine 的預設虛擬磁碟上限（呼叫端沒指定時使用；WSL 預設為 1 TB）。
 const DefaultEngineVHDSizeGB = 100
 
 // EnsureEngine 確保有一個已 init 的 engine：已就緒就原樣回傳（不碰 WSL）；
-// 否則沿用 engine profile（或既有的 wsld-engine distro）跑 bootstrap；兩者都沒有就先 wsl --install 一個 wsld-engine。
+// 否則沿用 engine profile（或既有的 docker-engine distro）跑 bootstrap；兩者都沒有就先 wsl --install 一個 docker-engine。
 // opts 的 User／Password／VHDSizeGB 等照 Init 的語意傳入；Distro 與 Role 由本函式決定。
 func (m *Manager) EnsureEngine(ctx context.Context, opts InitOptions) (config.Config, error) {
 	cfg := m.Cfg

@@ -37,7 +37,7 @@
 
 ```text
 ┌─────────────── WSL2 VM（所有 distro 共用 kernel、network namespace、/mnt/wsl tmpfs）───────────────┐
-│  wsld-engine (role=engine)             Ubuntu / Debian1 … (role=client)                            │
+│  docker-engine (role=engine)             Ubuntu / Debian1 … (role=client)                            │
 │  dockerd + containerd            docker CLI + compose／buildx plugin（無 daemon）             │
 │  data-root 在自己的 ext4 VHD           docker context "wsld" ─┐                                    │
 │  unix:///mnt/wsl/wsld/docker.sock ◄────────────────────────────┘（chmod 0666，GID 各 distro 不同）  │

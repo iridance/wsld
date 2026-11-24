@@ -190,7 +190,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 
 ## 0.5 實機抽樣驗收
 
-1. 單一 engine：沒有切換；**首次啟動自動建立 wsld-engine、init、start 後連線**；其他 distro 以 client 共用。
+1. 單一 engine：沒有切換；**首次啟動自動建立 docker-engine、init、start 後連線**；其他 distro 以 client 共用。
 2. Unregister：需輸入發行版名稱確認；profile 刪除。
 3. Containers：Remove running（確認後刪除）；Info summary 欄位齊全。
 4. Settings 側欄 Theme；header 無 Settings／tcp；folder／terminal 有 border。

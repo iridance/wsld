@@ -467,16 +467,16 @@ func TestEngineMachineNoneByDefault(t *testing.T) {
 
 func TestSetEngineAllowsOnlyOne(t *testing.T) {
 	c := Default()
-	c.UpsertMachine(Machine{Distro: "wsld-engine", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.UpsertMachine(Machine{Distro: "docker-engine", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
 	c.UpsertMachine(Machine{Distro: "B", User: "u", APIEndpoint: "tcp://127.0.0.1:23751"})
 	c.EnsureActive(c.Machines[0])
-	if err := c.SetEngine("wsld-engine"); err != nil {
+	if err := c.SetEngine("docker-engine"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEngine("B"); err == nil || !strings.Contains(err.Error(), "wsld-engine") {
+	if err := c.SetEngine("B"); err == nil || !strings.Contains(err.Error(), "docker-engine") {
 		t.Fatalf("second engine must be rejected naming the first, got %v", err)
 	}
-	if m, ok := c.EngineMachine(); !ok || m.Distro != "wsld-engine" || m.Role != RoleEngine {
+	if m, ok := c.EngineMachine(); !ok || m.Distro != "docker-engine" || m.Role != RoleEngine {
 		t.Fatalf("EngineMachine = %+v %v", m, ok)
 	}
 	if err := c.SetEngine("nope"); err == nil {
@@ -575,7 +575,7 @@ distro = "Placeholder"
 		t.Fatal(err)
 	}
 	e, ok := c.EngineMachine()
-	if !ok || e.Distro != "wsld-engine" || e.Ready() {
+	if !ok || e.Distro != "docker-engine" || e.Ready() {
 		t.Fatalf("a dedicated, not-yet-created engine is expected, got %+v %v", e, ok)
 	}
 	for _, n := range []string{"A", "B"} {
@@ -586,7 +586,7 @@ distro = "Placeholder"
 	if ph, _ := c.FindMachine("Placeholder"); ph.Role != "" {
 		t.Fatalf("never-initialised placeholder keeps no role: %+v", ph)
 	}
-	if c.Active != "wsld-engine" {
+	if c.Active != "docker-engine" {
 		t.Fatalf("Active = %q", c.Active)
 	}
 	if err := c.Validate(); err != nil {
@@ -594,14 +594,14 @@ distro = "Placeholder"
 	}
 }
 
-func TestLoadMigrationReusesAnExistingWsldEngineMachine(t *testing.T) {
+func TestLoadMigrationReusesAnExistingDockerEngineMachine(t *testing.T) {
 	p := writeCfg(t, `active = "A"
 [[machines]]
 distro = "A"
 user = "u"
 api_endpoint = "tcp://127.0.0.1:23750"
 [[machines]]
-distro = "wsld-engine"
+distro = "docker-engine"
 user = "u"
 api_endpoint = "tcp://127.0.0.1:23751"
 `)
@@ -609,8 +609,8 @@ api_endpoint = "tcp://127.0.0.1:23751"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "wsld-engine" || !e.Ready() {
-		t.Fatalf("an existing wsld-engine must be reused: %+v %v", e, ok)
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "docker-engine" || !e.Ready() {
+		t.Fatalf("an existing docker-engine must be reused: %+v %v", e, ok)
 	}
 	if n := len(c.Machines); n != 2 {
 		t.Fatalf("no duplicate profile expected, got %d", n)
@@ -674,5 +674,29 @@ func TestEngineBaseDefaultsToDebianAndRoundTrips(t *testing.T) {
 	}
 	if got.EngineBase != c.EngineBase {
 		t.Fatalf("engine_base not persisted: %q", got.EngineBase)
+	}
+}
+
+// 舊版預設名稱 wsld-engine 已經存在時，遷移沿用它，不另建 docker-engine。
+func TestLoadMigrationReusesLegacyWsldEngineName(t *testing.T) {
+	p := writeCfg(t, `active = "A"
+[[machines]]
+distro = "A"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23750"
+[[machines]]
+distro = "wsld-engine"
+user = "u"
+api_endpoint = "tcp://127.0.0.1:23751"
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "wsld-engine" {
+		t.Fatalf("legacy wsld-engine must be reused: %+v %v", e, ok)
+	}
+	if n := len(c.Machines); n != 2 {
+		t.Fatalf("no duplicate profile expected, got %d", n)
 	}
 }

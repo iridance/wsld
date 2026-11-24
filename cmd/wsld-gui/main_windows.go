@@ -143,7 +143,7 @@ func main() {
 	lanCtx, stopLAN := context.WithCancel(context.Background())
 	defer stopLAN()
 	go srv.RunLAN(lanCtx, 3*time.Second)
-	// 啟動 wsld 就是啟動引擎：首次使用先建立 wsld-engine，之後帶起 docker；
+	// 啟動 wsld 就是啟動引擎：首次使用先建立 docker-engine，之後帶起 docker；
 	// 之後由 Supervise 持續確認，engine 掉了（WSL 關閉、當機）自動拉起，失敗退避重試。
 	superviseCtx, stopSupervise := context.WithCancel(context.Background())
 	defer stopSupervise()
