@@ -47,8 +47,14 @@ func newEnv(t *testing.T, token string) *env {
 		LoadConfig:     func() (config.Config, error) { return config.Load(e.cfgP) },
 		SaveConfig:     func(c config.Config) error { return config.Save(e.cfgP, c) },
 		OnWindowAction: func(a string) { e.window = append(e.window, a) },
-		OnDistroAction: func(a string) error { e.window = append(e.window, a); return nil },
-		OnOpenURL:      func(u string) error { e.window = append(e.window, "open-url:"+u); return nil },
+		OnDistroAction: func(a, d, _ string) error {
+			if d != "Ubuntu-26.04" {
+				a += ":" + d // 非 active：記下目標 distro
+			}
+			e.window = append(e.window, a)
+			return nil
+		},
+		OnOpenURL: func(u string) error { e.window = append(e.window, "open-url:"+u); return nil },
 	}
 	e.s = s
 	e.srv = httptest.NewServer(s.Handler())
@@ -574,6 +580,28 @@ func TestDistroActions(t *testing.T) {
 	}
 	if strings.Join(e.window, ",") != "open-folder,open-terminal" {
 		t.Fatalf("actions = %v", e.window)
+	}
+}
+
+func TestDistroActionsCanTargetAManagedMachine(t *testing.T) {
+	e := newEnv(t, "")
+	c, _ := config.Load(e.cfgP)
+	if err := c.SetK8sMachine("k8s-engine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(e.cfgP, c); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	e.s.OnDistroAction = func(a, d, u string) error { got = append(got, a+":"+d+":"+u); return nil }
+	if resp, _ := e.req(t, "POST", "/api/distro/open-folder?distro=k8s-engine", ""); resp.StatusCode != 200 {
+		t.Fatal(resp.StatusCode)
+	}
+	if resp, _ := e.req(t, "POST", "/api/distro/open-folder?distro=nope", ""); resp.StatusCode != 404 {
+		t.Fatalf("unknown machine must be 404, got %d", resp.StatusCode)
+	}
+	if strings.Join(got, ",") != "open-folder:k8s-engine:root" {
+		t.Fatalf("got %v", got)
 	}
 }
 

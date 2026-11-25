@@ -53,6 +53,8 @@ type App struct {
 	Processes    func(ctx context.Context) ([]string, error)
 	Dial         func(ctx context.Context, addr string) error
 	Bundle       []byte
+	// K8sBundle 是 scripts.K8sBundle()（wsld k8s）。
+	K8sBundle []byte
 	// Exec 以繼承的 stdio 執行互動式程式（wsld exec 用）。
 	Exec    func(ctx context.Context, name string, args ...string) error
 	Version string
@@ -129,6 +131,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdExpose(ctx, rest)
 	case "lan":
 		err = a.cmdLan(ctx, rest)
+	case "k8s":
+		err = a.cmdK8s(ctx, rest)
 	default:
 		err = fail(ExitUsage, errors.New(i18n.T("cli.unknown_command", cmd)))
 	}

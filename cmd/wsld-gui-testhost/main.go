@@ -22,6 +22,7 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/gui"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/wsl"
 )
@@ -97,6 +98,12 @@ func main() {
 		forwarder.Close()
 	}
 
+	fk8s := gui.NewFakeK8s()
+	kubeDir, err := os.MkdirTemp("", "wsld-testhost-kube")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	var winMu sync.Mutex
 	var windowActions []string
 
@@ -109,15 +116,24 @@ func main() {
 		LAN:             lanMgr,
 		Forwarder:       forwarder,
 		Shell:           gui.FakeDistroShell{},
-		LoadConfig:      func() (config.Config, error) { return config.Load(*cfgPath) },
-		SaveConfig:      func(c config.Config) error { return config.Save(*cfgPath, c) },
-		Assets:          spaHandler(*dist),
+		K8sFor:          fk8s.For,
+		KubeconfigPath:  filepath.Join(kubeDir, "kubeconfig.yaml"),
+		InstallK8sDistro: func(_ context.Context, _, name string, _ int) error {
+			fwsl.AddDistro(name, "Running")
+			return nil
+		},
+		LoadConfig: func() (config.Config, error) { return config.Load(*cfgPath) },
+		SaveConfig: func(c config.Config) error { return config.Save(*cfgPath, c) },
+		Assets:     spaHandler(*dist),
 		OnWindowAction: func(a string) {
 			winMu.Lock()
 			windowActions = append(windowActions, a)
 			winMu.Unlock()
 		},
-		OnDistroAction: func(a string) error {
+		OnDistroAction: func(a, d, _ string) error {
+			if c, err := config.Load(*cfgPath); err == nil && d != c.Distro {
+				a += ":" + d // 非 active：記下目標 distro
+			}
 			winMu.Lock()
 			windowActions = append(windowActions, a)
 			winMu.Unlock()
@@ -168,7 +184,11 @@ func main() {
 		if state == "" {
 			state = "running"
 		}
-		if proj := q.Get("project"); proj != "" {
+		if pod := q.Get("pod"); pod != "" {
+			// k8s pod：?pod=web&ns=default&container=nginx&image=nginx&port=18080
+			port, _ := strconv.Atoi(q.Get("port"))
+			engine.AddPodContainers(q.Get("ns"), pod, q.Get("container"), q.Get("image"), port)
+		} else if proj := q.Get("project"); proj != "" {
 			engine.AddComposeContainer(proj, q.Get("service"), q.Get("image"), state)
 		} else {
 			// ports=3000,3001：以 0.0.0.0 發佈（區網轉發測試用）
@@ -356,8 +376,48 @@ func main() {
 		srv.RefreshExposure()
 		ok(w)
 	})
+	// k8s 場景：?installed=1&running=1&fail=<step>&delay=<ms>&pods=1（pods=1 放入幾個示範 pod）。
+	// running=1 同時把設定的 k8s 打開（模擬已開啟的 Kubernetes）。
+	mux.HandleFunc("POST /__test/k8s", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		ms, _ := strconv.Atoi(q.Get("delay"))
+		fk8s.Set(func(f *gui.FakeK8s) {
+			if q.Has("installed") {
+				f.SetInstalled(q.Get("installed") == "1")
+			}
+			if q.Has("running") {
+				f.SetRunning(q.Get("running") == "1")
+			}
+			if q.Has("fail") {
+				f.SetFailStep(q.Get("fail"))
+			}
+			if q.Has("delay") {
+				f.SetDelay(time.Duration(ms) * time.Millisecond)
+			}
+			if q.Get("pods") == "1" {
+				now := time.Now()
+				f.SetPods([]k8s.Pod{
+					{Namespace: "default", Name: "web-747498c8dc-xxztk", Status: "Running", Ready: "1/1", IP: "172.17.0.5", Created: now.Add(-12 * time.Minute)},
+					{Namespace: "default", Name: "worker-5d9f7c6b4-q2wkp", Status: "CrashLoopBackOff", Ready: "0/1", Restarts: 7, IP: "172.17.0.7", Created: now.Add(-40 * time.Minute)},
+					{Namespace: "kube-system", Name: "coredns-577d995dff-d6ddg", Status: "Running", Ready: "1/1", IP: "172.17.0.2", Created: now.Add(-3 * time.Hour)},
+				})
+			}
+		})
+		if q.Get("running") == "1" {
+			c, err := config.Load(*cfgPath)
+			if err == nil {
+				c.K8s = true
+				_ = c.SetK8sMachine(c.K8sDistro())
+				fwsl.AddDistro(c.K8sDistro(), "Running")
+				_ = config.Save(*cfgPath, c)
+			}
+		}
+		ok(w)
+	})
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {
 		stopSupervise()
+		fk8s.Reset()
+		srv.ResetK8sState()
 		srv.ResetStart()
 		reset()
 		resetLAN()

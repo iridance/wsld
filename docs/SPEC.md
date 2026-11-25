@@ -149,6 +149,23 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
   - `wsl --shutdown`
   - 等 API 埠釋放後只啟動 docker.service（不重跑 bootstrap；啟動前 `systemctl reset-failed docker`）
 
+### 4.6 本機 Kubernetes（k8s-engine，0.20.0）
+
+- **預設關閉**；GUI 的 Kubernetes 頁（頂部分頁 Machines 右邊另一條分隔線之後）或 `wsld k8s on` 開啟。
+- 開啟時自動建立專用的 Debian distro **`k8s-engine`**（同 `docker-engine` 的作法：`wsl --install Debian --name k8s-engine --vhd-size 60GB`），在裡面跑單節點 **k3s**（固定版本 `v1.37.2+k3s1`）。
+- **runtime 是 engine 的 dockerd**：k8s-engine 裝 cri-dockerd（固定版本 0.4.11，sha256 驗證），`--docker-endpoint unix:///mnt/wsl/wsld/docker.sock`；k3s 用 `--container-runtime-endpoint` 指向它（不用內建的 `--docker`，因為參數不能調）。pod 就是 engine 上的 docker 容器，映像共用。
+- WSL2 各 distro **共用 network namespace、但 mount／PID namespace 各自獨立**，所以兩邊用到的路徑要一樣，透過 `/mnt/wsl` 對應：
+  - kubelet `root-dir` 與 local-path 儲存放在 `/mnt/wsl/distro/k8s-engine/var/lib/wsld-k8s/{kubelet,storage}`：k8s-engine 以非遞迴 bind 曝露自己的根目錄（同 client 的曝露機制），dockerd 解析 bind 來源時看到的是同一份磁碟。kubelet 的 secret／configmap tmpfs 子掛載靠 `/mnt/wsl` 的 shared propagation 傳到 engine。
+  - engine 把 `/var/lib/docker/containers` **唯讀、private** bind 到 `/mnt/wsl/wsld/k8s/containers`（`wsld-k8s-share.service`），k8s-engine 再 bind 回同路徑，kubelet 才讀得到 cri-dockerd 在 `/var/log/pods` 建立的 log symlink。private 是為了不讓 docker 之後的 shm 掛載傳播進 `/mnt/wsl`。
+  - pod 網路不走 CNI（CNI 要 `/proc/<pid>/ns/net`，跨 PID namespace 拿不到）：cri-dockerd `--network-plugin=` 空值＝docker 原生網路，pod IP 在 docker bridge 上，與一般容器同網段互通；kube-proxy 的 iptables 寫進共用 netns；hostPort／klipper LoadBalancer 變成 docker published 埠（Windows localhost 與區網轉發器都看得到）。
+  - kubelet `cgroups-per-qos=false`、`enforce-node-allocatable=`：不跨 distro 建 pod cgroup。
+- **unit 相依**：`wsld-k8s-mounts`（oneshot：確認 engine 已分享 → 曝露 → bind containers；停止時由深到淺一般 `umount`，絕不 `-R`／`-l`）→ `wsld-cri-dockerd` → `k3s`（drop-in `Requires=`＋`ExecStartPre=mountpoint -q <曝露路徑>`：掛載不在就不准啟動，否則 kubelet 會把資料寫進 `/mnt/wsl` 的 tmpfs）。unit 都不開機自啟，啟停由 wsld 管。
+- **expose GC 不放掉 k8s-engine**（執行中時）：pod 還沒建立前沒有容器引用曝露路徑，被放掉會讓 kubelet 寫進 tmpfs。停止的 k8s-engine 殘留的曝露照常清掉。
+- **停止**：`systemctl stop k3s` → 在 engine 移除 `io.kubernetes.pod.namespace` 標籤的容器（停 k3s 不會停它們，它們還接著曝露路徑）→ 停 cri-dockerd 與掛載。**關閉**＝停止＋engine 停止分享；k8s-engine 與叢集資料保留，下次開啟沿用。
+- **API**：`https://127.0.0.1:<k8s_api_port>`（預設 26443）。k8s API 本來就是 TCP，WSL 的 localhost 轉發讓 Windows 直接連，不需要另外的 proxy socket。kubeconfig（cluster／user／context 改名為 `wsld`）匯出到 `%APPDATA%\wsld\kubeconfig.yaml`，另一份在 `/mnt/wsl/wsld/k8s/kubeconfig`（0644）給其他 distro。
+- **保活與自動帶起**：開啟中的 k8s-engine 由 wsld-gui 保活；Supervise 在 engine 就緒後每 30 秒檢查一次，沒在跑就背景帶起（失敗退避）。k8s-distro 不出現在 Machines 頁（GUI 的 Kubernetes 頁以對齊 Docker engine 卡的 engine 卡顯示它）；開啟中時 API 也拒絕停止、取消管理或刪除它。
+- **已知限制**：`kubectl port-forward`（cri-dockerd 用 nsenter 進入容器 PID）與 `kubectl top`／cAdvisor 統計不能用；exec／logs／attach 走 Docker API，可以用。
+
 ## 5. 元件規格
 
 ### 5.1 倉庫（目標）
@@ -183,6 +200,8 @@ api_endpoint = "tcp://127.0.0.1:23750"
 
 0.5 形狀：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 `[[machines]]`（各含 `distro`／`user`／`api_endpoint`）。舊扁平格式載入時自動遷移。範例見 `config.example.toml`。
 
+0.20.0：`k8s = true`（Kubernetes 開啟；預設省略＝關）、`k8s_api_port`（省略＝26443，只影響新安裝）；k8s distro 以 `role = "k8s"` 登記在 `[[machines]]`（user 固定 root、沒有 api_endpoint；最多一台）。
+
 ### 5.3 Bootstrap
 
 `02-bootstrap-docker.sh`（冪等）：
@@ -214,6 +233,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | `start-ct`／`stop-ct` | 啟停容器 |
 | `doctor` | 見 §5.6 |
 | `exec`（可選對齊 GUI） | 進入容器 shell（策略同 GUI） |
+| `k8s status\|on\|off` | 本機 Kubernetes（§4.6）：`on` 帶起 engine 後走完整的開啟流程（逐步印出步驟）並匯出 kubeconfig；`off` 停止並保留 k8s-engine；`status [--json]`（關閉時不碰 WSL） |
 | `lan on\|off\|status\|restore-nat` | 區網存取（§4.5）：on／off 寫入 `lan_access`（由 wsld-gui 轉發）；`status --json`；`restore-nat [--yes]` 還原 0.9.0 的 mirrored 設定並重啟 WSL |
 
 **退出碼**：
@@ -258,6 +278,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 - API 埠占用／config 中的 endpoint 說明
 - 提醒：repo 應放在 WSL `$HOME`，非 `C:\`
 - 區網存取：開啟時列出（Info）；偵測到 0.9.0 遺留的 mirrored 模式時 Warn（提示 `wsld lan restore-nat`）；不影響退出碼
+- Kubernetes（僅開啟時）：`k8s_distro`（存在且執行中；停止中不喚醒）、`k8s_share`（engine 已分享容器目錄）、`k8s_api`（API 埠連得到）；只 Warn，不影響退出碼
 
 ### 5.7 測試
 

@@ -41,7 +41,7 @@
 
 外觀依設計稿（Fluent 語彙：圓角 6–8、Mica 底、單一藍色強調色）；色彩 tokens 在 `frontend/src/style.css` 的 `:root`／深色區塊，文字在其底色上 ≥ 4.5:1。狀態一律「形狀＋文字＋顏色」：實心點＝執行中、空心環＝停止、脈動＝處理中。
 
-- **Top bar（滿寬，0.8 起取代側欄）**：品牌標誌（全方格鯨魚，與 `gen_icon.go` 同一張 16 格主格線）＋版本；**視圖分頁** Containers／Images／Volumes／Networks｜Machines（目前分頁底部藍色指示條、`aria-current="page"`；視窗 < 1100px 時只剩圖示，名稱留在 `title`／文字內容）；右側**發行版晶片**（active distro、引擎狀態點與文字 `status-connection`、已連線時顯示 API 埠；點擊前往 Machines；切換中顯示 Loading）、**需要時才出現**的 Start engine、**有 border** 的 Open folder／Open terminal、Settings 齒輪。視圖存 localStorage；切換視圖關閉 Logs／Terminal／Info。**不顯示** API endpoint（tcp）。
+- **Top bar（滿寬，0.8 起取代側欄）**：品牌標誌（全方格鯨魚，與 `gen_icon.go` 同一張 16 格主格線）＋版本；**視圖分頁** Containers／Images／Volumes／Networks｜Machines｜Kubernetes（目前分頁底部藍色指示條、`aria-current="page"`；視窗 < 1100px 時只剩圖示，名稱留在 `title`／文字內容）；右側**發行版晶片**（active distro、引擎狀態點與文字 `status-connection`、已連線時顯示 API 埠；點擊前往 Machines；切換中顯示 Loading）、**需要時才出現**的 Start engine、**有 border** 的 Open folder／Open terminal、Settings 齒輪。視圖存 localStorage；切換視圖關閉 Logs／Terminal／Info。**不顯示** API endpoint（tcp）。
 - **頁標題列**：內容區頂端，目前視圖標題＋摘要（Containers：執行中／已停止數；其他頁：項目數）＋磁碟用量鈕，與該頁工具列同一列（工具列靠右，窄時換行），省下獨立 header 的高度。
 - **Containers**：工具列搜尋（名稱／映像／compose 服務）＋狀態分段篩選（全部／執行中／已停止，附數量）；名稱下方顯示 docker 狀態描述；開啟 Info 時該列標示選取。Logs／Terminal 面板頂部有分頁可切換同一容器（已停止容器不能開終端）。
 - **磁碟用量鈕**（`usage-btn`）：Containers／Images／Volumes／Machines 頁標題摘要旁一顆 28px 高的鈕：迷你分段長條（`usage-bar`）＋該頁總量（`usage-total`）＋下拉箭頭，固定一列、不隨項目數變高，不另佔列表上方的高度。點開（`aria-expanded`）浮出明細 `usage-pop`：每項一行（`usage-part`：色塊、名稱、大小、占比），名稱過長截斷並有 title；Esc 收起且焦點回到鈕上，點外面也收起；列表週期刷新與換頁時明細維持／收起。每頁只列自己那一類的每一項：容器頁＝每個 compose 專案（整組加總）與每個未分組容器的可寫層；映像頁＝每個映像；Volume 頁＝每個 volume（未統計者不列）；Machines＝每台機器的 ext4.vhdx。最大的 5 項各一段，其餘併為「其他（N）」；5 項依名稱排序後依序取 `--series-1..5`（dataviz 參考調色盤前 5 槽，light／dark 各一組），長條與明細同一順序，大小些微變動不換色。滑過長條分段有 title（名稱・大小・占比）。視窗 ≤ 1100px 時迷你長條縮為 56px、搜尋欄 220px，≤ 860px 只留總量，避免標題列換行。沒有大小可顯示（引擎未就緒、df 尚未回來）時不顯示。
@@ -92,6 +92,7 @@
 | 磁碟用量 | 四頁的用量鈕（不加高度、點開／Esc／點外面、刷新時維持；明細每項大小與占比、前 5 大＋其他、總計）、容器／Volume Size 欄與副標總計、compose 群組加總、Machines 卡片磁碟與合計、Info 磁碟長條 | `disk.spec.ts` |
 | Settings | refresh、exec_shell、tray_autostart、Theme Light／Dark／System、語言、GitHub | `settings`／`inputs` |
 | Settings › 網路／容器頁 | 區網存取開關（即時、不重啟 WSL）、狀態、防火牆說明對話框（netsh／helper、稍後、等待 UAC、取消 UAC）、mirrored 警告＋還原 NAT（含取消 UAC）、zh-TW；容器列的地球按鈕（常駐；區網關閉時開 localhost、點擊開瀏覽器、多埠選單、停用／標紅原因）、Info 區網欄 | `lan.spec.ts` |
+| Kubernetes | 頂部分頁 Machines 右邊另一條分隔線之後；預設關閉＝hero（說明會建立 k8s-engine、`btn-k8s-enable`）；開啟中＝步驟清單 `k8s-steps`（engine → distro（含下載進度）→ bootstrap → share → start → ready → kubeconfig；✓／…／○／✕）、失敗時 `k8s-error`＋Retry；開啟＝「Kubernetes engine」群組的 `k8s-card`，版面與資訊對齊 Machines 的 Docker engine 卡（State、Kubernetes version、Disk＝ext4.vhdx 大小／上限、Endpoint；右側按鈕同 Docker engine 卡：「關閉」`btn-k8s-disable`（取代停止，需確認）、Info、資料夾、終端（底部 panel）、釋放磁碟空間，全部作用在 k8s distro；資料夾經 `POST /api/distro/open-folder?distro=<名稱>`），卡片下方是限制說明；Windows／其他 distro 的 kubeconfig 路徑（可複製）收在 k8s distro 的 Info 裡（Endpoint 欄改顯示 k8s API），再下面是 Pods 群組表格（namespace、name、status、ready、restarts、IP、age）。k8s distro **不出現在 Machines 頁**（`/api/machines` 略過 `role = "k8s"`）。Containers 頁把 pod 容器收成「Kubernetes」群組（顯示「容器 · pod（namespace）」、隱藏 pause 容器並把它的 published 埠併到應用容器、沒有整組啟停） | `k8s.spec.ts` |
 | i18n | Settings「外觀」語言下拉（立即生效） | `list.spec.ts` |
 | 多 distro | active 切換作用於全部功能；硬切面板 | 隨 0.5 |
 
@@ -154,7 +155,8 @@ Playwright 在 WSL 需要 Chromium 相依套件；`make test-ui` 會透過 `scri
 | `POST /__test/lifecycle {...}` | 設定 `Status()`／`Start()` 回應 |
 | `POST /__test/logs {"name","lines":[]}` | 推送即時日誌 |
 | `POST /__test/lang {"lang":"zh-TW"}` | 切換語系 |
-| `POST /__test/container?name=&image=&state=` | 新增容器；帶 `project=&service=` 則為 compose 容器 |
+| `POST /__test/container?name=&image=&state=` | 新增容器；帶 `project=&service=` 則為 compose 容器；帶 `pod=&ns=&container=&image=&port=` 則為一個 pod 的 cri-dockerd 容器（sandbox＋應用容器） |
+| `POST /__test/k8s?installed=1&running=1&fail=<step>&delay=<ms>&pods=1` | FakeK8s 場景：已安裝／執行中（`running=1` 同時把設定的 k8s 打開）、在某一步失敗、每步延遲、放入示範 pod |
 | `POST /__test/action-delay?ms=` | 讓 Start／Stop 延遲回應（測 pending 回饋） |
 | `POST /__test/list-hold`／`POST /__test/list-release`／`GET /__test/list-held` | 卡住下一次 ListImages（測刷新競態／abort） |
 | `POST /__test/image?tag=&size=&containers=` | 新增映像（`containers>0` 視為使用中） |

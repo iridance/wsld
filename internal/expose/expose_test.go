@@ -322,3 +322,20 @@ func TestEnsureForReportsAStoppedSourceDistro(t *testing.T) {
 		t.Fatal("must not wake a stopped distro")
 	}
 }
+
+func TestGCKeepsARunningKeptDistroButStillReleasesItWhenStale(t *testing.T) {
+	r := &fakeRunner{resp: map[string]string{
+		findmnt: "/mnt/wsl/distro/k8s-engine\n",
+		"-d docker-engine -u root -- umount /mnt/wsl/distro/k8s-engine": "",
+	}}
+	m := newMgr(r, &fakeEngine{})
+	m.Keep = []string{"K8S-engine"}
+	got, err := m.GC(context.Background(), []wsl.Distro{{Name: "k8s-engine", State: "Running"}})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("running kept distro must stay: got %v err %v", got, err)
+	}
+	got, err = m.GC(context.Background(), []wsl.Distro{{Name: "k8s-engine", State: "Stopped"}})
+	if err != nil || !reflect.DeepEqual(got, []string{"k8s-engine"}) {
+		t.Fatalf("stale kept distro must be released: got %v err %v", got, err)
+	}
+}

@@ -131,8 +131,13 @@ func main() {
 		NewEngine:       func(c config.Config) gui.Engine { return dockerClient(c) },
 		NewLifecycle:    func(c config.Config) gui.Lifecycle { return newMgr(c) },
 		InstallProbe:    gui.WSLInstallProbe{Client: &http.Client{Timeout: 20 * time.Second}},
-		LAN:             &lan.Manager{Host: lan.NewHost(), Exe: exe},
-		Forwarder:       &lan.Forwarder{},
+		K8sFor:          gui.NewK8sFor(wsl.ExecRunner{}, scripts.K8sBundle()),
+		KubeconfigPath:  filepath.Join(filepath.Dir(cfgPath), "kubeconfig.yaml"),
+		InstallK8sDistro: func(ctx context.Context, base, name string, size int) error {
+			return wsl.Install(ctx, wsl.ExecRunner{}, base, name, size)
+		},
+		LAN:       &lan.Manager{Host: lan.NewHost(), Exe: exe},
+		Forwarder: &lan.Forwarder{},
 	}
 	base, stop, err := srv.ListenLoopback()
 	if err != nil {
@@ -236,16 +241,12 @@ func (a *guiApp) onWindowAction(action string) {
 	}
 }
 
-func (a *guiApp) onDistroAction(action string) error {
-	cfg, err := a.srv.LoadConfig()
-	if err != nil {
-		return err
-	}
+func (a *guiApp) onDistroAction(action, distro, user string) error {
 	switch action {
 	case "open-folder":
-		return host.OpenFolder(cfg.Distro, cfg.User)
+		return host.OpenFolder(distro, user)
 	case "open-terminal":
-		return host.OpenTerminal(cfg.Distro, cfg.User)
+		return host.OpenTerminal(distro, user)
 	default:
 		return fmt.Errorf("unknown distro action %q", action)
 	}

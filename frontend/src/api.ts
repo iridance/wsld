@@ -249,6 +249,47 @@ function headers(): Record<string, string> {
   return h;
 }
 
+export type K8sState = "absent" | "stopped" | "not-installed" | "off" | "starting" | "ready" | "unknown";
+
+export interface K8sStatus {
+  distro: string;
+  state: K8sState;
+  version?: string;
+  node_name?: string;
+  node_ip?: string;
+  endpoint: string;
+}
+
+/** GET /api/k8s：Kubernetes（專用 k3s distro，runtime 用 engine 的 dockerd）。 */
+export interface K8sInfo {
+  available: boolean;
+  enabled: boolean;
+  distro: string;
+  /** 背景作業：enabling｜disabling｜starting；省略 = 閒置 */
+  op?: "enabling" | "disabling" | "starting";
+  step?: string;
+  steps: string[];
+  error?: string;
+  error_step?: string;
+  status: K8sStatus;
+  /** 建立 distro 那一步的下載進度 */
+  install?: InstallProgress;
+  kubeconfig_path: string;
+  shared_kubeconfig: string;
+  disk_bytes?: number;
+  disk_limit_bytes?: number;
+}
+
+export interface K8sPod {
+  namespace: string;
+  name: string;
+  status: string;
+  ready: string;
+  restarts: number;
+  ip?: string;
+  created: string;
+}
+
 async function call<T>(method: string, path: string, body?: unknown, asText = false, signal?: AbortSignal): Promise<T> {
   let resp: Response;
   try {
@@ -349,6 +390,10 @@ export const api = {
   containerInfo: (id: string) => call<ContainerInfo>("GET", `/api/containers/${encodeURIComponent(id)}`),
   logs: (id: string, tail = 100) =>
     call<string>("GET", `/api/containers/${encodeURIComponent(id)}/logs?tail=${tail}`, undefined, true),
+  k8s: (signal?: AbortSignal) => call<K8sInfo>("GET", "/api/k8s", undefined, false, signal),
+  k8sEnable: () => call<{ op: string }>("POST", "/api/k8s/enable"),
+  k8sDisable: () => call<{ op: string }>("POST", "/api/k8s/disable"),
+  k8sPods: (signal?: AbortSignal) => call<K8sPod[]>("GET", "/api/k8s/pods", undefined, false, signal),
   getSettings: () => call<Settings>("GET", "/api/settings"),
   putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
   getLAN: () => call<LANStatus>("GET", "/api/lan"),
@@ -359,7 +404,9 @@ export const api = {
   openLAN: (url: string) => call<void>("POST", "/api/lan/open", { url }),
   openLocal: (port: number) => call<{ url: string }>("POST", "/api/open-local", { port }),
   window: (action: "hide" | "show" | "quit") => call<void>("POST", `/api/window/${action}`),
-  distroAction: (action: "open-folder" | "open-terminal") => call<void>("POST", `/api/distro/${action}`),
+  /** distro 省略＝active；指定時開該 machine（例如 Kubernetes 頁的 k8s-engine）。 */
+  distroAction: (action: "open-folder" | "open-terminal", distro?: string) =>
+    call<void>("POST", `/api/distro/${action}${distro ? `?distro=${encodeURIComponent(distro)}` : ""}`),
   openRepo: () => call<{ url: string }>("POST", "/api/open-repo"),
   logsStreamUrl: (id: string, tail = 100) =>
     wsUrl(`/api/containers/${encodeURIComponent(id)}/logs/stream`, { tail }),

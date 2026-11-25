@@ -700,3 +700,116 @@ api_endpoint = "tcp://127.0.0.1:23751"
 		t.Fatalf("no duplicate profile expected, got %d", n)
 	}
 }
+
+// ---- Kubernetes（專用 k3s distro）----
+
+func engineCfg(t *testing.T) Config {
+	t.Helper()
+	c := Default()
+	c.UpsertMachine(Machine{Distro: "docker-engine", User: "u", APIEndpoint: "tcp://127.0.0.1:23750"})
+	c.EnsureActive(c.Machines[0])
+	if err := c.SetEngine("docker-engine"); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestK8sDefaultsOffWithDefaultDistroAndPort(t *testing.T) {
+	c := engineCfg(t)
+	if c.K8s {
+		t.Fatal("k8s must default to off")
+	}
+	if _, ok := c.K8sMachine(); ok {
+		t.Fatal("no k8s machine by default")
+	}
+	if c.K8sDistro() != DefaultK8sDistro || DefaultK8sDistro != "k8s-engine" {
+		t.Fatalf("K8sDistro = %q", c.K8sDistro())
+	}
+	for _, p := range []int{0, 80, 70000} {
+		c.K8sAPIPort = p
+		if got := c.K8sAPIPortOrDefault(); got != DefaultK8sAPIPort {
+			t.Fatalf("port %d → %d, want default", p, got)
+		}
+	}
+	c.K8sAPIPort = 27443
+	if c.K8sAPIPortOrDefault() != 27443 {
+		t.Fatal("explicit port kept")
+	}
+}
+
+func TestSetK8sMachineAddsRootProfileOnlyOnceAndNeedsEngine(t *testing.T) {
+	bare := Default()
+	if err := bare.SetK8sMachine("k8s-engine"); err == nil {
+		t.Fatal("k8s without an engine must be rejected")
+	}
+	c := engineCfg(t)
+	if err := c.SetK8sMachine("k8s-engine"); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := c.K8sMachine()
+	if !ok || m.Distro != "k8s-engine" || m.User != "root" || !m.IsK8s() {
+		t.Fatalf("K8sMachine = %+v %v", m, ok)
+	}
+	if c.Active != "docker-engine" {
+		t.Fatalf("active must stay on the engine, got %q", c.Active)
+	}
+	if err := c.SetK8sMachine("k8s-engine"); err != nil {
+		t.Fatalf("idempotent: %v", err)
+	}
+	if err := c.SetK8sMachine("other"); err == nil || !strings.Contains(err.Error(), "k8s-engine") {
+		t.Fatalf("second k8s distro must be rejected naming the first, got %v", err)
+	}
+	if err := c.SetK8sMachine("docker-engine"); err == nil {
+		t.Fatal("engine cannot become the k8s distro")
+	}
+	if err := c.SetClient("k8s-engine"); err == nil {
+		t.Fatal("k8s distro cannot become a client")
+	}
+	c.UpsertMachine(Machine{Distro: "k8s-engine", User: "x"})
+	if m, _ := c.FindMachine("k8s-engine"); !m.IsK8s() {
+		t.Fatal("role must survive upsert")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateRejectsTwoK8sMachines(t *testing.T) {
+	c := engineCfg(t)
+	c.Machines = append(c.Machines, Machine{Distro: "a", Role: RoleK8s}, Machine{Distro: "b", Role: RoleK8s})
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "k8s") {
+		t.Fatalf("want k8s conflict, got %v", err)
+	}
+}
+
+func TestK8sRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := engineCfg(t)
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if strings.Contains(string(raw), "k8s") {
+		t.Fatalf("k8s keys omitted while off:\n%s", raw)
+	}
+	c.K8s, c.K8sAPIPort = true, 27443
+	if err := c.SetK8sMachine("k8s-engine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.K8s || got.K8sAPIPort != 27443 {
+		t.Fatalf("round trip lost k8s settings: %+v", got)
+	}
+	if m, ok := got.K8sMachine(); !ok || m.Distro != "k8s-engine" {
+		t.Fatalf("round trip lost k8s machine: %+v", got.Machines)
+	}
+	if e, ok := got.EngineMachine(); !ok || e.Distro != "docker-engine" || got.Active != "docker-engine" {
+		t.Fatalf("engine untouched: %+v active=%q", got.Machines, got.Active)
+	}
+}

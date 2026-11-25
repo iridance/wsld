@@ -413,6 +413,29 @@ func (f *FakeEngine) AddComposeContainer(project, service, image, state string) 
 	return id
 }
 
+// AddPodContainers 新增一個 pod 的 cri-dockerd 容器：sandbox（pause，帶 published 埠）與一個應用容器。
+func (f *FakeEngine) AddPodContainers(ns, pod, container, image string, hostPort int) {
+	uid := "uid-" + pod
+	var ports []dockerapi.Port
+	if hostPort > 0 {
+		ports = []dockerapi.Port{{IP: "0.0.0.0", PrivatePort: hostPort, PublicPort: hostPort, Type: "tcp"}}
+	}
+	sb := f.AddContainer("k8s_POD_"+pod+"_"+ns+"_"+uid+"_0", "registry.k8s.io/pause:3.10", "running", ports)
+	ct := f.AddContainer("k8s_"+container+"_"+pod+"_"+ns+"_"+uid+"_0", image, "running", nil)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	base := map[string]string{"io.kubernetes.pod.namespace": ns, "io.kubernetes.pod.name": pod, "io.kubernetes.pod.uid": uid}
+	lb := func(typ, name string) map[string]string {
+		m := map[string]string{"io.kubernetes.docker.type": typ, "io.kubernetes.container.name": name}
+		for k, v := range base {
+			m[k] = v
+		}
+		return m
+	}
+	f.containers[sb].Labels = lb("podsandbox", "POD")
+	f.containers[ct].Labels = lb("container", container)
+}
+
 // AppendLog 追加日誌並推給 follow 訂閱者。
 func (f *FakeEngine) AppendLog(name string, lines ...string) {
 	f.mu.Lock()

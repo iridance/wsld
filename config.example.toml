@@ -10,6 +10,8 @@ active = "Ubuntu-26.04"
 # api_timeout_sec = 10
 # engine_base = "Debian" # 新建 docker-engine 時安裝的發行版（wsl --list --online 的名稱）；只影響新建
 # lang = "en"            # en | zh-TW；GUI 右下角切換後會寫回這裡（WSLD_LANG 環境變數可強制覆寫）
+# k8s = false            # 本機 Kubernetes（k3s 跑在專用的 k8s-engine，pod 跑在 engine 的 Docker）；GUI Kubernetes 頁或 wsld k8s on|off
+# k8s_api_port = 26443   # k3s API 埠（只影響新安裝）
 
 [[machines]]
 distro = "Ubuntu-26.04"

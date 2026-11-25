@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iridance/wsld/internal/config"
 	"github.com/iridance/wsld/internal/expose"
 	"github.com/iridance/wsld/internal/wsl"
 )
@@ -28,7 +29,15 @@ func (s *Server) exposeMgr() *expose.Manager {
 	if !ok {
 		return nil
 	}
-	return &expose.Manager{WSL: s.WSL, Engine: eng, EngineDistro: em.Distro}
+	return &expose.Manager{WSL: s.WSL, Engine: eng, EngineDistro: em.Distro, Keep: exposeKeep(s.cfg())}
+}
+
+// exposeKeep：k8s-engine 的曝露由它自己的 unit 管理，GC 不可在它執行中放掉。
+func exposeKeep(cfg config.Config) []string {
+	if m, ok := cfg.K8sMachine(); ok {
+		return []string{m.Distro}
+	}
+	return nil
 }
 
 func (s *Server) setExposed(names []string) {

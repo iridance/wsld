@@ -2,9 +2,11 @@
 export type IconName =
   | "power" | "refresh" | "settings" | "play" | "stop" | "logs" | "terminal" | "save" | "close" | "chevron-down" | "chevron-right" | "chevron-left"
   | "containers" | "images" | "volumes" | "networks" | "machines" | "trash" | "broom" | "plus" | "info" | "folder" | "github"
-  | "search" | "minus" | "check" | "globe" | "shield" | "edit" | "shrink" | "download" | "reset" | "layers" | "file";
+  | "search" | "minus" | "check" | "globe" | "shield" | "edit" | "shrink" | "download" | "reset" | "layers" | "file" | "wheel";
 
 const PATHS: Record<IconName, string> = {
+  // 舵輪（通用圖形，代表 Kubernetes 頁；不是官方標誌）
+  wheel: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v8"/><path d="M12 14v8"/><path d="M2 12h8"/><path d="M14 12h8"/><path d="M4.9 4.9l5.7 5.7"/><path d="M13.4 13.4l5.7 5.7"/><path d="M19.1 4.9l-5.7 5.7"/><path d="M10.6 13.4l-5.7 5.7"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   power: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',

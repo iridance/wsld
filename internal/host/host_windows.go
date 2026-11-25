@@ -14,10 +14,7 @@ import (
 )
 
 func openFolder(distro, user string) error {
-	path := `\\wsl$\` + distro + `\`
-	if user != "" {
-		path += `home\` + user
-	}
+	path := FolderPath(distro, user)
 	// explorer 即使成功也常回非零；Start 後不等待。
 	return exec.Command("explorer.exe", path).Start()
 }

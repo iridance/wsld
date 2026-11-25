@@ -90,3 +90,16 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestFolderPathUsesTheUsersHome(t *testing.T) {
+	cases := map[string]string{
+		"":      `\\wsl$\Ubuntu\`,
+		"irice": `\\wsl$\Ubuntu\home\irice`,
+		"root":  `\\wsl$\Ubuntu\root`, // root 的家目錄是 /root，不是 /home/root
+	}
+	for user, want := range cases {
+		if got := FolderPath("Ubuntu", user); got != want {
+			t.Errorf("user %q: got %s, want %s", user, got, want)
+		}
+	}
+}

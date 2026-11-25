@@ -43,6 +43,7 @@ func main() {
 		WSL:          wsl.ExecRunner{},
 		Processes:    doctor.WindowsProcesses,
 		Bundle:       scripts.BootstrapBundle(),
+		K8sBundle:    scripts.K8sBundle(),
 		Exec:         cli.DefaultExec,
 		LAN:          &lan.Manager{Host: lan.NewHost()},
 		Version:      version,

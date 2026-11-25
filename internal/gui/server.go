@@ -24,6 +24,7 @@ import (
 	"github.com/iridance/wsld/internal/dockerapi"
 	"github.com/iridance/wsld/internal/doctor"
 	"github.com/iridance/wsld/internal/i18n"
+	"github.com/iridance/wsld/internal/k8s"
 	"github.com/iridance/wsld/internal/lan"
 	"github.com/iridance/wsld/internal/lifecycle"
 	"github.com/iridance/wsld/internal/wsl"
@@ -74,7 +75,8 @@ type Server struct {
 	// OnWindowAction 讓 Wails 端處理 show/hide/quit（測試主機記錄即可）。
 	OnWindowAction func(action string)
 	// OnDistroAction 開啟 distro 資料夾／終端（測試主機記錄即可）；回傳錯誤會轉成 500。
-	OnDistroAction func(action string) error
+	// distro／user 由 Server 決定：預設 active，?distro= 指定已登記的 machine（例如 Kubernetes 頁的 k8s-engine）。
+	OnDistroAction func(action, distro, user string) error
 	// OnOpenURL 以系統瀏覽器開啟 URL（例如 footer GitHub）；nil 則僅回成功（測試主機）。
 	OnOpenURL func(url string) error
 	// Files 提供 Import 對話框瀏覽的檔案來源（nil＝預設：Windows 本機與以 WSL 讀取的 distro）。
@@ -105,6 +107,21 @@ type Server struct {
 	SelfInWSL bool
 	// InstallProbe 觀察新增機器（wsl --install）的下載進度（nil → 進度只有經過時間）。
 	InstallProbe InstallProbe
+	// K8sFor 建立 Kubernetes 操作（nil → /api/k8s 回報不可用）。
+	K8sFor func(cfg config.Config, opts K8sOptions) K8sOps
+	// InstallK8sDistro 建立 k8s-engine（wsl --install；nil → 不可建立）。
+	InstallK8sDistro func(ctx context.Context, base, name string, vhdSizeGB int) error
+	// KubeconfigPath 是 Windows 端匯出 kubeconfig 的路徑（"" = config 目錄下的 kubeconfig.yaml）。
+	KubeconfigPath string
+
+	k8sMu        sync.Mutex
+	k8sOp        string // 背景作業（enabling|disabling|starting）
+	k8sStep      string
+	k8sErr       string
+	k8sErrStep   string
+	k8sLast      *k8s.Status // 上一次確定的狀態（查詢逾時時沿用）
+	k8sCheckedAt time.Time   // Supervise 上次檢查 k8s 的時間（節流）
+	k8sNextTry   time.Time   // 自動帶起失敗後的退避
 
 	diskBusy atomic.Bool // 調整／壓縮磁碟中：/config 不在 distro 內執行命令（避免把 WSL 叫醒）
 
@@ -194,6 +211,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/lan/firewall", s.handleAllowFirewall)
 	mux.HandleFunc("GET /api/lan/forwards", s.handleLANForwards)
 	mux.HandleFunc("POST /api/lan/open", s.handleLANOpen)
+	mux.HandleFunc("GET /api/k8s", s.handleK8sGet)
+	mux.HandleFunc("POST /api/k8s/enable", s.handleK8sEnable)
+	mux.HandleFunc("POST /api/k8s/disable", s.handleK8sDisable)
+	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)
@@ -522,6 +543,7 @@ func (s *Server) superviseOnce(now time.Time) {
 	}
 	if s.life().Status(context.Background()).Ready() {
 		s.gcExposure(now)
+		s.superviseK8s(now)
 		return
 	}
 	if _, err, _ := s.engineStartOpt(true); err != nil {
@@ -1106,7 +1128,17 @@ func (s *Server) handleDistro(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("unknown distro action"))
 		return
 	}
-	if s.cfg().Distro == "" {
+	cfg := s.cfg()
+	distro, user := cfg.Distro, cfg.User
+	if name := r.URL.Query().Get("distro"); name != "" {
+		m, ok := cfg.FindMachine(name)
+		if !ok || !wsl.ValidDistroName(name) {
+			writeErr(w, http.StatusNotFound, "not_found", errors.New("machine not found: "+name))
+			return
+		}
+		distro, user = m.Distro, m.User
+	}
+	if distro == "" {
 		writeErr(w, http.StatusBadRequest, "usage", errors.New("distro is not configured"))
 		return
 	}
@@ -1114,7 +1146,7 @@ func (s *Server) handleDistro(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "error", errors.New("distro actions unavailable"))
 		return
 	}
-	if err := s.OnDistroAction(action); err != nil {
+	if err := s.OnDistroAction(action, distro, user); err != nil {
 		writeErr(w, http.StatusInternalServerError, "error", err)
 		return
 	}
@@ -1196,7 +1228,11 @@ func (s *Server) ListenLoopback() (string, func(), error) {
 // 尚未有 engine 的過渡設定（舊檔未遷移、測試）退回 active。
 func keepAliveNames(cfg config.Config) []string {
 	if e, ok := cfg.EngineMachine(); ok {
-		return []string{e.Distro}
+		names := []string{e.Distro}
+		if k, ok := cfg.K8sMachine(); ok && cfg.K8s {
+			names = append(names, k.Distro) // 開啟中的 k8s-engine 也一樣會被 WSL 閒置回收
+		}
+		return names
 	}
 	if cfg.Active != "" {
 		return []string{cfg.Active}

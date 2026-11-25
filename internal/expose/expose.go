@@ -71,6 +71,18 @@ type Manager struct {
 	WSL          wsl.Runner
 	Engine       Engine
 	EngineDistro string // 跑 dockerd 的 distro：在其中以 root 卸載（傳播給所有 peer）
+	// Keep：GC 不放掉的 distro（仍在執行時）。k8s-engine 的曝露由它自己的 unit 管理：kubelet 的狀態目錄就在曝露路徑下，
+	// pod 還沒建立（沒有容器引用）時被 GC 放掉，kubelet 會把資料寫進 /mnt/wsl 的 tmpfs。
+	Keep []string
+}
+
+func (m *Manager) keep(name string) bool {
+	for _, k := range m.Keep {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func validName(n string) error {
@@ -289,7 +301,7 @@ func (m *Manager) GC(ctx context.Context, list []wsl.Distro) ([]string, error) {
 		if d, ok := wsl.FindDistro(list, n); ok && strings.EqualFold(d.State, "Running") {
 			running = true
 		}
-		if running && len(users[n]) > 0 {
+		if running && (len(users[n]) > 0 || m.keep(n)) {
 			continue
 		}
 		if err := m.Release(ctx, n, true); err != nil {

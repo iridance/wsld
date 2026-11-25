@@ -240,7 +240,40 @@ func (c *checker) run(ctx context.Context) {
 	c.checkLAN(ctx)
 	// 11. 專用 engine：共用 socket 與各 client
 	c.checkEngine(ctx, list)
+	// 12. Kubernetes（僅已開啟時）
+	c.checkK8s(ctx, list)
 	c.infoChecks()
+}
+
+// checkK8s：Kubernetes 開啟時檢查 k8s-engine、engine 的容器目錄分享與 API 埠。問題一律只警告（不影響 Docker）。
+// 停止中的 k8s-engine 不叫醒它。
+func (c *checker) checkK8s(ctx context.Context, list []wsl.Distro) {
+	cfg := c.d.Cfg
+	if !cfg.K8s {
+		return
+	}
+	name := cfg.K8sDistro()
+	if d, ok := wsl.FindDistro(list, name); !ok {
+		c.add(Result{ID: "k8s_distro", Title: i18n.T("doctor.k8s_distro.title"), Level: Warn, Detail: i18n.T("doctor.k8s_distro.missing", name), Hint: "wsld k8s on"})
+		return
+	} else if !strings.EqualFold(d.State, "Running") {
+		c.add(Result{ID: "k8s_distro", Title: i18n.T("doctor.k8s_distro.title"), Level: Warn, Detail: i18n.T("doctor.k8s_distro.stopped", name), Hint: "wsld k8s on"})
+		return
+	}
+	c.add(Result{ID: "k8s_distro", Title: i18n.T("doctor.k8s_distro.title"), Level: OK, Detail: name})
+	const share = "/mnt/wsl/wsld/k8s/containers"
+	if _, err := c.runIn(ctx, "root", "mountpoint", "-q", share); err != nil {
+		c.add(Result{ID: "k8s_share", Title: i18n.T("doctor.k8s_share.title"), Level: Warn, Detail: i18n.T("doctor.k8s_share.missing", share), Hint: "wsld k8s on"})
+	} else {
+		c.add(Result{ID: "k8s_share", Title: i18n.T("doctor.k8s_share.title"), Level: OK, Detail: share})
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.K8sAPIPortOrDefault())
+	if err := c.dial()(ctx, addr); err != nil {
+		c.add(Result{ID: "k8s_api", Title: i18n.T("doctor.k8s_api.title"), Level: Warn, Detail: i18n.T("doctor.k8s_api.down", addr, err),
+			Hint: "wsl -d " + name + " -u root -- journalctl -u k3s -n 50"})
+	} else {
+		c.add(Result{ID: "k8s_api", Title: i18n.T("doctor.k8s_api.title"), Level: OK, Detail: addr})
+	}
 }
 
 // checkEngine：已設定專用 engine 時，檢查共用 socket 與每台 client。問題一律只警告（主檢查已涵蓋 engine 本身）。

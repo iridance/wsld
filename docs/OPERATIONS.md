@@ -147,6 +147,19 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 - **磁碟**：所有 image 都在 engine 的 VHD，調整大小／釋放空間針對 engine（Machines 頁）。
 - 尚未在真實 WSL 長期驗證（`/mnt/wsl` 共用 socket 行為、保活）；遇到問題請先 `wsld doctor`。
 
+## Kubernetes（k8s-engine）
+
+預設關閉。開啟後 wsld 建立專用的 Debian distro `k8s-engine` 跑單節點 k3s，**pod 直接跑在 engine 的 Docker 上**（映像共用、pod 與一般容器同一個 docker 網段互通）。設計見 SPEC §4.6。
+
+- **開啟**：GUI 的 Kubernetes 頁（頂部 Machines 右邊）→「開啟 Kubernetes」，畫面依序顯示步驟：確認 engine 的 Docker → 建立 k8s-engine（第一次要下載 Debian）→ 安裝 cri-dockerd 與 k3s → 與 engine 對應路徑 → 啟動 k3s → 等 node Ready → 匯出 kubeconfig。失敗會標出卡在哪一步，按「重試」從頭檢查（每一步都冪等）。CLI：`wsld k8s on`（逐步印出）／`wsld k8s status [--json]`。
+- **kubeconfig**：Windows 端 `%APPDATA%\wsld\kubeconfig.yaml`（context 名稱 `wsld`）：`kubectl --kubeconfig "%APPDATA%\wsld\kubeconfig.yaml" get pods -A`，或設 `KUBECONFIG`。其他 distro 用 `/mnt/wsl/wsld/k8s/kubeconfig`（k3s 啟動後自動更新）。API 在 `https://127.0.0.1:26443`（`k8s_api_port` 可改，只影響新安裝）。
+- **映像**：`docker build` 出來的映像 pod 直接可用（同一個 dockerd），不必推 registry；`imagePullPolicy: IfNotPresent` 或 `Never` 即可。
+- **對外**：用 `type: LoadBalancer`（k3s 內建 klipper：變成 engine 上的 published 埠）或 NodePort，Windows 的 `http://localhost:<埠>` 連得到，區網存取開啟時也會一起轉發。Containers 頁會把 pod 容器收成「Kubernetes」群組。
+- **不支援**：`kubectl port-forward`（cri-dockerd 要 nsenter 進容器的 PID，跨 distro 的 PID namespace 不同）、`kubectl top`。
+- **關閉**：Kubernetes 頁「關閉」或 `wsld k8s off`：停 k3s、從 engine 移除 pod 容器、卸載路徑對應、engine 停止分享。k8s-engine 與叢集資料（含 PV）保留，再次開啟沿用。k8s-engine 不列在 Machines 頁，它的狀態、版本、磁碟與 Endpoint 在 Kubernetes 頁的 engine 卡上。
+- **重設叢集**：關閉後 `wsl -d k8s-engine -u root -- /usr/local/bin/k3s-uninstall.sh`（清掉 k3s 與叢集資料），再開啟會重新安裝。**完全移除**：關閉後 `wsld unregister --confirm k8s-engine k8s-engine`（或 `wsl --unregister k8s-engine`）。
+- **故障排除**：`wsld doctor`（`k8s_distro`、`k8s_share`、`k8s_api`）；`wsl -d k8s-engine -u root -- journalctl -u k3s -n 50`、`-u wsld-cri-dockerd`、`-u wsld-k8s-mounts`。k3s 一定要等掛載到位才會啟動（避免 kubelet 寫進 `/mnt/wsl` 的記憶體 tmpfs）。
+
 ## 機器的磁碟上限
 
 WSL 的虛擬磁碟（ext4.vhdx）是動態成長的：檔案大小跟著實際用量走，上限只是「最多能長到多大」。WSL 預設上限 1 TB；wsld 0.17 起新增機器預設 **60 GB**。
@@ -189,3 +202,4 @@ wsld compact-disk --shutdown Ubuntu-26.04     # 需要關閉 WSL 時，確認後
 - **自動更新（Extra）**：無；以發布頁下載新版覆蓋。
 - **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。要讓內網連到**容器**，請開啟區網存取（wsld-gui 轉發），不要對外開放 API。
 - **區網存取只在 wsld-gui 執行時有效**，且只轉發 TCP；容器看到的來源 IP 是本機。
+- **Kubernetes**：單節點；不支援 `kubectl port-forward`／`kubectl top`；k8s-engine 的保活與自動帶起只在 wsld-gui 執行時有效（只用 CLI 時閒置會被 WSL 回收，`wsld k8s on` 再帶起）。

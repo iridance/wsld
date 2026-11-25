@@ -295,6 +295,9 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg()
 	out := make([]Machine, 0, len(list))
 	for _, d := range list {
+		if pm, ok := cfg.FindMachine(d.Name); ok && pm.IsK8s() {
+			continue // k8s distro 屬於 Kubernetes 頁（那裡有它的 engine 卡），不出現在 Machines
+		}
 		m := Machine{Name: d.Name, State: d.State, Version: d.Version, Default: d.Default, Active: strings.EqualFold(d.Name, cfg.Active), DiskBytes: s.distroDisk(d.Name), DiskLimitBytes: s.distroDiskLimit(d.Name), Exposed: s.isExposed(d.Name)}
 		if pm, ok := cfg.FindMachine(d.Name); ok {
 			m.Managed = true
@@ -646,12 +649,13 @@ func (s *Server) handleMachineStart(w http.ResponseWriter, r *http.Request) {
 
 // handleMachineStop 停止 distro（wsl --terminate）。已納管的先 systemctl stop docker，讓容器正常結束。
 // refuseEngine 對 engine 回 409：它是所有 distro 共用的 dockerd，不能停止、取消管理或刪除。
+// 開啟中的 k8s distro 同理（見 refuseK8s）。
 func (s *Server) refuseEngine(w http.ResponseWriter, name string) bool {
 	if m, ok := s.cfg().FindMachine(name); ok && m.IsEngine() {
 		writeErr(w, http.StatusConflict, "conflict", errors.New(i18n.T("gui.machines.engine_protected", m.Distro)))
 		return true
 	}
-	return false
+	return s.refuseK8s(w, name)
 }
 
 func (s *Server) handleMachineStop(w http.ResponseWriter, r *http.Request) {

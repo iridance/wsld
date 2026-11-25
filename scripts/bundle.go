@@ -16,6 +16,12 @@ var bootstrapLib string
 //go:embed lib/distros.tsv
 var distrosTable string
 
+//go:embed 03-k8s.sh
+var k8sMain string
+
+//go:embed lib/k8s-lib.sh
+var k8sLib string
+
 // BootstrapBundle 把分類表、lib 與主腳本合成單一自足腳本（移除 source 行）。
 func BootstrapBundle() []byte {
 	var b strings.Builder
@@ -29,6 +35,20 @@ func BootstrapBundle() []byte {
 	return []byte(b.String())
 }
 
+// K8sBundle 把分類表、bootstrap-lib、k8s-lib 與 03-k8s.sh 合成單一自足腳本（k8s-engine 與 engine 共用）。
+func K8sBundle() []byte {
+	var b strings.Builder
+	b.WriteString("#!/usr/bin/env bash\n")
+	b.WriteString("# --- generated bundle: lib/distros.tsv + lib/bootstrap-lib.sh + lib/k8s-lib.sh + 03-k8s.sh ---\n")
+	b.WriteString("WSLD_DISTROS_TABLE='")
+	b.WriteString(distrosTable)
+	b.WriteString("'\n")
+	b.WriteString(stripShebang(bootstrapLib))
+	b.WriteString(stripShebang(k8sLib))
+	writeMain(&b, k8sMain)
+	return []byte(b.String())
+}
+
 // writeMain 附上主腳本，並移除對外部 lib 的 source 行。
 func writeMain(b *strings.Builder, main string) {
 	b.WriteString("\n# --- main ---\n")
@@ -38,7 +58,8 @@ func writeMain(b *strings.Builder, main string) {
 		case strings.HasPrefix(t, "SCRIPT_DIR="),
 			strings.HasPrefix(t, "# shellcheck source="),
 			strings.HasPrefix(t, ". \"$SCRIPT_DIR/lib/bootstrap-lib.sh\""),
-			strings.HasPrefix(t, "source \"$SCRIPT_DIR/lib/bootstrap-lib.sh\""):
+			strings.HasPrefix(t, "source \"$SCRIPT_DIR/lib/bootstrap-lib.sh\""),
+			strings.HasPrefix(t, ". \"$SCRIPT_DIR/lib/k8s-lib.sh\""):
 			continue
 		}
 		b.WriteString(line)

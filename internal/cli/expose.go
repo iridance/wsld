@@ -17,7 +17,11 @@ func (a *App) exposeManager(cfg config.Config) (*expose.Manager, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &expose.Manager{WSL: a.WSL, Engine: a.apiFor(cfg), EngineDistro: e.Distro}, true
+	var keep []string
+	if k, ok := cfg.K8sMachine(); ok {
+		keep = []string{k.Distro} // k8s-engine 的曝露由它自己的 unit 管理
+	}
+	return &expose.Manager{WSL: a.WSL, Engine: a.apiFor(cfg), EngineDistro: e.Distro, Keep: keep}, true
 }
 
 func containerNames(u []expose.Using, onlyRunning bool) []string {

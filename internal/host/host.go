@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-// OpenFolder 在檔案總管開啟 \\wsl$\<distro>\；若提供 user 則開到 home\<user>。
+// OpenFolder 在檔案總管開啟 \\wsl$\<distro>\；若提供 user 則開到他的家目錄（見 FolderPath）。
 func OpenFolder(distro string, user ...string) error {
 	if distro == "" {
 		return fmt.Errorf("distro is empty")
@@ -48,4 +48,18 @@ func StartCommand(distro, user string, argv []string, tty bool, cols, rows int) 
 		return nil, fmt.Errorf("command is empty")
 	}
 	return startProc(WSLCommandArgs(distro, user, argv, tty, cols, rows))
+}
+
+// FolderPath 回傳檔案總管要開的 UNC 路徑：\\wsl$\<distro>\，有 user 時為他的家目錄
+// （root 是 \root，其他使用者是 \home\<user>；k8s-engine 以 root 登記）。
+func FolderPath(distro, user string) string {
+	path := `\\wsl$\` + distro + `\`
+	switch user {
+	case "":
+	case "root":
+		path += "root"
+	default:
+		path += `home\` + user
+	}
+	return path
 }

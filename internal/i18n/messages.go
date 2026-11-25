@@ -25,6 +25,7 @@ Commands:
   expose     Manage the exposure of a distro's files to the engine: expose status|release <distro>|gc
   migrate    Copy a client's old local dockerd data (images, named volumes) to the engine: migrate [--distro D] [--dry-run]
   lan        LAN access via wsld-gui forwarding: on|off|status; restore-nat undoes 0.9.0 mirrored mode
+  k8s        Local Kubernetes (k3s in the k8s-engine distro, pods on the engine's Docker): status|on|off
   version    Print version
 
 Commands that need Docker (ps, logs, start-ct, stop-ct, exec, migrate) bring the shared engine up by themselves;
@@ -52,6 +53,7 @@ Config: %s`,
   expose     管理 distro 檔案對 engine 的曝露：expose status|release <distro>|gc
   migrate    把 client 舊的本機 dockerd 資料（image、具名 volume）複製到 engine：migrate [--distro D] [--dry-run]
   lan        區網存取（wsld-gui 在內網 IP 轉發 published 埠）：on|off|status；restore-nat 還原 0.9.0 的 mirrored
+  k8s        本機 Kubernetes（k3s 跑在 k8s-engine distro，pod 跑在 engine 的 Docker）：status|on|off
   version    顯示版本
 
 需要 Docker 的指令（ps、logs、start-ct、stop-ct、exec、migrate）會自動帶起共用 engine；首次使用時也會自動建立 docker-engine distro。
@@ -278,6 +280,80 @@ Config: %s`,
 	"lc.engine_installing":        {EN: "setting up the shared engine distro %s (first run; this takes a few minutes)…\n", ZhTW: "首次使用：正在建立共用 engine distro %s（需要幾分鐘）…\n"},
 	"lc.init_no_port":             {EN: "bootstrap output lacks WSLD_API_PORT; cannot confirm API port", ZhTW: "bootstrap 輸出缺少 WSLD_API_PORT，無法確認 API 埠"},
 	"lc.init_port_changed":        {EN: "port %d in use; using %d (saved to config)\n", ZhTW: "埠 %d 已被占用，改用 %d（已寫入 config）\n"},
+
+	// ---- Kubernetes（專用 k3s distro；runtime 用 engine 的 dockerd）----
+	"k8s.no_engine":             {EN: "Kubernetes needs the shared engine; it has not been set up yet", ZhTW: "Kubernetes 需要共用 engine，但 engine 尚未建立"},
+	"k8s.engine_down":           {EN: "the engine %s is not running Docker; start it first", ZhTW: "engine %s 的 Docker 沒有在執行；請先啟動它"},
+	"k8s.installing_distro":     {EN: "creating the Kubernetes distro %s (first run; this takes a few minutes)…", ZhTW: "首次使用：正在建立 Kubernetes distro %s（需要幾分鐘）…"},
+	"k8s.install_distro_failed": {EN: "could not create %s", ZhTW: "無法建立 %s"},
+	"k8s.bootstrap_failed":      {EN: "installing k3s in %s failed", ZhTW: "在 %s 安裝 k3s 失敗"},
+	"k8s.share_failed":          {EN: "the engine %s could not share its container directory", ZhTW: "engine %s 無法分享容器目錄"},
+	"k8s.unshare_failed":        {EN: "the engine %s could not stop sharing its container directory", ZhTW: "engine %s 無法停止分享容器目錄"},
+	"k8s.start_failed":          {EN: "starting k3s in %s failed (see wsl -d %[1]s -- journalctl -u k3s -n 50)", ZhTW: "在 %s 啟動 k3s 失敗（wsl -d %[1]s -- journalctl -u k3s -n 50）"},
+	"k8s.not_ready":             {EN: "the k3s node in %s did not become Ready in time", ZhTW: "%s 的 k3s node 未在時限內 Ready"},
+	"k8s.stop_failed":           {EN: "stopping k3s in %s failed", ZhTW: "停止 %s 的 k3s 失敗"},
+	"k8s.kubeconfig_failed":     {EN: "reading the kubeconfig from %s failed", ZhTW: "讀取 %s 的 kubeconfig 失敗"},
+	"k8s.list_failed":           {EN: "listing pods failed", ZhTW: "列出 pod 失敗"},
+	"k8s.busy":                  {EN: "Kubernetes is busy (%s); try again when it finishes", ZhTW: "Kubernetes 正在%s，請等它完成再試"},
+	"k8s.protected":             {EN: "%s runs Kubernetes; turn Kubernetes off before stopping, unmanaging or removing it", ZhTW: "%s 正在跑 Kubernetes；請先關閉 Kubernetes，再停止、取消管理或刪除它"},
+
+	"cli.k8s.status":     {EN: "Kubernetes: %s (distro %s, %s, API %s)", ZhTW: "Kubernetes：%s（distro %s，%s，API %s）"},
+	"cli.k8s.kubeconfig": {EN: "kubeconfig: %s (Windows) · %s (other distros)", ZhTW: "kubeconfig：%s（Windows）· %s（其他 distro）"},
+	"cli.k8s.ready":      {EN: "Kubernetes is ready at %s", ZhTW: "Kubernetes 已就緒：%s"},
+	"cli.k8s.off":        {EN: "Kubernetes is off (k8s-engine and cluster data are kept)", ZhTW: "Kubernetes 已關閉（k8s-engine 與叢集資料保留）"},
+
+	"doctor.k8s_distro.title":   {EN: "Kubernetes distro", ZhTW: "Kubernetes distro"},
+	"doctor.k8s_distro.missing": {EN: "%s does not exist", ZhTW: "%s 不存在"},
+	"doctor.k8s_distro.stopped": {EN: "%s is stopped (wsld-gui starts it)", ZhTW: "%s 已停止（wsld-gui 會帶起它）"},
+	"doctor.k8s_share.title":    {EN: "Engine shares container logs with Kubernetes", ZhTW: "engine 分享容器 log 給 Kubernetes"},
+	"doctor.k8s_share.missing":  {EN: "%s is not mounted in the engine", ZhTW: "engine 沒有掛載 %s"},
+	"doctor.k8s_api.title":      {EN: "Kubernetes API", ZhTW: "Kubernetes API"},
+	"doctor.k8s_api.down":       {EN: "%s unreachable: %v", ZhTW: "%s 連不上：%v"},
+
+	"gui.nav.kubernetes":          {EN: "Kubernetes", ZhTW: "Kubernetes"},
+	"gui.k8s.hero.title":          {EN: "Local Kubernetes", ZhTW: "本機 Kubernetes"},
+	"gui.k8s.hero.body":           {EN: "Runs a single-node k3s cluster in its own Debian distro (%s). Pods run on the shared engine as ordinary Docker containers, so they share images and the network with your containers.", ZhTW: "在專用的 Debian distro（%s）跑單節點 k3s。Pod 以一般 Docker 容器的形式跑在共用的 engine 上，與你的容器共用映像檔和網路。"},
+	"gui.k8s.hero.facts":          {EN: "Off by default. The first time, wsld downloads Debian, cri-dockerd and k3s (a few minutes).", ZhTW: "預設關閉。第一次開啟時會下載 Debian、cri-dockerd 與 k3s（需要幾分鐘）。"},
+	"gui.k8s.enable":              {EN: "Turn on Kubernetes", ZhTW: "開啟 Kubernetes"},
+	"gui.k8s.disable":             {EN: "Turn off", ZhTW: "關閉"},
+	"gui.k8s.retry":               {EN: "Retry", ZhTW: "重試"},
+	"gui.k8s.enabling":            {EN: "Turning on Kubernetes…", ZhTW: "正在開啟 Kubernetes…"},
+	"gui.k8s.disabling":           {EN: "Turning off Kubernetes…", ZhTW: "正在關閉 Kubernetes…"},
+	"gui.k8s.failed":              {EN: "Kubernetes could not be turned on", ZhTW: "無法開啟 Kubernetes"},
+	"gui.k8s.op.enabling":         {EN: "turning on", ZhTW: "開啟中"},
+	"gui.k8s.op.disabling":        {EN: "turning off", ZhTW: "關閉中"},
+	"gui.k8s.step.engine":         {EN: "Check the engine's Docker", ZhTW: "確認 engine 的 Docker"},
+	"gui.k8s.step.distro":         {EN: "Create the k8s-engine distro (Debian)", ZhTW: "建立 k8s-engine distro（Debian）"},
+	"gui.k8s.step.bootstrap":      {EN: "Install cri-dockerd and k3s", ZhTW: "安裝 cri-dockerd 與 k3s"},
+	"gui.k8s.step.share":          {EN: "Map paths with the engine (/mnt/wsl)", ZhTW: "與 engine 對應路徑（/mnt/wsl）"},
+	"gui.k8s.step.start":          {EN: "Start k3s", ZhTW: "啟動 k3s"},
+	"gui.k8s.step.ready":          {EN: "Wait for the node to be Ready", ZhTW: "等待 node Ready"},
+	"gui.k8s.step.kubeconfig":     {EN: "Export the kubeconfig", ZhTW: "匯出 kubeconfig"},
+	"gui.k8s.state.absent":        {EN: "Not created", ZhTW: "尚未建立"},
+	"gui.k8s.state.stopped":       {EN: "Stopped", ZhTW: "已停止"},
+	"gui.k8s.state.not-installed": {EN: "Not installed", ZhTW: "尚未安裝"},
+	"gui.k8s.state.off":           {EN: "Off", ZhTW: "未啟動"},
+	"gui.k8s.state.starting":      {EN: "Starting", ZhTW: "啟動中"},
+	"gui.k8s.state.ready":         {EN: "Ready", ZhTW: "Ready"},
+	"gui.k8s.state.unknown":       {EN: "Unknown", ZhTW: "未知"},
+	"gui.k8s.f.kubeconfig":        {EN: "kubeconfig (Windows)", ZhTW: "kubeconfig（Windows）"},
+	"gui.k8s.f.kubeconfig_wsl":    {EN: "kubeconfig (other distros)", ZhTW: "kubeconfig（其他 distro）"},
+	"gui.k8s.group_engine":        {EN: "Kubernetes engine", ZhTW: "Kubernetes engine"},
+	"gui.k8s.stat_version":        {EN: "Kubernetes version", ZhTW: "Kubernetes version"},
+	"gui.k8s.copy":                {EN: "Copy", ZhTW: "複製"},
+	"gui.k8s.copied":              {EN: "Copied", ZhTW: "已複製"},
+	"gui.k8s.limits":              {EN: "kubectl port-forward and kubectl top are not available here; expose apps with a LoadBalancer or NodePort Service (reachable on localhost).", ZhTW: "這裡不支援 kubectl port-forward 與 kubectl top；請用 LoadBalancer 或 NodePort Service 對外（可從 localhost 連線）。"},
+	"gui.k8s.disable_prompt":      {EN: "Turn off Kubernetes? k3s stops and its pods are removed from the engine. The k8s-engine distro and cluster data are kept for next time.", ZhTW: "要關閉 Kubernetes 嗎？k3s 會停止，它的 pod 會從 engine 移除。k8s-engine distro 與叢集資料會保留，下次開啟沿用。"},
+	"gui.k8s.pods":                {EN: "Pods", ZhTW: "Pods"},
+	"gui.k8s.pods.empty":          {EN: "No pods yet. Deploy with kubectl apply.", ZhTW: "還沒有 pod。用 kubectl apply 部署。"},
+	"gui.k8s.col.namespace":       {EN: "Namespace", ZhTW: "Namespace"},
+	"gui.k8s.col.name":            {EN: "Name", ZhTW: "名稱"},
+	"gui.k8s.col.status":          {EN: "Status", ZhTW: "狀態"},
+	"gui.k8s.col.ready":           {EN: "Ready", ZhTW: "Ready"},
+	"gui.k8s.col.restarts":        {EN: "Restarts", ZhTW: "重啟"},
+	"gui.k8s.col.ip":              {EN: "IP", ZhTW: "IP"},
+	"gui.k8s.col.age":             {EN: "Age", ZhTW: "存在時間"},
+	"gui.containers.k8s_group":    {EN: "Kubernetes", ZhTW: "Kubernetes"},
 
 	// ---- GUI（Phase 3 前端會透過 All() 取用）----
 	"gui.title":               {EN: "wsld", ZhTW: "wsld"},

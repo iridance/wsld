@@ -130,3 +130,30 @@ func TestBootstrapBundleHelpRunsWithoutLib(t *testing.T) {
 		t.Fatalf("--help: %v\n%s", err, out)
 	}
 }
+
+func TestK8sBundleIsSelfContainedAndParses(t *testing.T) {
+	s := string(K8sBundle())
+	if strings.Count(s, "#!/usr/bin/env bash") != 1 {
+		t.Fatal("bundle must contain exactly one shebang")
+	}
+	if strings.Contains(s, "SCRIPT_DIR") || strings.Contains(s, ". \"$") {
+		t.Fatal("bundle must not source external lib")
+	}
+	for _, fn := range []string{"wsld_ensure_wsl_conf_systemd()", "wsld_render_k3s_config()", "wsld_render_engine_share_script()", "install_k8s()"} {
+		if !strings.Contains(s, fn) {
+			t.Fatalf("bundle missing %s", fn)
+		}
+	}
+	if strings.Index(s, "wsld_render_k3s_config()") > strings.Index(s, "install_k8s()") {
+		t.Fatal("lib must precede main script")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	cmd := exec.Command(bash, "-n")
+	cmd.Stdin = bytes.NewReader(K8sBundle())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n failed: %v\n%s", err, out)
+	}
+}

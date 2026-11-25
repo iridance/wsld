@@ -7,6 +7,8 @@ import {
   type MachineConfig,
   type Image,
   type InstallProgress,
+  type K8sInfo,
+  type K8sPod,
   type LANForward,
   type LANStatus,
   type MachinesResponse,
@@ -30,7 +32,7 @@ type InfoDrawer =
   | { kind: "machine"; name: string; detail?: import("./api").MachineConfig };
 
 /** 側欄視圖。 */
-export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "settings";
+export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "kubernetes" | "settings";
 type CtFilter = "all" | "running" | "stopped";
 type ImgKind = "inuse" | "unused" | "dangling" | "unknown";
 type ImgFilter = "all" | "inuse" | "unused" | "dangling";
@@ -46,13 +48,15 @@ const CT_FILTERS: { id: CtFilter; label: string }[] = [
   { id: "stopped", label: "gui.filter.stopped" },
 ];
 
-/** section：側欄分組（resources＝Docker 資源、system＝WSL 機器、foot＝底部設定）。 */
-const VIEWS: { id: View; icon: IconName; label: string; section: "resources" | "system" | "foot" }[] = [
+/** section：頂部分頁分組（resources＝Docker 資源、system＝WSL 機器、k8s＝Kubernetes、foot＝右側設定）。 */
+type NavSection = "resources" | "system" | "k8s" | "foot";
+const VIEWS: { id: View; icon: IconName; label: string; section: NavSection }[] = [
   { id: "containers", icon: "containers", label: "gui.nav.containers", section: "resources" },
   { id: "images", icon: "images", label: "gui.nav.images", section: "resources" },
   { id: "volumes", icon: "volumes", label: "gui.nav.volumes", section: "resources" },
   { id: "networks", icon: "networks", label: "gui.nav.networks", section: "resources" },
   { id: "machines", icon: "machines", label: "gui.nav.machines", section: "system" },
+  { id: "kubernetes", icon: "wheel", label: "gui.nav.kubernetes", section: "k8s" },
   { id: "settings", icon: "settings", label: "gui.nav.settings", section: "foot" },
 ];
 
@@ -104,6 +108,10 @@ interface State {
   usageOpen: boolean;
   /** 進行中的資源動作（images/volumes 刪除、prune、machine install） */
   busy: Set<string>;
+  /** Kubernetes 頁（進頁後輪詢；undefined = 尚未載入） */
+  k8s?: K8sInfo;
+  /** Kubernetes 已 Ready 時的 pod 清單 */
+  k8sPods?: K8sPod[];
 }
 
 /** SVG 元素建立（命名空間不同於 HTML）。 */
@@ -465,7 +473,12 @@ export class App {
         this.st.meta = await api.meta();
         if (signal.aborted || gen !== this.refreshGen) return;
       }
-      if (this.st.view === "machines" || this.st.view === "settings") {
+      if (this.st.view === "kubernetes") {
+        // Kubernetes 頁有自己的狀態，不依賴 Docker 列表
+        await this.loadK8s(signal);
+        if (signal.aborted || gen !== this.refreshGen) return;
+        this.st.lastError = undefined;
+      } else if (this.st.view === "machines" || this.st.view === "settings") {
         // WSL 清單／設定不依賴 Docker 引擎
         if (this.st.view === "machines") {
           this.st.machines = await api.machines(signal);
@@ -508,7 +521,7 @@ export class App {
     if (this.st.view === "containers" || this.st.view === "volumes") await this.loadDisk(signal);
     switch (this.st.view) {
       case "containers":
-        this.st.containers = await api.containers(signal);
+        this.st.containers = foldK8sSandboxes(await api.containers(signal));
         await this.loadLANForwards(signal);
         break;
       case "images":
@@ -524,6 +537,19 @@ export class App {
         this.st.machines = await api.machines(signal);
         break;
     }
+  }
+
+  /** Kubernetes 狀態；Ready 時一併取 pod 清單（失敗時保留上一次）。 */
+  private async loadK8s(signal?: AbortSignal): Promise<void> {
+    const k = await api.k8s(signal);
+    this.st.k8s = k;
+    if (k.enabled && k.status.state === "ready" && !k.op) {
+      try {
+        this.st.k8sPods = await api.k8sPods(signal);
+      } catch {
+        /* 保留上一次 */
+      }
+    } else this.st.k8sPods = undefined;
   }
 
   /** 磁碟用量是附加資訊：查詢失敗不影響列表，保留上一次的值。 */
@@ -859,6 +885,8 @@ export class App {
         return ready ? fmt(t("gui.sub.items"), String(this.st.networks.length)) : "";
       case "machines":
         return this.st.machines?.available ? fmt(t("gui.sub.items"), String(this.st.machines.machines.length)) : "";
+      case "kubernetes":
+        return this.st.k8s?.enabled && this.st.k8sPods ? fmt(t("gui.sub.items"), String(this.st.k8sPods.length)) : "";
       default:
         return "";
     }
@@ -872,7 +900,7 @@ export class App {
     const parts: UsagePart[] = [];
     const groups = groupContainers(this.st.containers) ?? [{ project: "", items: this.st.containers }];
     for (const g of groups) {
-      if (g.project) parts.push({ key: `compose:${g.project}`, label: g.project, size: g.items.reduce((a, c) => a + size(c), 0) });
+      if (g.project) parts.push({ key: `compose:${g.project}`, label: g.project === K8S_GROUP ? t("gui.containers.k8s_group") : g.project, size: g.items.reduce((a, c) => a + size(c), 0) });
       else for (const c of g.items) parts.push({ key: c.Id, label: name(c), size: size(c) });
     }
     return parts;
@@ -1018,9 +1046,9 @@ export class App {
     slot.replaceChildren(b);
   }
 
-  private async distroAction(action: "open-folder" | "open-terminal"): Promise<void> {
+  private async distroAction(action: "open-folder" | "open-terminal", distro?: string): Promise<void> {
     try {
-      await api.distroAction(action);
+      await api.distroAction(action, distro);
       this.st.lastError = undefined;
       this.renderBanner();
     } catch (e) {
@@ -1067,7 +1095,7 @@ export class App {
     n.replaceChildren(text, close);
   }
 
-  /** 頂部分頁：資源（容器／映像／volume／網路）｜系統（Machines）；Settings 齒輪在右側（renderHeader）。
+  /** 頂部分頁：資源（容器／映像／volume／網路）｜系統（Machines）｜Kubernetes；Settings 齒輪在右側（renderHeader）。
    *  視窗窄於 1100px 時只剩圖示（CSS），名稱留在 title／文字內容供輔助技術。 */
   private renderNav(): void {
     const nav = this.root.querySelector<HTMLElement>('[data-testid="top-nav"]')!;
@@ -1078,8 +1106,9 @@ export class App {
       b.onclick = () => this.setView(v.id);
       return b;
     };
-    const section = (s: "resources" | "system") => VIEWS.filter((v) => v.section === s).map(item);
-    nav.replaceChildren(...section("resources"), el("span", { class: "tab-sep", "aria-hidden": "true" }), ...section("system"));
+    const section = (s: NavSection) => VIEWS.filter((v) => v.section === s).map(item);
+    const sep = () => el("span", { class: "tab-sep", "aria-hidden": "true" });
+    nav.replaceChildren(...section("resources"), sep(), ...section("system"), sep(), ...section("k8s"));
   }
 
   /** 建立目前視圖的骨架（containers／machines 含底部 panel）。 */
@@ -1096,7 +1125,7 @@ export class App {
         el("div", { class: "list", "data-testid": "container-list" }),
         el("section", { class: "panel", "data-testid": "panel", hidden: "" }),
       );
-    } else if (this.st.view === "machines") {
+    } else if (this.st.view === "machines" || this.st.view === "kubernetes") {
       main.replaceChildren(
         pageBar(toolbar()),
         el("div", { class: "list", "data-testid": `${this.st.view}-list` }),
@@ -1125,6 +1154,9 @@ export class App {
         break;
       case "machines":
         this.renderMachines();
+        break;
+      case "kubernetes":
+        this.renderK8s();
         break;
       case "settings":
         this.renderSettings();
@@ -1185,6 +1217,7 @@ export class App {
     volumes: loadJSON(`${LS_COLS}.volumes`, {}),
     networks: loadJSON(`${LS_COLS}.networks`, {}),
     machines: loadJSON(`${LS_COLS}.machines`, {}),
+    kubernetes: loadJSON(`${LS_COLS}.kubernetes`, {}),
   };
   private collapsed: Set<string> = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
 
@@ -1373,7 +1406,10 @@ export class App {
         const expanded = !this.collapsed.has(g.project);
         tbody.append(this.groupRow(g, expanded));
         if (!expanded) continue;
-        for (const c of g.items) tbody.append(this.containerRow(c, g.project, g.project ? c.Labels?.[LABEL_SERVICE] || name(c) : name(c)));
+        for (const c of g.items) {
+          const display = g.project === K8S_GROUP ? k8sDisplay(c) : g.project ? c.Labels?.[LABEL_SERVICE] || name(c) : name(c);
+          tbody.append(this.containerRow(c, g.project, display));
+        }
       }
     }
     list.replaceChildren(table);
@@ -1386,8 +1422,8 @@ export class App {
     toggle.append(icon(expanded ? "chevron-down" : "chevron-right"));
     toggle.onclick = () => this.toggleGroup(g.project);
     const actions: HTMLElement[] = [];
-    if (g.project) {
-      // 只有 compose 專案才有整組 Start／Stop／Info；未分組只是集合
+    if (g.project && g.project !== K8S_GROUP) {
+      // 只有 compose 專案才有整組 Start／Stop／Info；未分組與 Kubernetes（由 kubelet 管理）只是集合
       const startBtn = iconBtn({ "data-testid": "group-start" }, "play", t("gui.start"));
       startBtn.disabled = anyPending || running === g.items.length;
       startBtn.onclick = () =>
@@ -1408,7 +1444,7 @@ export class App {
         "div",
         { class: "group-bar" },
         toggle,
-        el("span", { class: "group-name", "data-testid": "group-name", text: g.project || "-" }),
+        el("span", { class: "group-name", "data-testid": "group-name", text: g.project === K8S_GROUP ? t("gui.containers.k8s_group") : g.project || "-" }),
         el("span", { class: "group-count", "data-testid": "group-count", text: `${running}/${g.items.length}` }),
         ...(this.st.disk
           ? [el("span", { class: "group-size muted", "data-testid": "group-size", text: humanSize(g.items.reduce((a, c) => a + (this.st.disk?.containers[c.Id]?.size_rw ?? 0), 0)) })]
@@ -1417,7 +1453,7 @@ export class App {
         ...actions,
       ),
     );
-    return el("tr", { class: "group", "data-testid": "group-row", "data-project": g.project, "aria-expanded": String(expanded) }, cell);
+    return el("tr", { class: "group", "data-testid": "group-row", "data-project": g.project === K8S_GROUP ? "kubernetes" : g.project, "aria-expanded": String(expanded) }, cell);
   }
 
   private containerRow(c: Container, project: string, display: string): HTMLTableRowElement {
@@ -1643,7 +1679,7 @@ export class App {
         body.append(
           infoField(t("gui.info.name"), d.name),
           infoField(t("gui.machines.user"), d.user || "—"),
-          infoField(t("gui.machines.endpoint"), d.api_endpoint || "—", "info-machine-endpoint"),
+          ...this.k8sInfoFields(info.name, d.api_endpoint),
           infoField(t("gui.machines.wslconfig"), `memory=${d.memory || "—"}; processors=${d.processors || "—"}`, "info-wslconfig"),
           usageMeter(t("gui.machines.cpu"), formatCPU(d.cpu_percent ?? 0), clampPct(d.cpu_percent ?? 0), "info-cpu-bar"),
           usageMeter(t("gui.machines.mem"), formatMem(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0), memPct(d.memory_used_mb ?? 0, d.memory_total_mb ?? 0), "info-mem-bar"),
@@ -1941,7 +1977,7 @@ export class App {
       cfg.onclick = () => void this.openMachineInfo(d.name);
       const folder = iconBtn({ "data-testid": `btn-machine-folder-${d.name}` }, "folder", t("gui.machines.folder"));
       folder.disabled = locked;
-      folder.onclick = () => void this.distroAction("open-folder");
+      folder.onclick = () => void this.distroAction("open-folder", d.name);
       const term = iconBtn({ "data-testid": `btn-machine-term-${d.name}` }, "terminal", t("gui.machines.terminal"));
       term.disabled = locked;
       term.onclick = () => this.openMachineTerminal(d.name);
@@ -2096,6 +2132,230 @@ export class App {
     );
   }
 
+  // ---- Kubernetes ------------------------------------------------------------
+
+  /** Kubernetes 頁：關閉 → hero；開啟中／帶起中／失敗 → 步驟清單；開啟 → 狀態卡＋Pods。 */
+  private renderK8s(): void {
+    const list = this.root.querySelector<HTMLElement>('[data-testid="kubernetes-list"]');
+    const bar = this.root.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    if (!list || !bar) return;
+    list.classList.add("cards");
+    const k = this.st.k8s;
+    bar.replaceChildren(el("span", { class: "spacer" }));
+    if (!k) {
+      list.replaceChildren(this.skeletonCards(1));
+      return;
+    }
+    if (!k.available) {
+      list.replaceChildren(el("div", { class: "empty", "data-testid": "empty", text: t("gui.machines.unavailable") }));
+      return;
+    }
+    if (k.op === "disabling") {
+      list.replaceChildren(el("div", { class: "engine-down k8s-hero", "data-testid": "k8s-disabling" },
+        el("div", { class: "engine-down-icon", "aria-hidden": "true" }, icon("wheel")),
+        el("h2", { text: t("gui.k8s.disabling") }),
+      ));
+      return;
+    }
+    if (k.op === "enabling" || k.op === "starting" || (!k.enabled && k.error)) {
+      list.replaceChildren(this.k8sProgress(k));
+      return;
+    }
+    if (!k.enabled) {
+      list.replaceChildren(this.k8sHero(k));
+      return;
+    }
+    list.replaceChildren(this.k8sStatusCard(k), this.k8sPodsSection());
+  }
+
+  private k8sHero(k: K8sInfo): HTMLElement {
+    const on = btn({ class: "primary", "data-testid": "btn-k8s-enable" }, "play", t("gui.k8s.enable"));
+    on.disabled = this.st.busy.has("k8s");
+    on.onclick = () => void this.k8sEnable();
+    return el("div", { class: "engine-down k8s-hero", "data-testid": "k8s-hero" },
+      el("div", { class: "engine-down-icon", "aria-hidden": "true" }, icon("wheel")),
+      el("h2", { text: t("gui.k8s.hero.title") }),
+      el("p", { text: fmt(t("gui.k8s.hero.body"), k.distro) }),
+      el("p", { class: "muted", text: t("gui.k8s.hero.facts") }),
+      on,
+    );
+  }
+
+  /** 開啟／帶起中的步驟清單；失敗時標出失敗的步驟並提供 Retry。 */
+  private k8sProgress(k: K8sInfo): HTMLElement {
+    const failed = !k.op && !!k.error;
+    const cur = failed ? k.steps.indexOf(k.error_step ?? "") : k.steps.indexOf(k.step ?? "");
+    const steps = el("ol", { class: "build-steps k8s-steps", "data-testid": "k8s-steps" });
+    k.steps.forEach((step, i) => {
+      const status = i < cur ? "done" : i === cur ? (failed ? "failed" : "active") : "todo";
+      steps.append(el("li", { class: `build-step ${status}`, "data-testid": `k8s-step-${step}`, "data-status": status },
+        el("span", { class: "build-step-mark", "aria-hidden": "true", text: status === "done" ? "✓" : status === "failed" ? "✕" : status === "active" ? "…" : "○" }),
+        el("span", { text: t(`gui.k8s.step.${step}`) }),
+      ));
+    });
+    const kids: (Node | string)[] = [
+      el("div", { class: "engine-down-icon", "aria-hidden": "true" }, icon("wheel")),
+      el("h2", { text: failed ? t("gui.k8s.failed") : k.op === "starting" ? t("gui.k8s.state.starting") : t("gui.k8s.enabling") }),
+      steps,
+    ];
+    if (k.install && k.step === "distro") {
+      const block = engineProgressBlock();
+      block.setAttribute("data-testid", "k8s-install-progress");
+      updateInstallProgress(block, k.install);
+      kids.push(block);
+    }
+    if (failed) {
+      const retry = btn({ class: "primary", "data-testid": "btn-k8s-retry" }, "refresh", t("gui.k8s.retry"));
+      retry.disabled = this.st.busy.has("k8s");
+      retry.onclick = () => void this.k8sEnable();
+      kids.push(el("p", { class: "engine-down-error", "data-testid": "k8s-error", text: k.error ?? "" }), retry);
+    }
+    return el("div", { class: "engine-down k8s-hero", "data-testid": "k8s-progress", "data-op": k.op ?? "failed" }, ...kids);
+  }
+
+  /** Kubernetes engine 卡：版面與資訊對齊 Machines 的 Docker engine 卡（State／版本／磁碟／Endpoint，按鈕在右側）。 */
+  private k8sStatusCard(k: K8sInfo): HTMLElement {
+    const s = k.status;
+    const stat = (label: string, ...value: (Node | string)[]) =>
+      el("div", { class: "stat" }, el("span", { class: "stat-label", text: label }), el("span", { class: "stat-value" }, ...value));
+    const stateCls = s.state === "ready" ? "running" : s.state === "starting" ? "pending" : "stopped";
+    const stats: HTMLElement[] = [
+      stat(t("gui.machines.stat_state"), el("span", { class: `state ${stateCls}`, "data-testid": "k8s-state", "data-state": s.state, text: t(`gui.k8s.state.${s.state}`) })),
+    ];
+    if (s.version) stats.push(stat(t("gui.k8s.stat_version"), el("span", { "data-testid": "k8s-version", text: s.version })));
+    if ((k.disk_bytes ?? 0) > 0) {
+      stats.push(stat(t("gui.machines.disk"),
+        el("span", { "data-testid": "k8s-disk", "data-size": String(k.disk_bytes), title: t("gui.machines.disk_hint"), text: humanSize(k.disk_bytes ?? 0) }),
+        ...((k.disk_limit_bytes ?? 0) > 0
+          ? [" / ", el("span", { "data-testid": "k8s-disk-limit", title: t("gui.machines.disk_limit"), text: humanSize(k.disk_limit_bytes ?? 0) })]
+          : [])));
+    }
+    stats.push(stat(t("gui.machines.stat_endpoint"), el("span", { class: "mono", "data-testid": "k8s-endpoint", text: s.endpoint })));
+    // 按鈕對齊 Machines 的 Docker engine 卡：關閉（取代停止）、Info、資料夾、終端、釋放磁碟空間
+    const name = k.distro;
+    const running = this.k8sRunning();
+    const compacting = this.st.busy.has(`compact:${name}`);
+    const locked = this.st.busy.has("k8s") || compacting || [...this.st.busy].some((x) => x.startsWith("resize:"));
+    const off = iconBtn({ "data-testid": "btn-k8s-disable" }, "stop", t("gui.k8s.disable"));
+    off.disabled = locked;
+    off.onclick = () => void this.k8sDisable();
+    const info = iconBtn({ "data-testid": `btn-machine-config-${name}` }, "info", t("gui.machines.info"));
+    info.disabled = locked;
+    info.onclick = () => void this.openMachineInfo(name);
+    const folder = iconBtn({ "data-testid": `btn-machine-folder-${name}` }, "folder", t("gui.machines.folder"));
+    folder.disabled = locked;
+    folder.onclick = () => void this.distroAction("open-folder", name);
+    const term = iconBtn({ "data-testid": `btn-machine-term-${name}` }, "terminal", t("gui.machines.terminal"));
+    term.disabled = locked;
+    term.onclick = () => this.openMachineTerminal(name);
+    const compact = iconBtn({ "data-testid": `btn-machine-compact-${name}` }, "shrink", t("gui.machines.compact"));
+    compact.disabled = locked;
+    compact.onclick = () => void this.compactMachine(name, running);
+    const card = el("article", { class: "machine-card engine-card", "data-testid": "k8s-card", "data-name": k.distro, "data-state": s.state, "aria-label": k.distro },
+      el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: k.distro }),
+      el("div", { class: "machine-stats" }, ...stats),
+      el("div", { class: "machine-tools" }, off, info, folder, term, compact),
+    );
+    return el("section", { class: "machine-group k8s-status", "data-testid": "k8s-group-engine" },
+      el("h3", { class: "machine-group-title", text: t("gui.k8s.group_engine") }),
+      el("div", { class: "machine-grid engine-grid" }, card),
+      ...(k.error ? [el("p", { class: "engine-down-error", "data-testid": "k8s-error", text: k.error })] : []),
+      el("p", { class: "muted k8s-limits", "data-testid": "k8s-limits", text: t("gui.k8s.limits") }),
+    );
+  }
+
+  /** Info 的 Endpoint 欄；k8s distro 改顯示 k8s API，並加上 Windows／其他 distro 的 kubeconfig 路徑（可複製）。 */
+  private k8sInfoFields(name: string, apiEndpoint?: string): HTMLElement[] {
+    const k = this.st.k8s;
+    if (!k || name !== k.distro) return [infoField(t("gui.machines.endpoint"), apiEndpoint || "—", "info-machine-endpoint")];
+    const pathField = (label: string, testid: string, path: string) => {
+      const copy = iconBtn({ "data-testid": `btn-copy-${testid}` }, "file", t("gui.k8s.copy"));
+      copy.onclick = () => {
+        void navigator.clipboard?.writeText(path).then(() => this.notify(t("gui.k8s.copied")), () => undefined);
+      };
+      return el("div", { class: "info-field" },
+        el("dt", { text: label }),
+        el("dd", { class: "with-action" }, el("span", { class: "mono", "data-testid": testid, title: path, text: path }), copy),
+      );
+    };
+    return [
+      infoField(t("gui.machines.stat_endpoint"), k.status.endpoint, "info-machine-endpoint"),
+      pathField(t("gui.k8s.f.kubeconfig"), "k8s-kubeconfig", k.kubeconfig_path),
+      pathField(t("gui.k8s.f.kubeconfig_wsl"), "k8s-kubeconfig-wsl", k.shared_kubeconfig),
+    ];
+  }
+
+  /** k8s distro 是否在執行（Kubernetes 頁沒有 Machines 清單，從 /api/k8s 的狀態判斷）。 */
+  private k8sRunning(): boolean {
+    const st = this.st.k8s?.status.state;
+    return !!st && st !== "absent" && st !== "stopped";
+  }
+
+  /** 機器是否在執行：Machines 清單沒有的（k8s distro）改看 Kubernetes 狀態。 */
+  private machineRunning(name: string): boolean {
+    const m = this.st.machines?.machines.find((x) => x.name === name);
+    if (m) return m.state.toLowerCase() === "running";
+    return name === this.st.k8s?.distro && this.k8sRunning();
+  }
+
+  /** 執行中的機器名稱（磁碟作業要關閉 WSL 時列出會被停止的）；包含開啟中的 k8s distro。 */
+  private runningMachineNames(): string[] {
+    const names = (this.st.machines?.machines ?? []).filter((m) => m.state.toLowerCase() === "running").map((m) => m.name);
+    const k = this.st.k8s;
+    if (k && this.k8sRunning() && !names.includes(k.distro)) names.push(k.distro);
+    return names;
+  }
+
+  private k8sPodsSection(): HTMLElement {
+    const pods = this.st.k8sPods;
+    const head = el("h3", { class: "machine-group-title", text: t("gui.k8s.pods") });
+    if (!pods) return el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, head);
+    if (pods.length === 0) {
+      return el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, head, el("div", { class: "empty", "data-testid": "k8s-pods-empty", text: t("gui.k8s.pods.empty") }));
+    }
+    const { table, tbody } = this.table("kubernetes", K8S_COLS);
+    for (const p of pods) {
+      const cls = p.status === "Running" ? "running" : p.status === "Completed" || p.status === "Succeeded" ? "exited" : p.status === "Pending" || p.status === "ContainerCreating" ? "pending" : "failed";
+      tbody.append(el("tr", { "data-testid": "k8s-pod-row", "data-name": p.name, "data-namespace": p.namespace },
+        el("td", { class: "muted", text: p.namespace }),
+        el("td", { class: "name", title: p.name, text: p.name }),
+        el("td", {}, el("span", { class: `state ${cls}`, "data-testid": "k8s-pod-status", text: p.status })),
+        el("td", { text: p.ready }),
+        el("td", { text: String(p.restarts) }),
+        el("td", { class: "mono muted", text: p.ip ?? "" }),
+        el("td", { class: "muted", title: fmtISO(p.created), text: fmtAge(p.created) }),
+      ));
+    }
+    return el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, head, table);
+  }
+
+  private async k8sEnable(): Promise<void> {
+    this.st.busy.add("k8s");
+    this.renderK8s();
+    try {
+      await api.k8sEnable();
+    } catch (e) {
+      this.notify(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      this.st.busy.delete("k8s");
+    }
+    await this.refresh();
+  }
+
+  private async k8sDisable(): Promise<void> {
+    if (!(await this.confirm(t("gui.k8s.disable_prompt"), undefined, { label: t("gui.k8s.disable"), icon: "stop", danger: true }))) return;
+    this.st.busy.add("k8s");
+    this.renderK8s();
+    try {
+      await api.k8sDisable();
+    } catch (e) {
+      this.notify(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      this.st.busy.delete("k8s");
+    }
+    await this.refresh();
+  }
+
   /** 建立 engine 中的卡片：全寬，顯示步驟（Download → Register → Set up Docker）與進度條。 */
   private engineBuildCard(p: InstallProgress): HTMLElement {
     const phase = p.phase ?? "installing";
@@ -2226,9 +2486,8 @@ export class App {
 
   private async pollMachineUsage(name: string): Promise<void> {
     const shown = this.st.info?.kind === "machine" && this.st.info.name === name ? this.st.info.detail : undefined;
-    const m = this.st.machines?.machines.find((x) => x.name === name);
     // 停止中且 Info 已顯示停止狀態：沒有用量可取，不打 API（避免任何會叫醒機器的取樣）
-    if (m && m.state.toLowerCase() !== "running" && shown && !shown.running) return;
+    if (!this.machineRunning(name) && shown && !shown.running) return;
     try {
       const detail = await api.machineConfig(name);
       if (this.st.info?.kind !== "machine" || this.st.info.name !== name) return;
@@ -2520,7 +2779,7 @@ export class App {
 
   /** 釋放磁碟空間（wsl --manage --compact）。執行中（或後端回 needs_shutdown）時，先確認關閉 WSL 並列出會被停止的機器。 */
   private async compactMachine(name: string, running: boolean): Promise<void> {
-    const runningNow = () => (this.st.machines?.machines ?? []).filter((m) => m.state.toLowerCase() === "running").map((m) => m.name);
+    const runningNow = () => this.runningMachineNames();
     const confirmShutdown = (willStop: string[]) =>
       this.confirm(
         `${fmt(t("gui.machines.compact_prompt"), name)}\n\n${t("gui.machines.disk_needs_shutdown")}\n${
@@ -2582,10 +2841,9 @@ export class App {
   /** Info 的「磁碟上限」欄：容量＋調整鈕。 */
   private diskLimitField(name: string, d: MachineConfig): HTMLElement {
     const limit = d.disk_limit_bytes ?? 0;
-    const m = this.st.machines?.machines.find((x) => x.name === name);
     const edit = iconBtn({ "data-testid": "btn-machine-resize" }, "edit", t("gui.machines.resize"));
     edit.disabled = this.st.busy.has(`resize:${name}`);
-    edit.onclick = () => this.openResize(name, limit, (m?.state ?? "").toLowerCase() === "running");
+    edit.onclick = () => this.openResize(name, limit, this.machineRunning(name));
     return el("div", { class: "info-field" },
       el("dt", { text: t("gui.machines.disk_limit"), title: t("gui.machines.disk_limit_hint") }),
       el("dd", { class: "with-action" },
@@ -2725,7 +2983,7 @@ export class App {
   private openResize(name: string, limitBytes: number, running: boolean): void {
     const d = this.root.querySelector<HTMLDialogElement>('[data-testid="resize-dialog"]')!;
     const currentGB = limitBytes > 0 ? Math.round(limitBytes / 2 ** 30) : 0;
-    const willStop = (this.st.machines?.machines ?? []).filter((m) => m.state.toLowerCase() === "running").map((m) => m.name);
+    const willStop = this.runningMachineNames();
     this.resizeTarget = { name, currentGB, running, needShutdown: running, willStop, minGB: 0 };
     d.querySelector('[data-testid="resize-title"]')!.textContent = `${t("gui.machines.resize")} · ${name}`;
     const size = d.querySelector<HTMLInputElement>('[data-testid="resize-size"]')!;
@@ -3387,6 +3645,16 @@ const MACHINE_COLS: Col[] = [
   { key: "actions", label: "gui.col.actions", def: 60, min: 50, resizable: false },
 ];
 
+const K8S_COLS: Col[] = [
+  { key: "namespace", label: "gui.k8s.col.namespace", def: 120, min: 70, resizable: true },
+  { key: "name", label: "gui.k8s.col.name", def: 260, min: 120, resizable: true },
+  { key: "status", label: "gui.k8s.col.status", def: 170, min: 80, resizable: true },
+  { key: "ready", label: "gui.k8s.col.ready", def: 70, min: 50, resizable: true },
+  { key: "restarts", label: "gui.k8s.col.restarts", def: 90, min: 50, resizable: true },
+  { key: "ip", label: "gui.k8s.col.ip", def: 120, min: 70, resizable: true },
+  { key: "age", label: "gui.k8s.col.age", def: 90, min: 50, resizable: false },
+];
+
 const LS_COLS = "wsld.colWidths";
 const LS_COLLAPSED = "wsld.collapsedGroups";
 const LS_VIEW = "wsld.view";
@@ -3395,8 +3663,41 @@ const LABEL_SERVICE = "com.docker.compose.service";
 
 
 interface Group {
-  project: string; // "" = 未分組
+  project: string; // "" = 未分組；K8S_GROUP = Kubernetes 的 pod 容器
   items: Container[];
+}
+
+// cri-dockerd 為 pod 容器加上的標籤
+const LABEL_K8S_NS = "io.kubernetes.pod.namespace";
+const LABEL_K8S_POD = "io.kubernetes.pod.name";
+const LABEL_K8S_UID = "io.kubernetes.pod.uid";
+const LABEL_K8S_CONTAINER = "io.kubernetes.container.name";
+const LABEL_K8S_TYPE = "io.kubernetes.docker.type";
+/** Kubernetes 群組的鍵（不可能是 compose 專案名稱）；收合狀態也用它存。 */
+const K8S_GROUP = "\u2388k8s";
+
+function isK8s(c: Container): boolean {
+  return !!c.Labels?.[LABEL_K8S_NS];
+}
+
+/** 容器列表中 pod 容器顯示「容器 · pod（namespace）」。 */
+function k8sDisplay(c: Container): string {
+  const l = c.Labels ?? {};
+  return `${l[LABEL_K8S_CONTAINER] ?? name(c)} · ${l[LABEL_K8S_POD] ?? ""} (${l[LABEL_K8S_NS] ?? ""})`;
+}
+
+/** 拿掉 pod 的 sandbox（pause）容器，並把它的 published 埠（hostPort／LoadBalancer）併到同一個 pod 的容器上。 */
+function foldK8sSandboxes(cs: Container[]): Container[] {
+  const portsByPod = new Map<string, Container["Ports"]>();
+  for (const c of cs) {
+    if (c.Labels?.[LABEL_K8S_TYPE] === "podsandbox" && c.Ports?.length) portsByPod.set(c.Labels?.[LABEL_K8S_UID] ?? "", c.Ports);
+  }
+  return cs
+    .filter((c) => c.Labels?.[LABEL_K8S_TYPE] !== "podsandbox")
+    .map((c) => {
+      const extra = isK8s(c) && !c.Ports?.length ? portsByPod.get(c.Labels?.[LABEL_K8S_UID] ?? "") : undefined;
+      return extra ? { ...c, Ports: extra } : c;
+    });
 }
 
 /** 依 compose 專案分組；完全沒有 compose 容器時回傳 null（維持平面列表）。 */
@@ -3404,15 +3705,17 @@ function groupContainers(cs: Container[]): Group[] | null {
   const byProject = new Map<string, Container[]>();
   let anyCompose = false;
   for (const c of cs) {
-    let p = c.Labels?.[LABEL_PROJECT] ?? "";
+    let p = isK8s(c) ? K8S_GROUP : c.Labels?.[LABEL_PROJECT] ?? "";
     if (p) anyCompose = true;
     (byProject.get(p) ?? byProject.set(p, []).get(p)!).push(c);
   }
   if (!anyCompose) return null;
+  const k8sItems = byProject.get(K8S_GROUP);
   const groups: Group[] = [...byProject.entries()]
-    .filter(([p]) => p !== "")
+    .filter(([p]) => p !== "" && p !== K8S_GROUP)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([project, items]) => ({ project, items: items.sort((a, b) => (a.Labels?.[LABEL_SERVICE] ?? name(a)).localeCompare(b.Labels?.[LABEL_SERVICE] ?? name(b))) }));
+  if (k8sItems) groups.push({ project: K8S_GROUP, items: k8sItems.sort((a, b) => k8sDisplay(a).localeCompare(k8sDisplay(b))) });
   const rest = byProject.get("");
   if (rest) groups.push({ project: "", items: rest.sort((a, b) => name(a).localeCompare(name(b))) });
   return groups;
@@ -3599,6 +3902,17 @@ function fmtDate(d: Date): string {
 
 function fmtUnix(sec: number): string {
   return sec ? fmtDate(new Date(sec * 1000)) : "";
+}
+
+/** kubectl 風格的存在時間：45s／12m／3h／5d。 */
+function fmtAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return "";
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
 
 function fmtISO(s: string): string {

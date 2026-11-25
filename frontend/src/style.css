@@ -740,3 +740,12 @@ ul.checks .check-detail { color: var(--muted); font-family: var(--mono); font-si
 .skel-stack { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; padding-top: 6px; }
 .machine-card > .skel { margin-top: 2px; }
 table[data-testid="skeleton"] tbody td { height: 44px; }
+
+/* ---- Kubernetes 頁 ---- */
+.k8s-status .engine-grid { margin-bottom: 10px; }
+.k8s-limits { margin: 6px 0 0; font-size: 12px; }
+.k8s-hero .k8s-steps { margin: 2px 0; }
+.k8s-hero .install-progress { width: 100%; }
+.k8s-pods .list-table, .k8s-pods table { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.info-field dd.with-action:has(> .mono) { min-width: 0; max-width: 100%; }
+.info-field dd.with-action > .mono { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

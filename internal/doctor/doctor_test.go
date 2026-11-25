@@ -439,3 +439,68 @@ func TestExposureToolsAreCheckedEvenWhileALocalDockerdStillRuns(t *testing.T) {
 		t.Fatalf("the tools check must not be skipped by the local dockerd warning: %+v", got)
 	}
 }
+
+func k8sEnv(state string) (map[string]kv, Deps) {
+	r, d := engineEnv("Stopped")
+	r["--list --verbose"] = kv{out: utf16("  NAME STATE VERSION\r\n* docker-engine Running 2\r\n  Debian1 Stopped 2\r\n  k8s-engine " + state + " 2\r\n")}
+	r["-d docker-engine -u root -- mountpoint -q /mnt/wsl/wsld/k8s/containers"] = kv{}
+	d.Cfg.K8s = true
+	_ = d.Cfg.SetK8sMachine("k8s-engine")
+	d.WSL = &fakeRunner{resp: r}
+	return r, d
+}
+
+func TestK8sChecksOnlyWhenEnabled(t *testing.T) {
+	_, d := engineEnv("Stopped")
+	rep := Run(context.Background(), d)
+	if r := find(rep, "k8s_distro"); r.ID == "k8s_distro" {
+		t.Fatal("k8s off: no k8s checks")
+	}
+}
+
+func TestK8sHealthy(t *testing.T) {
+	_, d := k8sEnv("Running")
+	var dialed string
+	d.Dial = func(_ context.Context, addr string) error {
+		if addr == "127.0.0.1:26443" {
+			dialed = addr
+			return nil
+		}
+		return errors.New("refused")
+	}
+	rep := Run(context.Background(), d)
+	for _, id := range []string{"k8s_distro", "k8s_share", "k8s_api"} {
+		if r := find(rep, id); r.Level != OK {
+			t.Fatalf("%s = %+v", id, r)
+		}
+	}
+	if dialed == "" {
+		t.Fatal("API port must be probed")
+	}
+}
+
+func TestK8sStoppedDistroWarnsWithoutWakingIt(t *testing.T) {
+	_, d := k8sEnv("Stopped")
+	rep := Run(context.Background(), d)
+	if r := find(rep, "k8s_distro"); r.Level != Warn || !strings.Contains(r.Hint, "wsld k8s on") {
+		t.Fatalf("k8s_distro = %+v", r)
+	}
+	if r := find(rep, "k8s_api"); r.ID == "k8s_api" {
+		t.Fatal("stopped distro: no further k8s checks")
+	}
+}
+
+func TestK8sMissingShareAndAPIWarn(t *testing.T) {
+	r, d := k8sEnv("Running")
+	r["-d docker-engine -u root -- mountpoint -q /mnt/wsl/wsld/k8s/containers"] = kv{err: errors.New("exit 1")}
+	rep := Run(context.Background(), d)
+	if got := find(rep, "k8s_share"); got.Level != Warn {
+		t.Fatalf("k8s_share = %+v", got)
+	}
+	if got := find(rep, "k8s_api"); got.Level != Warn || !strings.Contains(got.Hint, "journalctl -u k3s") {
+		t.Fatalf("k8s_api = %+v", got)
+	}
+	if rep.ExitCode() != 0 {
+		t.Fatalf("k8s problems must not fail doctor, exit = %d", rep.ExitCode())
+	}
+}
