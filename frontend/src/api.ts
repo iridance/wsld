@@ -168,6 +168,8 @@ export interface Status {
   starting: boolean;
   /** 自動帶起 engine 最近一次失敗的原因（成功後省略） */
   start_error?: string;
+  /** Docker engine 版本（就緒時） */
+  engine_version?: string;
 }
 
 export interface Settings {

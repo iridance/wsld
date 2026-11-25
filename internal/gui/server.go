@@ -417,6 +417,8 @@ type StatusResponse struct {
 	Starting bool `json:"starting"`
 	// StartError 是最近一次自動帶起 engine 失敗的原因（成功後清空）；畫面據此顯示錯誤，使用者不需要手動啟動。
 	StartError string `json:"start_error,omitempty"`
+	// EngineVersion 是 Docker engine 的版本（就緒且查得到時才有）。
+	EngineVersion string `json:"engine_version,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -424,7 +426,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.startMu.Lock()
 	starting, startErr := s.starting, s.startErr
 	s.startMu.Unlock()
-	writeJSON(w, http.StatusOK, StatusResponse{Status: st, Ready: st.Ready(), Starting: starting, StartError: startErr})
+	resp := StatusResponse{Status: st, Ready: st.Ready(), Starting: starting, StartError: startErr}
+	if resp.Ready {
+		if vc, ok := s.engine().(interface {
+			ServerVersion(ctx context.Context) (dockerapi.Version, error)
+		}); ok {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			if v, err := vc.ServerVersion(ctx); err == nil {
+				resp.EngineVersion = v.Version
+			}
+			cancel()
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // engineStartOpt 帶起 engine。已有啟動進行中回 busy。

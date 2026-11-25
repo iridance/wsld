@@ -68,8 +68,7 @@ test("Machines: the engine is a full-width stat card with its buttons on the rig
   const tb = (await page.getByTestId("btn-machine-term-Ubuntu-26.04").boundingBox())!;
   expect(tb.x).toBeGreaterThan(cb.x + cb.width / 2); // 按鈕在右半邊
   await expect(card.getByTestId("machine-name")).toHaveClass(/sr-only/); // 不顯示 docker-engine 名稱
-  const ib = (await card.locator(".machine-icon").boundingBox())!;
-  expect(ib.x).toBeLessThan(tb.x);
+  await expect(card.locator(".machine-icon")).toHaveCount(0); // engine card 不放 icon
 });
 
 test("Machines: the API refuses to stop or remove the engine",async ({ request }) => {

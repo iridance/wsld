@@ -170,10 +170,10 @@ test("Machines: lists local WSL distros with state, version and role badges", as
   await expect(dd.getByTestId("machine-flag-engine")).toHaveCount(0);
 });
 
-test("Machines: card icon is the distro logo, generic icon when unrecognised", async ({ page }) => {
+test("Machines: card icon is generic for an unrecognised distro; the engine card has none", async ({ page }) => {
   await go(page, "machines");
   const u = page.locator('[data-testid="machine-row"][data-name="Ubuntu-26.04"]');
-  await expect(u.locator('.machine-icon svg[data-distro="ubuntu"]')).toBeVisible();
+  await expect(u.locator(".machine-icon")).toHaveCount(0); // engine card 不放 icon
   const dd = page.locator('[data-testid="machine-row"][data-name="docker-desktop"]');
   await expect(dd.locator('.machine-icon svg[data-icon="machines"]')).toBeVisible();
 });

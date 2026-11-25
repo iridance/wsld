@@ -2046,6 +2046,7 @@ export class App {
         const stats: HTMLElement[] = [
           stat(t("gui.machines.stat_state"), el("span", { class: `state ${pending ? "pending" : d.state.toLowerCase()}`, "data-testid": "machine-state", text: stateText })),
         ];
+        if (d.active && this.st.status?.engine_version) stats.push(stat(t("gui.machines.stat_version"), el("span", { "data-testid": "engine-f-version", text: this.st.status.engine_version })));
         if ((d.disk_bytes ?? 0) > 0) {
           stats.push(stat(t("gui.machines.disk"),
             el("span", { "data-testid": "machine-disk", "data-size": String(d.disk_bytes), title: t("gui.machines.disk_hint"), text: humanSize(d.disk_bytes ?? 0) }),
@@ -2058,12 +2059,9 @@ export class App {
         }
         grid.append(
           el("article", { ...attrs, class: `${attrs.class} engine-card` },
-            el("div", { class: "machine-head" },
-              el("span", { class: "machine-icon", "aria-hidden": "true" }, distroLogo(d.name) ?? icon("machines")),
-              // 群組標題已是 Docker engine：不顯示 docker-engine 名稱（只留給螢幕閱讀器）；沒有 tag 時不放標題欄，避免 icon 與 stat 之間多出空隙
-              el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: d.name }),
-              ...(flags.length ? [el("div", { class: "machine-title" }, el("div", { class: "machine-name-row" }, ...flags))] : []),
-            ),
+            // 群組標題已是 Docker engine：不顯示 docker-engine 名稱（只留給螢幕閱讀器）；沒有 tag 時不放標題欄，避免 state 左邊多出空白
+            el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: d.name }),
+            ...(flags.length ? [el("div", { class: "machine-head" }, el("div", { class: "machine-title" }, el("div", { class: "machine-name-row" }, ...flags)))] : []),
             el("div", { class: "machine-stats" }, ...stats),
             el("div", { class: "machine-tools" }, ...tools),
           ),

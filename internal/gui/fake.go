@@ -456,6 +456,11 @@ func (f *FakeEngine) Ping(context.Context) error {
 }
 
 // ListContainers 實作 Engine。
+// ServerVersion 回固定版本，讓 Machines 頁的 engine card 有版本可顯示。
+func (f *FakeEngine) ServerVersion(context.Context) (dockerapi.Version, error) {
+	return dockerapi.Version{Version: "27.3.1"}, nil
+}
+
 func (f *FakeEngine) ListContainers(_ context.Context, all bool) ([]dockerapi.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
