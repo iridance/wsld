@@ -16,7 +16,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 `wsld status` 退出碼：0 就緒、3 引擎未就緒、4 API 無回應（見 [TESTING.md](TESTING.md)）。`wsld status` 與 GUI 的狀態輪詢只在 distro 已執行時才查 systemd／docker，不會把停止中的 distro 叫醒。
 
-`loginctl enable-linger` 已由 bootstrap 開啟，避免最後一個 WSL 終端關閉時 systemd user session 被回收；但 **WSL VM 本身**閒置關機不在此控制範圍，這是 WSL 的行為。
+一般帳號的 `loginctl enable-linger` 已由 bootstrap 開啟，避免最後一個 WSL 終端關閉時 systemd user session 被回收（專用 engine 以 root 執行 dockerd，不需要）；但 **WSL VM 本身**閒置關機不在此控制範圍，這是 WSL 的行為。
 
 **主要機器不會被閒置回收（0.17.2）**：WSL 在最後一個 `wsl.exe` session 結束後約 20 秒就回收 distro（systemd 服務、dockerd 都不算 session）。wsld-gui（含縮到系統匣）替 **engine** 掛一個常駐的 `wsl -d <distro> -- sleep infinity` session，所以 engine 會一直執行；client 不保活，閒置後仍會被回收。限制：保活 session 屬於 wsld-gui 程序，Tray「結束」、程序被結束或 Windows 重開機後就沒有了（`wsld start` 是一次性命令，也無法保活）；使用者在 Machines 明確停止主要機器後，不會被自動重新喚醒，要再按「啟動」。
 
@@ -119,7 +119,7 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 - GUI 的 Machines 視圖列出 `wsl -l -v` 的所有發行版；標籤標示 **active**（目前管理）與 **default**（WSL 預設）。
 - **單一 engine**：沒有「設為主要」或切換機器；Docker 一律走 engine。Machines 頁把 Engine **單獨分一組放在最上面**，它不能停止、取消管理或刪除（GUI 沒有這些按鈕，API／CLI 回 409／錯誤）；只有它沒在跑時才出現「啟動」，其餘由 wsld 自動維持。右側 Info 顯示 `.wslconfig`（memory／processors）、`/etc/wsl.conf`、API endpoint、CPU／Mem 用量摘要；可 Open folder／Terminal（user home）、取消管理、unregister（打名稱確認）。
-- 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。已有共用 engine 時，建立完成後會**直接加入為 client**（bootstrap：只裝 docker CLI、docker context、曝露工具，不需要 systemd，所以新 distro 不必為此 `wsl --shutdown`；進度條會顯示「正在加入共用 engine…」）。加入失敗不影響已安裝的 distro：通知會列出原因，可在卡片按「共用 engine」重試。API 的 `join_engine: false` 可略過加入；還沒有 engine 時只安裝，卡片上可「設為 engine」。支援 Ubuntu/Debian、Arch、openSUSE 系。
+- 「新增機器」執行 `wsl --install -d <name> --no-launch`（會跳過發行版第一次啟動時建立帳號與密碼的步驟）。因此對話框會一併詢問 **Linux 帳號**（預設依 Windows 使用者名稱）與**密碼**。安裝完成後 wsld 會 `useradd` 建立帳號、加入 sudo／wheel、以 `chpasswd` 設定密碼，並把 `/etc/wsl.conf` 的 `[user] default` 設為該帳號。已有共用 engine 時，建立完成後會**直接加入為 client**（bootstrap：只裝 docker CLI、docker context、曝露工具，不需要 systemd，所以新 distro 不必為此 `wsl --shutdown`；進度條會顯示「正在加入共用 engine…」）。加入失敗不影響已安裝的 distro：通知會列出原因，可在卡片按「共用 engine」重試。API 的 `join_engine: false` 可略過加入；還沒有 engine 時只安裝（engine 會由 wsld 自動建立，之後再按「共用 engine」）。支援 Ubuntu/Debian、Arch、openSUSE 系。
   - 密碼只經由 stdin 交給發行版內的 `chpasswd`，不會出現在指令參數中，也不會寫入設定檔或 log。
   - 密碼留空則帳號沒有密碼，`sudo` 無法使用；事後可補設：`wsl -d <machine> -u root passwd <帳號>`。
   - CLI `wsld init`（以及 `start`／`use` 觸發的初始化）遇到只有 root 的發行版、需要新建帳號時，會以隱藏輸入詢問密碼（輸入兩次確認，留空略過）；非互動環境可用 `wsld init --distro <name> --password-stdin`，從 stdin 第一行讀取。既有帳號的密碼一律不更動。
@@ -129,8 +129,9 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 
 預設每個 distro 各自有一個 dockerd，image／volume／container 各存一份。要共用就指定**一個 engine**，其他當 **client**：
 
-- **GUI**：Machines 頁，沒有 engine 時其他機器顯示「設為 engine」；有 engine 後顯示「共用 engine」（設為 client）。卡片上有 Engine／Client 標籤。
-- **CLI**：`wsld init --distro docker-engine --role engine`，再 `wsld init --distro Debian1 --role client`。建議 engine 用新裝的乾淨 distro，例如 `wsl --install -d Ubuntu --name docker-engine`（GUI「新增機器」亦可）；也可以把已裝好 docker 的機器直接設為 engine，bootstrap 會沿用既有安裝並補上共用 socket（此路徑尚未實測）。
+- **engine 由 wsld 自動建立**：第一次開 wsld-gui（或第一個需要 Docker 的 CLI 指令）會 `wsl --install Debian --name docker-engine` 並以專門流程設定：以 root 執行 dockerd，不建 Linux 帳號（終端與資料夾開在 `/root`）。一般 distro 不能變成 engine。舊版建立、記錄了一般帳號的 engine 照舊使用原帳號。
+- **GUI**：Machines 頁其他機器顯示「共用 engine」（設為 client）。卡片上有 Client 標籤。
+- **CLI**：`wsld init --distro Debian1`（沒有 engine 時會先自動建立 docker-engine）。
 - **保活**：engine 由 wsld-gui 掛著 `wsl -d … -- sleep infinity`，避免 WSL 閒置回收。**只在 wsld-gui（含系統匣）執行時有效**；只用 CLI 時 engine 閒置後會被回收，下一個需要 Docker 的指令會自動再帶起。
 - **doctor**：多檢查 `engine_socket`（`/mnt/wsl/wsld/docker.sock` 存在）與各 `client_<distro>`（context 為 `wsld`、沒有本機 dockerd 並存）；停止中的 client 不會被喚醒檢查。
 

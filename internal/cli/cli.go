@@ -232,9 +232,8 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	var opts lifecycle.InitOptions
 	fs.StringVar(&opts.Distro, "distro", "", "WSL distro to use (default: existing Ubuntu)")
 	fs.StringVar(&opts.User, "user", "", "Linux user (default: distro default user)")
-	fs.IntVar(&opts.Port, "port", 0, "starting API port (default 23750)")
 	fs.BoolVar(&opts.NoCompose, "no-compose", false, "skip docker-compose-plugin")
-	fs.StringVar(&opts.Role, "role", "", "engine = dedicated shared dockerd distro; client = docker CLI only, uses the engine (default: standalone)")
+	fs.StringVar(&opts.Role, "role", "client", "client = docker CLI only, uses the shared engine (the engine itself is the docker-engine distro wsld creates)")
 	fs.BoolVar(&opts.SkipInstall, "skip-install", false, "do not run wsl --install when no Ubuntu exists")
 	fs.IntVar(&opts.VHDSizeGB, "vhd-size", wsl.DefaultVHDSizeGB, "disk limit in GB when installing Ubuntu (0 = WSL default, 1 TB)")
 	pwStdin := fs.Bool("password-stdin", false, "read the password for a newly created Linux user from stdin (first line)")
@@ -244,13 +243,17 @@ func (a *App) cmdInit(ctx context.Context, args []string) error {
 	if opts.VHDSizeGB != 0 && !wsl.ValidVHDSizeGB(opts.VHDSizeGB) {
 		return fail(ExitUsage, errors.New(i18n.T("gui.machines.vhd_invalid", wsl.MinVHDSizeGB, wsl.MaxVHDSizeGB)))
 	}
-	if opts.Role != "" && opts.Role != config.RoleEngine && opts.Role != config.RoleClient {
-		return fail(ExitUsage, fmt.Errorf("--role must be %q or %q", config.RoleEngine, config.RoleClient))
+	if opts.Role != config.RoleClient {
+		return fail(ExitUsage, errors.New(i18n.T("lc.init_engine_dedicated", opts.Distro)))
 	}
 	opts.Password = a.newUserPassword(*pwStdin)
+	// engine 走自己的流程：沒有就先建立 docker-engine，再把指定的 distro 加入成 client
+	if err := a.ensureEngine(ctx); err != nil {
+		return err
+	}
 	cfg, err := config.Load(a.ConfigPath)
 	if err != nil {
-		cfg = config.Default()
+		return fail(ExitError, errors.New(i18n.T("cli.config_invalid", err)))
 	}
 	m := a.manager(cfg, nil)
 	newCfg, err := m.Init(ctx, opts)

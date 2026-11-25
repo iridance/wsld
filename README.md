@@ -51,8 +51,7 @@ wsld init
 
 ```powershell
 # 沒有 start／use：需要 Docker 的指令（ps、logs、exec…）會自動帶起共用 engine，首次使用會自動建立 docker-engine
-wsld init --distro <d> --role engine   # 專用 dockerd distro：全部 distro 共用同一個引擎
-wsld init --distro <d> --role client   # 只裝 docker CLI，連到共用 engine
+wsld init --distro <d>     # 把 distro 加入成 client（只裝 docker CLI，連到共用 engine；沒有 engine 時先自動建立 docker-engine）
 wsld unmanage <distro>     # 停 docker 並刪 profile（保留 WSL）
 wsld unregister <d> --confirm <d>
 wsld resize-disk <d> 60     # 調整磁碟上限（GB；需要關閉 WSL 時會說明，確認後加 --shutdown）

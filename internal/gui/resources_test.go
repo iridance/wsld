@@ -947,54 +947,47 @@ func TestOnlyEngineIsKeptAlive(t *testing.T) {
 	}
 }
 
-func TestMachineRoleEngineAndClient(t *testing.T) {
-	e := newEnv(t, "")
-	if err := config.Save(e.cfgP, config.Default()); err != nil { // 首次使用：尚無任何 machine
-		t.Fatal(err)
-	}
+// 角色只能設為 client：engine 一律是 wsld 自動建立的專用 distro。
+func TestMachineRoleOnlyAcceptsClient(t *testing.T) {
+	e := newEnv(t, "") // Ubuntu-26.04 是 engine
 	fw := NewFakeWSL()
 	fw.AddDistro("Debian1", "Running")
 	e.s.WSL = fw
-	role := func(name, body string) int {
-		resp, _ := e.req(t, http.MethodPost, "/api/machines/"+name+"/role", body)
-		return resp.StatusCode
+	role := func(name, body string) (int, string) {
+		resp, b := e.req(t, http.MethodPost, "/api/machines/"+name+"/role", body)
+		return resp.StatusCode, string(b)
 	}
-
-	if got := role("Ubuntu-26.04", `{"role":"bogus"}`); got != http.StatusBadRequest {
+	if got, _ := role("Debian1", `{"role":"bogus"}`); got != http.StatusBadRequest {
 		t.Fatalf("bogus role = %d", got)
 	}
-	if got := role("Nope", `{"role":"engine"}`); got != http.StatusNotFound {
+	if got, b := role("Debian1", `{"role":"engine"}`); got != http.StatusBadRequest || !strings.Contains(b, "docker-engine") {
+		t.Fatalf("engine role = %d %s", got, b)
+	}
+	if got, _ := role("Nope", `{"role":"client"}`); got != http.StatusNotFound {
 		t.Fatalf("unknown distro = %d", got)
 	}
-	if got := role("Debian1", `{"role":"client"}`); got != http.StatusConflict {
-		t.Fatalf("client without engine = %d", got)
-	}
-	if got := role("Ubuntu-26.04", `{"role":"engine"}`); got != http.StatusOK {
-		t.Fatalf("engine = %d", got)
-	}
-	if got := role("Debian1", `{"role":"engine"}`); got != http.StatusConflict {
-		t.Fatalf("second engine = %d", got)
-	}
-	if got := role("Debian1", `{"role":"client"}`); got != http.StatusOK {
+	if got, _ := role("Debian1", `{"role":"client"}`); got != http.StatusOK {
 		t.Fatalf("client = %d", got)
-	}
-
-	_, b := e.req(t, http.MethodGet, "/api/machines", "")
-	var m MachinesResponse
-	_ = json.Unmarshal(b, &m)
-	roles := map[string]string{}
-	for _, x := range m.Machines {
-		roles[x.Name] = x.Role
-	}
-	if roles["Ubuntu-26.04"] != "engine" || roles["Debian1"] != "client" || roles["docker-desktop"] != "" {
-		t.Fatalf("roles = %v", roles)
 	}
 	c, _ := e.s.LoadConfig()
 	if c.Active != "Ubuntu-26.04" {
 		t.Fatalf("making a client must not steal active, got %q", c.Active)
 	}
-	if cm, _ := c.FindMachine("Debian1"); cm.APIEndpoint != c.APIEndpoint {
-		t.Fatalf("client shares the engine endpoint: %q vs %q", cm.APIEndpoint, c.APIEndpoint)
+	if cm, _ := c.FindMachine("Debian1"); cm.Role != config.RoleClient || cm.APIEndpoint != c.APIEndpoint {
+		t.Fatalf("client shares the engine endpoint: %+v vs %q", cm, c.APIEndpoint)
+	}
+}
+
+func TestMachineRoleClientNeedsAnEngine(t *testing.T) {
+	e := newEnv(t, "")
+	if err := config.Save(e.cfgP, config.Default()); err != nil { // 尚無任何 machine
+		t.Fatal(err)
+	}
+	fw := NewFakeWSL()
+	fw.AddDistro("Debian1", "Running")
+	e.s.WSL = fw
+	if resp, _ := e.req(t, http.MethodPost, "/api/machines/Debian1/role", `{"role":"client"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("client without engine = %d", resp.StatusCode)
 	}
 }
 

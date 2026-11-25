@@ -47,7 +47,7 @@
 - **磁碟用量鈕**（`usage-btn`）：Containers／Images／Volumes／Machines 頁標題摘要旁一顆 28px 高的鈕：迷你分段長條（`usage-bar`）＋該頁總量（`usage-total`）＋下拉箭頭，固定一列、不隨項目數變高，不另佔列表上方的高度。點開（`aria-expanded`）浮出明細 `usage-pop`：每項一行（`usage-part`：色塊、名稱、大小、占比），名稱過長截斷並有 title；Esc 收起且焦點回到鈕上，點外面也收起；列表週期刷新與換頁時明細維持／收起。每頁只列自己那一類的每一項：容器頁＝每個 compose 專案（整組加總）與每個未分組容器的可寫層；映像頁＝每個映像；Volume 頁＝每個 volume（未統計者不列）；Machines＝每台機器的 ext4.vhdx。最大的 5 項各一段，其餘併為「其他（N）」；5 項依名稱排序後依序取 `--series-1..5`（dataviz 參考調色盤前 5 槽，light／dark 各一組），長條與明細同一順序，大小些微變動不換色。滑過長條分段有 title（名稱・大小・占比）。視窗 ≤ 1100px 時迷你長條縮為 56px、搜尋欄 220px，≤ 860px 只留總量，避免標題列換行。沒有大小可顯示（引擎未就緒、df 尚未回來）時不顯示。
 - **Images**：分段篩選（使用中／未使用／懸空；daemon 未統計 `Containers=-1` 時歸「未統計」不硬猜）＋清除未使用。
 - **容器與 Volume 大小**：Containers 列表有 Size 欄（可寫層；title 顯示含映像的虛擬大小 `SizeRootFs`），compose 群組列顯示該組加總；Volumes 列表有 Size 欄（未統計顯示「–」）。總量在頁標題旁的磁碟用量鈕。大小來自 `GET /api/disk`（Docker `/system/df`）；後端快取 15 秒（`/system/df` 會對 volume 跑 du），刪除／prune／啟停後失效；查詢失敗不影響列表。Networks、Settings 不佔磁碟，不顯示。
-- **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）／**上限**（`machine-disk-limit`，讀 VHDX 標頭的虛擬容量）、Engine 單獨一組置頂（不可停止／刪除）、其他發行版在下一組；Engine／Client 標籤（「設為 engine」「共用 engine」按鈕）；**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止 engine 前會確認（Docker 與容器一併停止，且 wsld 不再自動拉起）。**engine 保活**：wsld-gui 替 engine 掛一個常駐 `wsl -d <name> -- sleep infinity`（0.17.2），避免 WSL 閒置約 20 秒後回收；停止主要機器時放掉，之後不自動重新喚醒。
+- **Machines**：每個發行版一張卡片（狀態、WSL 版本、**磁碟**＝ext4.vhdx 在 Windows 上的檔案大小（讀 `HKCU\…\Lxss` 登錄檔，停止中也讀得到、不喚醒）／**上限**（`machine-disk-limit`，讀 VHDX 標頭的虛擬容量）、Engine 單獨一組置頂（不可停止／刪除）、其他發行版在下一組；Client 標籤與「共用 engine」按鈕（engine 一律是 wsld 自動建立的專用 docker-engine，一般機器不能設為 engine）；**啟動／停止**、Info、資料夾、終端、刪除）。啟動＝`wsl -d <name> -- true`（已納管的由 systemd 帶起 docker.service）；停止＝已納管的先 `systemctl stop docker` 再 `wsl --terminate`，停止 engine 前會確認（Docker 與容器一併停止，且 wsld 不再自動拉起）。**engine 保活**：wsld-gui 替 engine 掛一個常駐 `wsl -d <name> -- sleep infinity`（0.17.2），避免 WSL 閒置約 20 秒後回收；停止主要機器時放掉，之後不自動重新喚醒。
 - **Settings**：「外觀」（主題、語言）「行為」（開機自啟動、刷新間隔、終端 shell）「網路」（區網存取）「關於」（版本、GitHub）四組 SettingsCard（左標題＋說明、右控制項）；Save 在頁標題列右側。
 - **網路 › 區網存取**（`settings-lan-group`）：
   - 不經 Save，**即時套用**、不跳 wsld 確認框。開關 `settings-lan` → `PUT /api/lan {enabled}`（寫入 `lan_access`）；不提權。已授權防火牆時 wsld-gui 立即在內網 IP 監聽；`firewall` 為 `missing`／`blocked` 時**不監聽**（避免 Windows 自己跳安全性警訊），並接著開啟防火牆說明對話框。wsld-gui 啟動時不提權。
@@ -85,7 +85,7 @@
 | Start／Stop／Remove | pending 回饋；Remove 可含 running（確認會停） | `list`（Remove 隨 0.5） |
 | Logs／Exec | tail 100；Live；xterm exec | `panels.spec.ts` |
 | Images／Volumes／Networks | 同既有；列高打磨 | `views.spec.ts` |
-| Machines | Engine／Client 標籤與「設為 engine」「共用 engine」、**啟動／停止**（play／stop；停止 engine 需確認，停止後 wsld 不會自動拉起）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
+| Machines | Client 標籤與「共用 engine」（沒有「設為 engine」）、**啟動／停止**（play／stop；停止 engine 需確認，停止後 wsld 不會自動拉起）、folder、terminal（底部 panel、home）、**刪除發行版**（trash、打名稱確認＝unregister）、右側 Info、Add | `views`（隨 0.5；啟動／停止隨 0.12） |
 | Machines Info | `.wslconfig` memory／processors、`wsl.conf`（停止中不讀——`wsl -d` 會把機器開起來——改顯示「啟動機器後才能查看」，且停止中不輪詢用量；啟動／停止後自動更新）、**tcp endpoint**、CPU／Mem 摘要、磁碟（執行中：`df /` 長條；VHDX 大小）、**磁碟上限**＋調整鈕（對話框：GB；需要關閉 WSL 時列出會被停止的機器、按鈕改為「關閉 WSL 並套用」——目標執行中時一開始就顯示，已停止但 VHD 仍被占用時於第一次套用後顯示；執行中顯示「最小可設約 N GB」（`resize-info`）並擋下更小的值，伺服器回 `too_small` 時也記住最小值；縮小時的備份提醒；wsl 錯誤與「從 WSL 內執行」的拒絕訊息留在對話框；調整期間暫停 Info 輪詢）；取代 ⓘ dialog | 隨 0.5；磁碟 `disk.spec.ts`；上限 `vhd.spec.ts` |
 | Machines › 釋放磁碟空間 | 卡片的縮小箭頭鈕（`btn-machine-compact-<name>`）：磁碟未被占用直接壓縮；執行中先確認（列出會被停止的機器，「關閉 WSL 並釋放空間」），停止但仍被占用則於第一次嘗試後確認；完成通知釋放量與 Windows 上的佔用；調整大小成功後也會一併壓縮並在通知中報告。這兩種結果通知**不自動消失**（作業常要將近一分鐘，使用者可能已切走），按右側 ✕ 關閉；其他通知仍 8 秒後消失 | `vhd.spec.ts` |
 | Add machine › 磁碟上限 | 與自訂名稱同列的 GB 欄（預設 60；留空＝WSL 預設 1 TB；8–16384 以外顯示錯誤且不能安裝） | `vhd.spec.ts` |
@@ -174,7 +174,7 @@ Playwright 無法涵蓋 Wails／systray 原生行為；Windows 手測（基底�
 1. `dist\wsld-gui.exe` 開啟後標題列「已連線」，列表顯示容器；頂部分頁切視圖。
 2. 按 X → 縮 Tray；Tray「開啟主視窗」可還原；`--tray`／「結束」行為同既有。
 3. Settings（頂部齒輪）→「開機自啟動」toggle → HKCU Run；Theme radio 切換可見。
-4. Machines：設為 engine／client、Info（tcp／wsl 設定）、folder／terminal；unregister 需打名稱（0.5）。
+4. Machines：共用 engine（設為 client）、Info（tcp／wsl 設定）、folder／terminal；unregister 需打名稱（0.5）。
 
 ## 圖示與 Windows 資源
 

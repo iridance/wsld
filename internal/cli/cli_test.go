@@ -206,8 +206,19 @@ func TestCommandsRequireConfigExceptInit(t *testing.T) {
 	}
 }
 
-func TestInitWritesConfig(t *testing.T) {
+// withEngineDistro：docker-engine 已存在（停止中），engine bootstrap 以 root 選到 port；Ubuntu-26.04 以 irice 加入成 client。
+func withEngineDistro(h *harness, port string) {
+	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n  docker-engine Stopped 2\r\n* Ubuntu-26.04 Running 2\r\n")
+	h.wsl.resp["-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user root --port 23750 --role engine"] = "WSLD_API_PORT=" + port + "\n"
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --role client"] = "[wsld] done\n"
+	h.wsl.resp["-d docker-engine -- true"] = ""
+	h.wsl.resp["-d docker-engine -- systemctl is-system-running"] = "running\n"
+	h.wsl.resp["-d docker-engine -- systemctl is-active docker"] = "active\n"
+}
+
+func TestInitCreatesTheEngineFirstThenJoinsTheDistroAsAClient(t *testing.T) {
 	h := newHarness(t, false)
+	withEngineDistro(h, "23750")
 	if code := h.run("init"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
@@ -215,35 +226,49 @@ func TestInitWritesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Distro != "Ubuntu-26.04" || c.User != "irice" || c.APIEndpoint != "tcp://127.0.0.1:23750" {
-		t.Fatalf("cfg = %+v", c)
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "docker-engine" || e.User != "root" || c.Active != "docker-engine" {
+		t.Fatalf("engine = %+v active=%q", c.Machines, c.Active)
+	}
+	if m, ok := c.FindMachine("Ubuntu-26.04"); !ok || m.Role != config.RoleClient || m.User != "irice" || m.APIEndpoint != "tcp://127.0.0.1:23750" {
+		t.Fatalf("client = %+v", m)
 	}
 	if !strings.Contains(h.out.String(), "config written") {
 		t.Fatalf("out = %q", h.out.String())
 	}
 }
 
-func TestInitPortChangeIsPersisted(t *testing.T) {
+func TestInitClientFollowsTheEnginePort(t *testing.T) {
 	h := newHarness(t, false)
-	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine"] = "WSLD_API_PORT=23751\n"
+	withEngineDistro(h, "23751")
 	if code := h.run("init"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
 	c, _ := config.Load(h.app.ConfigPath)
-	if c.APIEndpoint != "tcp://127.0.0.1:23751" {
-		t.Fatalf("endpoint = %s", c.APIEndpoint)
+	if m, _ := c.FindMachine("Ubuntu-26.04"); c.APIEndpoint != "tcp://127.0.0.1:23751" || m.APIEndpoint != "tcp://127.0.0.1:23751" {
+		t.Fatalf("endpoints: engine %s client %s", c.APIEndpoint, m.APIEndpoint)
 	}
 }
 
 func TestInitFlags(t *testing.T) {
 	h := newHarness(t, false)
+	withEngineDistro(h, "23750")
 	h.wsl.resp["-d Ubuntu-26.04 -u root -- id -u bob"] = "1000\n"
-	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --port 24000 --no-compose --role engine"] = "WSLD_API_PORT=24000\n"
-	if code := h.run("init", "--user", "bob", "--port", "24000", "--no-compose"); code != 0 {
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user bob --no-compose --role client"] = ""
+	if code := h.run("init", "--user", "bob", "--no-compose"); code != 0 {
 		t.Fatalf("code=%d err=%s", code, h.errb.String())
 	}
 	if code := newHarness(t, false).run("init", "--bogus"); code != 2 {
 		t.Fatalf("bad flag code=%d", code)
+	}
+}
+
+func TestInitRefusesTheEngineRole(t *testing.T) {
+	h := newHarness(t, false)
+	if code := h.run("init", "--distro", "Ubuntu-26.04", "--role", "engine"); code != ExitUsage || !strings.Contains(h.errb.String(), "docker-engine") {
+		t.Fatalf("code=%d err=%s", code, h.errb.String())
+	}
+	if len(h.wsl.calls) != 0 {
+		t.Fatalf("must not touch WSL: %v", h.wsl.calls)
 	}
 }
 
@@ -440,6 +465,7 @@ func TestEngineCommandAutoInitsPlaceholderEngine(t *testing.T) {
 	if err := config.Save(h.app.ConfigPath, c); err != nil {
 		t.Fatal(err)
 	}
+	h.wsl.resp["-d Ubuntu-26.04 -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user root --port 23750 --role engine"] = "WSLD_API_PORT=23750\n"
 	if code := h.run("ps"); code != 0 {
 		t.Fatalf("code=%d err=%q out=%q", code, h.errb.String(), h.out.String())
 	}
@@ -468,9 +494,7 @@ func TestEngineCommandSkipsBringUpWhenAPIIsUp(t *testing.T) {
 func TestEngineCommandCreatesWsldEngineOnFirstUse(t *testing.T) {
 	h := newHarness(t, false)
 	h.wsl.resp["--list --verbose"] = utf16("  NAME STATE VERSION\r\n  docker-engine Running 2\r\n")
-	h.wsl.resp["-d docker-engine -u root -- id -u irice"] = "1000\n"
-	h.wsl.resp["-d docker-engine -- id -un"] = "irice\n"
-	h.wsl.resp["-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user irice --port 23750 --role engine"] = "WSLD_API_PORT=23750\n"
+	h.wsl.resp["-d docker-engine -u root -- bash -c cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh --user root --port 23750 --role engine"] = "WSLD_API_PORT=23750\n"
 	h.wsl.resp["-d docker-engine -- true"] = ""
 	h.wsl.resp["-d docker-engine -- systemctl is-system-running"] = "running\n"
 	h.wsl.resp["-d docker-engine -- systemctl is-active docker"] = "active\n"
@@ -482,7 +506,7 @@ func TestEngineCommandCreatesWsldEngineOnFirstUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := c.EngineMachine(); !ok || e.Distro != "docker-engine" || !e.Ready() {
+	if e, ok := c.EngineMachine(); !ok || e.Distro != "docker-engine" || !e.Ready() || e.User != "root" {
 		t.Fatalf("engine = %+v %v", e, ok)
 	}
 }

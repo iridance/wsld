@@ -10,7 +10,7 @@ var messages = map[string]map[Lang]string{
 Usage: wsld <command> [options]
 
 Commands:
-  init       Set a distro up: the first one becomes the shared engine, later ones become clients (--role engine|client)
+  init       Add a distro as a client of the shared engine (creates the docker-engine distro first if needed)
   unmanage   Stop docker for a machine and remove its profile (keeps WSL)
   unregister Unregister a WSL distro (requires --confirm <name>)
   resize-disk Change a machine's disk limit: resize-disk [--shutdown] <distro> <GB> (may need to shut WSL down)
@@ -38,7 +38,7 @@ Config: %s`,
 用法：wsld <command> [options]
 
 命令：
-  init       設定 distro：第一個成為共用 engine，之後的成為 client（--role engine|client）
+  init       把 distro 加入成共用 engine 的 client（需要時先建立 docker-engine distro）
   unmanage   停止該 machine 的 docker 並刪除 profile（保留 WSL）
   unregister 解除註冊 WSL 發行版（需 --confirm <名稱>）
   resize-disk 調整機器的磁碟上限：resize-disk [--shutdown] <distro> <GB>（可能需要關閉 WSL）
@@ -274,6 +274,8 @@ Config: %s`,
 	"lc.init_unsupported":         {EN: "%s is not a supported distro family; wsld supports Ubuntu/Debian, Arch and openSUSE", ZhTW: "%s 不是支援的發行版系列；wsld 支援 Ubuntu/Debian、Arch 與 openSUSE"},
 	"lc.init_exit4":               {EN: "Docker verification failed after bootstrap; see wsl -d %s -- journalctl -u docker -n 50", ZhTW: "bootstrap 後 Docker 驗證失敗；wsl -d %s -- journalctl -u docker -n 50"},
 	"lc.init_failed":              {EN: "bootstrap failed: %v", ZhTW: "bootstrap 失敗：%v"},
+	"lc.init_engine_dedicated":    {EN: "%s cannot become the engine: the engine is the dedicated docker-engine distro wsld creates by itself (use it as a client instead)", ZhTW: "%s 不能成為 engine：engine 一律是 wsld 自動建立的專用 docker-engine distro（請改為 client）"},
+	"doctor.linger.not_needed":    {EN: "not needed (the engine runs Docker as root)", ZhTW: "不需要（engine 以 root 執行 Docker）"},
 	"lc.init_engine_exists":       {EN: "engine distro is already %q; only one shared engine is allowed", ZhTW: "已有 engine distro %q；共用 engine 只能有一個"},
 	"lc.init_client_needs_engine": {EN: "set up the engine first (wsld init --role engine) before adding client %s", ZhTW: "請先建立 engine（wsld init --role engine），再加入 client %s"},
 	"lc.init_client_is_engine":    {EN: "%s is the engine and cannot also be a client", ZhTW: "%s 已是 engine，不能同時當 client"},
@@ -670,11 +672,8 @@ Config: %s`,
 	"gui.machines.expose_in_use":                {EN: "Running containers still use this distro's files: %s. Stop them and release the exposure?", ZhTW: "仍有執行中的容器在使用這個 distro 的檔案：%s。要先停止它們並釋放曝露嗎？"},
 	"gui.machines.expose_stop_release":          {EN: "Stop containers and release", ZhTW: "停止容器並釋放"},
 	"gui.machines.expose_released":              {EN: "Released the exposure of %s", ZhTW: "已釋放 %s 的曝露"},
-	"gui.machines.make_engine":                  {EN: "Set as engine", ZhTW: "設為 engine"},
 	"gui.machines.make_client":                  {EN: "Use shared engine", ZhTW: "共用 engine"},
-	"gui.machines.make_engine_prompt":           {EN: "Make this distro the dedicated Docker engine shared by all other distros? Docker Engine is installed here if missing.", ZhTW: "把這個 distro 設為專用 Docker engine，供其他 distro 共用？缺少時會在此安裝 Docker Engine。"},
 	"gui.machines.make_client_prompt":           {EN: "Install only the docker CLI here and use the shared engine? A local dockerd, if any, is left untouched but should be disabled.", ZhTW: "只在此安裝 docker CLI 並改用共用 engine？既有的本機 dockerd 不會被動到，但建議停用。"},
-	"gui.machines.role_engine":                  {EN: "Engine", ZhTW: "Engine"},
 	"gui.machines.role_client":                  {EN: "Client", ZhTW: "Client"},
 	"gui.machines.role_engine_tip":              {EN: "Runs the one dockerd shared by all clients", ZhTW: "執行全部 client 共用的 dockerd"},
 	"gui.machines.role_client_tip":              {EN: "Docker CLI only; talks to the shared engine", ZhTW: "只有 docker CLI，連到共用 engine"},

@@ -309,22 +309,20 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 		d = found
 	}
 
-	// 沒有獨立模式：未指定角色時，還沒有 engine 就成為 engine，已有 engine 就當 client（該 distro 本身就是 engine 時維持 engine）。
-	if opts.Role == "" {
-		switch cur, has := cfg.EngineMachine(); {
-		case !has || strings.EqualFold(cur.Distro, d.Name):
-			opts.Role = config.RoleEngine
-		default:
-			opts.Role = config.RoleClient
+	// engine 走專門流程（InitEngine）：只有已登記的 engine 本身可以重跑；一般 distro 不能變成 engine。
+	// 未指定角色＝client（engine 由 wsld 自動建立，見 EnsureEngine）。
+	if opts.Role == config.RoleEngine {
+		if cur, ok := cfg.EngineMachine(); ok && strings.EqualFold(cur.Distro, d.Name) {
+			return m.InitEngine(ctx, d.Name, opts)
 		}
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_engine_dedicated", d.Name))
+	}
+	if opts.Role == "" {
+		opts.Role = config.RoleClient
 	}
 
 	var engine config.Machine
 	switch opts.Role {
-	case config.RoleEngine:
-		if cur, ok := cfg.EngineMachine(); ok && !strings.EqualFold(cur.Distro, d.Name) {
-			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_engine_exists", cur.Distro))
-		}
 	case config.RoleClient:
 		cur, ok := cfg.EngineMachine()
 		if !ok || !cur.Ready() {
@@ -371,14 +369,87 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 	}
 	cfg.User = user
 
-	port := opts.Port
-	if opts.Role == config.RoleClient {
-		port = -1 // client 不跑 dockerd，不需要埠
+	// client 不跑 dockerd，不需要埠
+	bootArgs := []string{"--user", user}
+	if opts.NoCompose {
+		bootArgs = append(bootArgs, "--no-compose")
 	}
+	bootArgs = append(bootArgs, "--role", config.RoleClient)
+	if _, err := m.runBootstrap(ctx, d.Name, bootArgs); err != nil {
+		return cfg, err
+	}
+	cfg.UpsertMachine(config.Machine{Distro: d.Name, User: user, APIEndpoint: engine.APIEndpoint})
+	if err := cfg.SetClient(d.Name); err != nil {
+		return cfg, err
+	}
+	return cfg, nil // 不動 active：client 沿用 engine 的 API
+}
+
+// runBootstrap 把 bundle 寫入 distro 暫存再以 root 執行，並把結束碼轉成錯誤。
+// 先寫檔再執行，避免 `bash -s`+stdin 被 systemctl 等指令吞掉腳本。
+func (m *Manager) runBootstrap(ctx context.Context, distro string, args []string) (string, error) {
+	m.print(i18n.T("lc.init_running", distro))
+	m.stage("bootstrapping")
+	var b strings.Builder
+	b.WriteString("cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh")
+	for _, a := range args {
+		b.WriteByte(' ')
+		b.WriteString(shellQuote(a))
+	}
+	out, stderr, err := wsl.RunIn(ctx, m.WSL, distro, "root", bytes.NewReader(m.Bundle), "bash", "-c", b.String())
+	m.write(out)
+	m.write(stderr)
+	if err != nil {
+		switch wsl.ExitCode(err) {
+		case 3:
+			return string(out), &bootstrapExit3{fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_exit3", distro))}
+		case 4:
+			return string(out), fmt.Errorf("%w: %s", ErrAPI, i18n.T("lc.init_exit4", distro))
+		case 5:
+			return string(out), fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_unsupported", distro))
+		default:
+			return string(out), errors.New(i18n.T("lc.init_failed", err))
+		}
+	}
+	return string(out), nil
+}
+
+// bootstrapExit3：systemd 尚未生效（剛寫入 wsl.conf），重開 distro 後再跑一次就會過。
+type bootstrapExit3 struct{ error }
+
+func (e *bootstrapExit3) Unwrap() error { return e.error }
+
+// EngineUser 是專用 engine 的 Linux 使用者：dockerd 是 rootful 系統服務，engine 不需要一般帳號。
+// 舊版建立的 engine 已記錄的使用者照舊沿用（不遷移）。
+const EngineUser = "root"
+
+// InitEngine 是專用 engine 的專門流程（不走一般 distro 的 Init）：不偵測／建立使用者、以 root bootstrap
+// （不加 docker 群組、不開 linger）、選 API 埠、設為 engine＋active，並讓所有 client 沿用新的 endpoint。
+// 新寫入 wsl.conf 的 systemd 尚未生效（結束碼 3）時，終止 distro 後自動重跑一次（專用 distro，沒有使用者的東西會被打斷）。
+func (m *Manager) InitEngine(ctx context.Context, distro string, opts InitOptions) (config.Config, error) {
+	cfg := m.Cfg
+	list, err := wsl.ListDistros(ctx, m.WSL)
+	if err != nil {
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.wsl_unavailable_init", err))
+	}
+	d, ok := wsl.FindDistro(list, distro)
+	if !ok {
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_distro_missing", distro))
+	}
+	if d.Version != 2 {
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_distro_wsl1", d.Name, d.Version))
+	}
+	if cur, ok := cfg.EngineMachine(); ok && !strings.EqualFold(cur.Distro, d.Name) {
+		return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_engine_exists", cur.Distro))
+	}
+	user := EngineUser
+	if pm, ok := cfg.FindMachine(d.Name); ok && pm.User != "" {
+		user = pm.User // 舊 engine：維持原本的帳號
+	}
+	port := opts.Port
 	if port == 0 {
-		// 重 init：優先沿用本 distro 既有埠；新 machine：避開其他 profile 已登記埠。
-		if m, ok := cfg.FindMachine(d.Name); ok && m.APIEndpoint != "" {
-			tmp := config.Config{APIEndpoint: m.APIEndpoint}
+		if pm, ok := cfg.FindMachine(d.Name); ok && pm.APIEndpoint != "" {
+			tmp := config.Config{APIEndpoint: pm.APIEndpoint}
 			if p, err := tmp.APIPort(); err == nil {
 				port = p
 			}
@@ -387,78 +458,45 @@ func (m *Manager) Init(ctx context.Context, opts InitOptions) (config.Config, er
 			port = cfg.NextAPIPort(d.Name)
 		}
 	}
-	busy := cfg.BusyAPIPorts(d.Name)
-
-	bootArgs := []string{"--user", user}
-	if opts.Role != config.RoleClient {
-		bootArgs = append(bootArgs, "--port", strconv.Itoa(port))
-	}
-	if len(busy) > 0 && opts.Role != config.RoleClient {
+	args := []string{"--user", user, "--port", strconv.Itoa(port)}
+	if busy := cfg.BusyAPIPorts(d.Name); len(busy) > 0 {
 		parts := make([]string, len(busy))
 		for i, p := range busy {
 			parts[i] = strconv.Itoa(p)
 		}
-		bootArgs = append(bootArgs, "--busy-ports", strings.Join(parts, ","))
+		args = append(args, "--busy-ports", strings.Join(parts, ","))
 	}
 	if opts.NoCompose {
-		bootArgs = append(bootArgs, "--no-compose")
+		args = append(args, "--no-compose")
 	}
-	if opts.Role != "" {
-		bootArgs = append(bootArgs, "--role", opts.Role)
-	}
-	m.print(i18n.T("lc.init_running", d.Name))
-	m.stage("bootstrapping")
-	// 先把 bundle 寫入 distro 暫存再執行，避免 `bash -s`+stdin 被 systemctl 等指令吞掉腳本。
-	var b strings.Builder
-	b.WriteString("cat > /tmp/wsld-bootstrap.sh && bash /tmp/wsld-bootstrap.sh")
-	for _, a := range bootArgs {
-		b.WriteByte(' ')
-		b.WriteString(shellQuote(a))
-	}
-	out, stderr, err := wsl.RunIn(ctx, m.WSL, d.Name, "root", bytes.NewReader(m.Bundle), "bash", "-c", b.String())
-	m.write(out)
-	m.write(stderr)
-	if err != nil {
-		switch wsl.ExitCode(err) {
-		case 3:
-			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_exit3", d.Name))
-		case 4:
-			return cfg, fmt.Errorf("%w: %s", ErrAPI, i18n.T("lc.init_exit4", d.Name))
-		case 5:
-			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_unsupported", d.Name))
-		default:
-			return cfg, errors.New(i18n.T("lc.init_failed", err))
-		}
-	}
-	if opts.Role == config.RoleClient {
-		cfg.UpsertMachine(config.Machine{Distro: d.Name, User: user, APIEndpoint: engine.APIEndpoint})
-		if err := cfg.SetClient(d.Name); err != nil {
+	args = append(args, "--role", config.RoleEngine)
+	out, err := m.runBootstrap(ctx, d.Name, args)
+	var e3 *bootstrapExit3
+	if errors.As(err, &e3) {
+		if terr := wsl.Terminate(ctx, m.WSL, d.Name); terr != nil {
 			return cfg, err
 		}
-		return cfg, nil // 不動 active：client 沿用 engine 的 API
+		out, err = m.runBootstrap(ctx, d.Name, args)
 	}
-	chosen, ok := ParseBootstrapPort(string(out))
+	if err != nil {
+		return cfg, err
+	}
+	chosen, ok := ParseBootstrapPort(out)
 	if !ok {
 		return cfg, errors.New(i18n.T("lc.init_no_port"))
 	}
 	if chosen != port {
 		m.print(i18n.T("lc.init_port_changed", port, chosen))
 	}
-	cfg.EnsureActive(config.Machine{
-		Distro:      d.Name,
-		User:        user,
-		APIEndpoint: config.EndpointForPort(chosen),
-	})
-	if opts.Role == config.RoleEngine {
-		if err := cfg.SetEngine(d.Name); err != nil {
-			return cfg, err
-		}
-		// client 一律共用 engine 的 endpoint（engine 埠變動或剛遷移完時要跟著改）
-		eng, _ := cfg.EngineMachine()
-		for i := range cfg.Machines {
-			if cfg.Machines[i].Role == config.RoleClient {
-				cfg.Machines[i].APIEndpoint = eng.APIEndpoint
-			}
+	cfg.EnsureActive(config.Machine{Distro: d.Name, User: user, APIEndpoint: config.EndpointForPort(chosen)})
+	if err := cfg.SetEngine(d.Name); err != nil {
+		return cfg, err
+	}
+	// client 一律共用 engine 的 endpoint（engine 埠變動或剛遷移完時要跟著改）
+	eng, _ := cfg.EngineMachine()
+	for i := range cfg.Machines {
+		if cfg.Machines[i].Role == config.RoleClient {
+			cfg.Machines[i].APIEndpoint = eng.APIEndpoint
 		}
 	}
 	return cfg, nil
@@ -528,9 +566,8 @@ func (m *Manager) EnsureEngine(ctx context.Context, opts InitOptions) (config.Co
 			return cfg, fmt.Errorf("%w: %s", ErrNotReady, i18n.T("lc.init_install_failed", name, err))
 		}
 	}
-	opts.Distro, opts.Role = name, config.RoleEngine
 	m.Cfg = cfg
-	return m.Init(ctx, opts)
+	return m.InitEngine(ctx, name, opts)
 }
 
 // activeRole 回傳 active machine 的 Role（重跑 bootstrap 時沿用，避免 engine 被當成獨立 docker 重裝）。

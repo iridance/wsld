@@ -36,9 +36,9 @@ bash scripts/02-bootstrap-docker.sh --dry-run
 | 0 | 檢查 WSL2 核心、發行版系列（Ubuntu/Debian／Arch／openSUSE；先以 `ID` 查[分類表](#發行版分類表)，查無再看 `ID_LIKE`）、使用者存在 | 非 WSL2 exit 3；不支援的系列 exit 5；使用者不存在 exit 2 |
 | 1 | `/etc/wsl.conf` 寫入 `[boot] systemd=true` | 已存在則略過；新寫入時要求 `wsl --shutdown` 後重跑（exit 3） |
 | 2 | Debian：官方 apt 安裝 docker-ce…（apt 來源與 codename 依分類表；表中沒有的衍生版對應回 `linux/ubuntu` 或 `linux/debian`，滾動版用 Debian 穩定版 `trixie`）；Arch：`pacman` 安裝 `docker`／`docker-compose`／`docker-buildx`；openSUSE：`zypper` 安裝 `docker`／`docker-compose`／`docker-buildx` | 已安裝則略過 |
-| 3 | `usermod -aG docker <user>` | 已在群組則略過 |
+| 3 | `usermod -aG docker <user>` | 已在群組則略過；`--user root`（專用 engine）不需要 |
 | 4 | 選埠：從 `--port` 起遞增找空埠；寫 `/etc/docker/daemon.json`（`hosts` = unix socket + `tcp://127.0.0.1:<port>`）與 systemd drop-in 清掉 `-H fd://`（openSUSE 的 `containerd.service` 與 docker 互斥，drop-in 不帶 `--containerd`，由 dockerd 自管 containerd） | 既有 daemon.json 已是同埠或 dockerd 正在監聽則沿用；含其他設定時先備份 `.wsld.bak` |
-| 5 | `systemctl enable --now docker`、`loginctl enable-linger <user>` | — |
+| 5 | `systemctl enable --now docker`、`loginctl enable-linger <user>` | `--user root`（專用 engine）不開 linger（rootful dockerd 是系統服務） |
 | 6 | 驗證 `docker info`、`curl http://127.0.0.1:<port>/_ping` == `OK`、確認未綁非 loopback | 失敗 exit 4 |
 
 結尾輸出機器可讀行，供 Windows 端 `wsld init` 解析：
@@ -57,7 +57,7 @@ WSLD_API_ENDPOINT=tcp://127.0.0.1:23750
 | `--role engine` | 同上表安裝 dockerd；另外 `daemon.json` 的 `hosts` 多一個 `unix:///mnt/wsl/wsld/docker.sock`；`docker.service` drop-in 多 `ExecStartPre`（建 `/mnt/wsl/wsld`、清舊 socket，tmpfs 於 VM 重啟後清空）與 `ExecStartPost chmod 0666`（各 distro 的 docker GID 不同）；`/etc/wsl.conf` 加 `[interop] appendWindowsPath=false`（interop 保留，埠占用偵測需要 `netstat.exe`）；驗證階段確認共用 socket 已出現 |
 | `--role client` | 只裝 CLI 與 plugin（Debian：`docker-ce-cli`、`docker-buildx-plugin`、`docker-compose-plugin`；Arch／openSUSE 沒有獨立 CLI 套件，裝 `docker` 但不 enable）；不選埠、不寫 `daemon.json`；以目標使用者建立並切換 `docker context wsld`（指向共用 socket）。偵測到本機 `docker.service` 仍啟用只警告，不自動停用 |
 
-Windows 端對應 `wsld init --distro <d> --role engine|client`（client 需要先有 engine）。輸出的 `WSLD_API_PORT` 只在非 client 時有意義。
+Windows 端：engine 由 wsld 以專門流程建立（`lifecycle.InitEngine`：`--user root --role engine`，不建 Linux 帳號；新寫入 systemd 回 exit 3 時自動 `wsl --terminate` 後重跑一次），一般 distro 只能經 `wsld init --distro <d>`（或 GUI「共用 engine」）成為 client。舊版建立、記錄了一般帳號的 engine 沿用原帳號。輸出的 `WSLD_API_PORT` 只在 engine 時有意義。
 
 ### 3. Windows 端驗證
 

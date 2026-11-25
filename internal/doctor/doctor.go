@@ -220,8 +220,10 @@ func (c *checker) run(ctx context.Context) {
 		c.skip("loopback_only", i18n.T("doctor.loopback.title"), "engine")
 	}
 
-	// 8. linger
-	if systemdOK {
+	// 8. linger（專用 engine 以 root 執行 rootful dockerd，不需要）
+	if cfg.User == "root" {
+		c.add(Result{ID: "linger", Title: i18n.T("doctor.linger.title"), Level: OK, Detail: i18n.T("doctor.linger.not_needed")})
+	} else if systemdOK {
 		out, _ := c.runIn(ctx, "", "loginctl", "show-user", cfg.User, "--property=Linger", "--value")
 		if out == "yes" {
 			c.add(Result{ID: "linger", Title: i18n.T("doctor.linger.title"), Level: OK})

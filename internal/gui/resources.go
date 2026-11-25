@@ -517,8 +517,9 @@ func (s *Server) applyRole(ctx context.Context, name, role string) (config.Confi
 		return config.Config{}, &roleError{http.StatusInternalServerError, "error", errors.New("config not writable")}
 	}
 	cfg := s.cfg()
-	if eng, has := cfg.EngineMachine(); has && !strings.EqualFold(eng.Distro, name) && role == config.RoleEngine {
-		return config.Config{}, &roleError{http.StatusConflict, "conflict", fmt.Errorf("engine is already %q", eng.Distro)}
+	if role != config.RoleClient {
+		// engine 一律是 wsld 自動建立的專用 distro（lifecycle.EnsureEngine），一般機器不能變成 engine
+		return config.Config{}, &roleError{http.StatusBadRequest, "usage", errors.New(i18n.T("lc.init_engine_dedicated", name))}
 	}
 	if _, has := cfg.EngineMachine(); !has && role == config.RoleClient {
 		return config.Config{}, &roleError{http.StatusConflict, "conflict", errors.New("set up the engine first")}
@@ -582,7 +583,7 @@ func (s *Server) applyRole(ctx context.Context, name, role string) (config.Confi
 	return newCfg, nil
 }
 
-// handleMachineRole POST /api/machines/{name}/role：設為專用 engine 或 client。
+// handleMachineRole POST /api/machines/{name}/role：設為 client（engine 由 wsld 自動建立，不能指定）。
 func (s *Server) handleMachineRole(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.findDistro(w, r)
 	if !ok {
@@ -592,8 +593,8 @@ func (s *Server) handleMachineRole(w http.ResponseWriter, r *http.Request) {
 		Role string `json:"role"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Role != config.RoleEngine && body.Role != config.RoleClient {
-		writeErr(w, http.StatusBadRequest, "usage", errors.New("role must be engine or client"))
+	if body.Role != config.RoleClient {
+		writeErr(w, http.StatusBadRequest, "usage", errors.New(i18n.T("lc.init_engine_dedicated", d.Name)))
 		return
 	}
 	newCfg, rerr := s.applyRole(r.Context(), d.Name, body.Role)

@@ -118,12 +118,19 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 - GUI：Wails → `wsld-gui.exe`
 - 僅正式支援 **windows/amd64**
 
+### 4.3a 專用 engine 的建立流程（0.20.0）
+
+- engine 是 wsld 自動建立的專用 distro（`docker-engine`，Debian），**不走一般 distro 的 `lifecycle.Init`**，而是 `lifecycle.InitEngine`：不偵測／建立 Linux 帳號，以 **root** bootstrap（`--user root --role engine`：不加 docker 群組、不開 linger；dockerd 本來就是 rootful 系統服務），選 API 埠、設為 engine＋active，並讓所有 client 沿用新 endpoint。新寫入 `wsl.conf` 的 systemd 尚未生效（bootstrap exit 3）時自動 `wsl --terminate` 後重跑一次。
+- 一般 distro **不能變成 engine**（GUI 的「設為 engine」、`wsld init --role engine`、`POST /api/machines/{name}/role {"role":"engine"}` 都已移除／拒絕），只能成為 client。
+- 已建立、記錄了一般帳號的 engine（舊版）照舊沿用原帳號，不遷移。
+- 與 k8s-engine 一致：兩個專用 engine 都以 root 執行、終端與資料夾開在 `/root`。
+
 ### 4.4 Distro
 
 - 偵測已安裝 Ubuntu 系列並沿用；否則 `wsl --install` 官方 Ubuntu（`--vhd-size`：`init --vhd-size <GB>`，預設 60，0＝WSL 預設 1 TB）
 - 虛擬磁碟上限（0.17）：允許 8–16384 GB；新增機器以 `wsl --install --vhd-size <n>GB` 指定，既有機器以 `wsl --manage <d> --resize <n>GB` 調整（成功後接著 `--compact`），亦可單獨以 `--compact` 釋放空間；兩者共用 `wsl.WithFreeVHD`。VHD 須未掛在 WSL VM 上；實測 `--terminate` 不會卸下，回 `WSL_E_DISTRO_NOT_STOPPED`（訊息在 stdout），要 `wsl --shutdown`。故目標未執行時先直接試，仍被占用（或目標執行中）則需使用者同意（GUI 409 `needs_shutdown` 附 `running`；CLI `--shutdown`）：停各機 docker → `--shutdown`（被輪詢叫醒時重試，最多 3 次）→ 調整 → 原本執行中的機器 `wsl -d <d> -- true` 開回來（不論成敗）。調整期間 `/config` 不進 distro 執行命令。執行檔位於 `\\wsl.localhost\…`／`\\wsl$\…` 時拒絕關閉 WSL。目標執行中時先以 `findmnt`＋`stat -f -c %S`＋`resize2fs -P` 估計最小上限（區塊數×區塊大小，進位後加 1 GB），小於它就在關閉 WSL 前拒絕（GUI 400 `too_small`＋`min_gb`；`GET …/resize-info` 供對話框顯示）；WSL 回 `New size smaller than minimum (N)` 時換算成同樣的易讀訊息（422 `too_small`）。上限讀 vhdx（Lxss 登錄檔 `BasePath`＋`VhdFileName`）標頭的 Virtual Disk Size metadata，執行中也讀得到、不喚醒 distro
 - `wsl.conf`：`systemd=true`
-- `loginctl enable-linger`：啟用（doctor 會查）
+- `loginctl enable-linger`：一般帳號啟用（doctor 會查）；專用 engine 以 root 執行，不需要
 - **0.5**：可管理多個 distro profile，同一時間一個 active（見 Roadmap Phase 5）
 
 ### 4.5 區網存取（LAN access）
@@ -220,7 +227,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 
 | 命令 | 行為 |
 |------|------|
-| `init` | distro 策略、bootstrap、寫／更新該 machine profile（含 API port）並可設 active |
+| `init` | 把 distro 加入成 client（偵測／建立 Linux 帳號、裝 docker CLI 與 context）；沒有 engine 時先自動建立專用 `docker-engine`。`--role engine` 已移除：engine 一律走專門流程（§4.3a） |
 | `start` | 喚醒 active distro、ensure docker、探測 API |
 | `use` | 切換主要 machine（與 GUI「設為主要」同寫 config） |
 | `unmanage` | 停該 distro docker 後刪 profile（保留 WSL） |
@@ -277,6 +284,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 - Docker Desktop 是否在跑（建議勿雙引擎混用）
 - API 埠占用／config 中的 endpoint 說明
 - 提醒：repo 應放在 WSL `$HOME`，非 `C:\`
+- linger：engine 帳號為 root 時回報「不需要」
 - 區網存取：開啟時列出（Info）；偵測到 0.9.0 遺留的 mirrored 模式時 Warn（提示 `wsld lan restore-nat`）；不影響退出碼
 - Kubernetes（僅開啟時）：`k8s_distro`（存在且執行中；停止中不喚醒）、`k8s_share`（engine 已分享容器目錄）、`k8s_api`（API 埠連得到）；只 Warn，不影響退出碼
 

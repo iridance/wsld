@@ -374,7 +374,7 @@ export const api = {
       `/api/machines/${encodeURIComponent(name)}/resize`,
       { size_gb: sizeGB, shutdown },
     ),
-  setMachineRole: (name: string, role: "engine" | "client") =>
+  setMachineRole: (name: string, role: "client") =>
     call<{ name: string; role: string; active: string }>("POST", `/api/machines/${encodeURIComponent(name)}/role`, { role }),
   startMachine: (name: string) => call<void>("POST", `/api/machines/${encodeURIComponent(name)}/start`),
   /** release：確認「先停止用到它的容器並釋放曝露」；未帶且仍有執行中容器時伺服器回 409 in_use（detail.containers）。 */

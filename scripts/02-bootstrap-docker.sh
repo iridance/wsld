@@ -4,6 +4,7 @@
 # 並啟用 systemd／linger，供 Windows 端 wsld / wsld-gui 使用。
 #
 # --role engine：專用 dockerd distro，另在 /mnt/wsl/wsld/docker.sock 提供跨 distro 共用的 socket。
+#               wsld 以 --user root 執行（engine 不需要一般帳號：不加 docker 群組、不開 linger）。
 # --role client：只裝 docker CLI/plugin，建立指向 engine socket 的 docker context，不裝 daemon。
 #
 # 用法見 --help。冪等；可重複執行。需要 sudo（會在需要時提示密碼）。
@@ -230,7 +231,9 @@ if ! getent group docker >/dev/null 2>&1; then
   log "建立 docker 群組"
   run $SUDO groupadd --system docker
 fi
-if id -nG "$WSLD_USER" | tr ' ' '\n' | grep -qx docker; then
+if [ "$WSLD_USER" = root ]; then
+  log "以 root 使用 docker，不需加入 docker 群組"
+elif id -nG "$WSLD_USER" | tr ' ' '\n' | grep -qx docker; then
   log "$WSLD_USER 已在 docker 群組"
 else
   log "將 $WSLD_USER 加入 docker 群組（需重新登入 shell 才生效）"
@@ -285,7 +288,8 @@ fi
 run $SUDO systemctl daemon-reload
 run $SUDO systemctl enable docker
 run $SUDO systemctl restart docker
-run $SUDO loginctl enable-linger "$WSLD_USER"
+# linger 只影響使用者層級的 systemd；root（專用 engine）不需要
+[ "$WSLD_USER" = root ] || run $SUDO loginctl enable-linger "$WSLD_USER"
 
 # ---------------------------------------------------------------- 6. 驗證
 if [ "$WSLD_DRY_RUN" = "1" ]; then

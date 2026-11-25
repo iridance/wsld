@@ -504,3 +504,14 @@ func TestK8sMissingShareAndAPIWarn(t *testing.T) {
 		t.Fatalf("k8s problems must not fail doctor, exit = %d", rep.ExitCode())
 	}
 }
+
+func TestLingerNotNeededForARootEngine(t *testing.T) {
+	r, d := engineEnv("Stopped")
+	d.Cfg.UpsertMachine(config.Machine{Distro: "docker-engine", User: "root", APIEndpoint: "tcp://127.0.0.1:23750"})
+	_ = d.Cfg.SetActive("docker-engine")
+	delete(r, "-d docker-engine -- loginctl show-user irice --property=Linger --value")
+	rep := Run(context.Background(), d)
+	if got := find(rep, "linger"); got.Level != OK || !strings.Contains(got.Detail, "root") {
+		t.Fatalf("linger = %+v", got)
+	}
+}

@@ -2012,21 +2012,21 @@ export class App {
       tools.push(...(isEngine && running ? [] : [power]), ...(d.exposed ? [exposeRel] : []), cfg, folder, term, compact, ...(isEngine ? [] : [rm]));
 
       const footKids: HTMLElement[] = [];
-      // engine／client 角色：沒有 engine 時可把任一機器設為 engine；有 engine 後其他機器可改為 client（共用 engine 的 docker）
+      // 有 engine 後其他機器可改為 client（共用 engine 的 docker）。engine 一律是 wsld 自動建立的專用 distro，
+      // 一般機器不能變成 engine。
       const internal = d.name.toLowerCase().startsWith("docker-desktop");
-      if (!internal && d.role !== "engine" && d.role !== "client" && d.version === 2) {
-        const role: "engine" | "client" = hasEngine ? "client" : "engine";
-        const roleBtn = btn({ "data-testid": `btn-machine-role-${d.name}` }, "machines", t(role === "engine" ? "gui.machines.make_engine" : "gui.machines.make_client"));
+      if (hasEngine && !internal && d.role !== "engine" && d.role !== "client" && d.version === 2) {
+        const roleBtn = btn({ "data-testid": `btn-machine-role-${d.name}` }, "machines", t("gui.machines.make_client"));
         roleBtn.disabled = locked;
         roleBtn.onclick = () =>
           void this.resourceAction(
             `role:${d.name}`,
-            `${t(role === "engine" ? "gui.machines.make_engine_prompt" : "gui.machines.make_client_prompt")}\n${d.name}`,
+            `${t("gui.machines.make_client_prompt")}\n${d.name}`,
             async () => {
-              await api.setMachineRole(d.name, role);
+              await api.setMachineRole(d.name, "client");
               this.st.meta = await api.meta();
               setMessages(this.st.meta.messages);
-              return fmt(t("gui.machines.role_done"), d.name, t(role === "engine" ? "gui.machines.role_engine" : "gui.machines.role_client"));
+              return fmt(t("gui.machines.role_done"), d.name, t("gui.machines.role_client"));
             },
           );
         footKids.push(roleBtn);

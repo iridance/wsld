@@ -31,9 +31,9 @@
 | `internal` | 唯一業務邏輯來源 |
 | bootstrap 腳本 | 裝 WSL 功能與 dockerd |
 
-## 3. 共用 engine（可選）
+## 3. 共用 engine（專用 docker-engine）
 
-預設每個被管理的 distro 自帶 dockerd。也可以指定**一個專用 engine distro**，其餘 distro 當 client：
+一個**專用 engine distro**（`docker-engine`，由 wsld 自動建立，走 `lifecycle.InitEngine` 專門流程、以 root 執行 dockerd、不建 Linux 帳號）跑唯一的 dockerd，其餘 distro 當 client：
 
 ```text
 ┌─────────────── WSL2 VM（所有 distro 共用 kernel、network namespace、/mnt/wsl tmpfs）───────────────┐
