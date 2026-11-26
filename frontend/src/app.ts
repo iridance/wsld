@@ -1468,7 +1468,22 @@ export class App {
         void this.actMany(g.items.filter((c) => c.State === "running").map((c) => c.Id), "stopping", (id) => api.stopContainer(id));
       const infoBtn = iconBtn({ "data-testid": "group-info" }, "info", t("gui.info"));
       infoBtn.onclick = () => this.openComposeInfo(g.project);
-      actions.push(startBtn, stopBtn, infoBtn);
+      // 整組移除：以專案的全部容器為準（不受搜尋／篩選影響），與 Docker Desktop 相同只移除容器、不動 volume／image
+      const all = this.st.containers.filter((c) => !isK8s(c) && c.Labels?.[LABEL_PROJECT] === g.project);
+      const rmBtn = iconBtn({ "data-testid": "group-rm", class: "danger" }, "trash", t("gui.remove"));
+      rmBtn.disabled = anyPending || this.st.busy.has(`rm-compose:${g.project}`);
+      rmBtn.onclick = () =>
+        void this.resourceAction(`rm-compose:${g.project}`, fmt(t("gui.confirm.remove_compose"), g.project, String(all.length)), async () => {
+          const results = await Promise.allSettled(all.map((c) => api.removeContainer(c.Id, true)));
+          const ids = new Set(all.map((c) => c.Id));
+          if (this.st.info?.kind === "compose" && this.st.info.project === g.project) this.closeInfo();
+          if (this.st.info?.kind === "container" && ids.has(this.st.info.id)) this.closeInfo();
+          if (this.st.panel && ids.has(this.st.panel.id)) this.closePanel();
+          const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+          if (failed) throw failed.reason;
+          return fmt(t("gui.removed"), g.project);
+        });
+      actions.push(startBtn, stopBtn, infoBtn, rmBtn);
     }
 
     const cell = el(

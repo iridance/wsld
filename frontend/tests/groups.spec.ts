@@ -90,6 +90,29 @@ test("group Stop/Start act on every container of the project", async ({ page, re
   await expect(group(page, "shop").getByTestId("group-count")).toHaveText("2/2");
 });
 
+test("group Remove deletes every container of the project after confirm", async ({ page, request }) => {
+  await addComposeContainer(request, "shop", "web", "nginx:1.27");
+  await addComposeContainer(request, "shop", "api", "node:22", "exited");
+  await open(page);
+
+  const rm = group(page, "shop").getByTestId("group-rm");
+  await expect(rm.locator("svg.ico")).toHaveAttribute("data-icon", "trash");
+  await expect(rm).toHaveAttribute("aria-label", "Remove");
+  await expect(group(page, "").getByTestId("group-rm")).toHaveCount(0);
+
+  // 搜尋只顯示 web 時仍移除整個專案
+  await page.getByTestId("ct-search").fill("web");
+  await rm.click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("shop");
+  await expect(page.getByTestId("confirm-dialog")).toContainText("2");
+  await page.getByTestId("confirm-ok").click();
+  await page.getByTestId("ct-search").fill("");
+  await expect(group(page, "shop")).toHaveCount(0);
+  await expect(row(page, "shop-web-1")).toHaveCount(0);
+  await expect(row(page, "shop-api-1")).toHaveCount(0);
+  await expect(row(page, "web")).toBeVisible(); // 未分組不受影響
+});
+
 test("compose group header uses dark-friendly colors under Theme Dark", async ({ page, request }) => {
   await addComposeContainer(request, "shop", "web", "nginx:1.27");
   await open(page);
