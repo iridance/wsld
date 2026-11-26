@@ -156,6 +156,7 @@ volumes:
 		WSL: map[string]*MemFS{"Ubuntu-26.04": {HomeDir: "/home/irice", Dirs: []string{"/home/irice/projects/shop/api", "/home/irice/projects/shop/web"}, Files: map[string]string{
 			"/home/irice/projects/shop/docker-compose.yml": shop,
 			"/home/irice/projects/shop/.env":               "DB_PASSWORD=s3cret\n",
+			"/home/irice/projects/shop/k8s-extra.yaml":     "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: extra\n",
 		}}},
 	}
 }

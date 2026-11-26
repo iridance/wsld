@@ -38,6 +38,23 @@ teardown() {
   [[ "$output" != *"docker: true"* ]]
 }
 
+@test "k3s config appends kubelet args and tls-san entries; none by default" {
+  run wsld_render_k3s_config k8s-engine 26443
+  [[ "$output" != *"tls-san:"* ]]
+  run wsld_render_k3s_config k8s-engine 26443 tls-san=my-pc.lan kubelet-arg=max-pods=50 tls-san=192.168.1.20
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'  - cgroup-driver=systemd\n  - max-pods=50\ntls-san:\n  - my-pc.lan\n  - 192.168.1.20'* ]]
+}
+
+@test "extra k3s values only allow safe characters" {
+  wsld_k8s_valid_extra my-pc.lan
+  wsld_k8s_valid_extra '*.k8s.localhost'
+  wsld_k8s_valid_extra max-pods=50
+  ! wsld_k8s_valid_extra 'a b'
+  ! wsld_k8s_valid_extra 'x;rm'
+  ! wsld_k8s_valid_extra ''
+}
+
 @test "cri-dockerd unit talks to the engine socket without a network plugin and needs the mounts" {
   run wsld_render_cri_unit
   [[ "$output" == *"--docker-endpoint unix:///mnt/wsl/wsld/docker.sock"* ]]

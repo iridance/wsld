@@ -265,8 +265,8 @@ export interface K8sInfo {
   available: boolean;
   enabled: boolean;
   distro: string;
-  /** 背景作業：enabling｜disabling｜starting；省略 = 閒置 */
-  op?: "enabling" | "disabling" | "starting";
+  /** 背景作業；省略 = 閒置 */
+  op?: "enabling" | "disabling" | "starting" | "restarting" | "resetting";
   step?: string;
   steps: string[];
   error?: string;
@@ -278,6 +278,22 @@ export interface K8sInfo {
   shared_kubeconfig: string;
   disk_bytes?: number;
   disk_limit_bytes?: number;
+  /** 使用者的 ~/.kube/config 與其 current-context */
+  user_kubeconfig?: string;
+  current_context?: string;
+  /** config 的 k8s_merge_kubeconfig */
+  merge_kubeconfig: boolean;
+}
+
+export interface K8sPodContainer {
+  name: string;
+  /** engine 上的 docker 容器 ID（尚未建立時省略） */
+  id?: string;
+  init?: boolean;
+  ready: boolean;
+  state: "running" | "waiting" | "terminated";
+  reason?: string;
+  restarts: number;
 }
 
 export interface K8sPod {
@@ -288,6 +304,100 @@ export interface K8sPod {
   restarts: number;
   ip?: string;
   created: string;
+  labels?: Record<string, string>;
+  containers: K8sPodContainer[];
+}
+
+export interface K8sServicePort {
+  name?: string;
+  port: number;
+  target_port?: string;
+  node_port?: number;
+  protocol: string;
+}
+
+export interface K8sService {
+  namespace: string;
+  name: string;
+  type: string;
+  cluster_ip?: string;
+  ports: K8sServicePort[];
+  external?: string[];
+  labels?: Record<string, string>;
+  /** 選到的 pod labels（空 = 不選 pod） */
+  selector?: Record<string, string>;
+  created: string;
+  /** 從 Windows 可開啟的 http://localhost:<埠> */
+  urls: string[];
+}
+
+export interface K8sPodStats {
+  namespace: string;
+  name: string;
+  cpu: number;
+  mem_bytes: number;
+}
+
+export interface K8sDeployResult {
+  namespace: string;
+  name: string;
+  expose: "none" | "nodeport" | "loadbalancer";
+  node_port?: number;
+  /** loadbalancer 實際使用的 localhost 埠；被占用而順延時 port_changed = true */
+  host_port?: number;
+  port_changed?: boolean;
+}
+
+export interface StackEnv { name: string; value: string }
+export interface StackVolume { name: string; mount_path: string; size?: string; host_path?: string; read_only?: boolean }
+export interface StackService {
+  name: string;
+  image: string;
+  port?: number;
+  replicas?: number;
+  expose?: "none" | "nodeport" | "loadbalancer";
+  host_port?: number;
+  env?: StackEnv[];
+  volumes?: StackVolume[];
+  depends_on?: string[];
+  stateful?: boolean;
+  command?: string[];
+  args?: string[];
+  working_dir?: string;
+}
+export interface StackSpec { name: string; namespace?: string; services: StackService[] }
+
+export interface FileEntry { name: string; dir: boolean; size?: number }
+/** engine：bind mount 由它解析（其他機器的檔案經曝露對應） */
+export interface FileSources { drives: string[]; wsl: { name: string; running: boolean }[]; engine?: string }
+export interface FileListing { path: string; parent: string; entries: FileEntry[] }
+export interface ComposePreviewRequest {
+  kind: string;
+  name: string;
+  path: string;
+  start?: boolean;
+  stack_name?: string;
+  namespace?: string;
+}
+export interface ComposePreview {
+  kind: "compose" | "manifest";
+  default_name: string;
+  spec?: StackSpec;
+  yaml?: string;
+  order?: string[];
+  warnings: string[];
+  read_files: string[];
+  manifest?: string;
+}
+
+export interface K8sForward {
+  namespace: string;
+  kind: "svc" | "pod";
+  name: string;
+  local_port: number;
+  remote_port: number;
+  running: boolean;
+  url: string;
 }
 
 async function call<T>(method: string, path: string, body?: unknown, asText = false, signal?: AbortSignal): Promise<T> {
@@ -394,6 +504,24 @@ export const api = {
   k8sEnable: () => call<{ op: string }>("POST", "/api/k8s/enable"),
   k8sDisable: () => call<{ op: string }>("POST", "/api/k8s/disable"),
   k8sPods: (signal?: AbortSignal) => call<K8sPod[]>("GET", "/api/k8s/pods", undefined, false, signal),
+  k8sServices: (signal?: AbortSignal) => call<K8sService[]>("GET", "/api/k8s/services", undefined, false, signal),
+  k8sStats: (signal?: AbortSignal) => call<K8sPodStats[]>("GET", "/api/k8s/stats", undefined, false, signal),
+  k8sForwards: (signal?: AbortSignal) => call<K8sForward[]>("GET", "/api/k8s/forwards", undefined, false, signal),
+  k8sForward: (f: { namespace: string; kind: "svc" | "pod"; name: string; local_port: number; remote_port: number }) =>
+    call<K8sForward>("POST", "/api/k8s/forwards", f),
+  k8sStopForward: (port: number) => call<void>("DELETE", `/api/k8s/forwards/${port}`),
+  k8sDeletePod: (ns: string, name: string) => call<void>("DELETE", `/api/k8s/pods/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
+  k8sRestart: () => call<{ op: string }>("POST", "/api/k8s/restart"),
+  k8sReset: () => call<{ op: string }>("POST", "/api/k8s/reset"),
+  k8sMerge: () => call<K8sInfo>("POST", "/api/k8s/kubeconfig/merge"),
+  k8sApply: (manifest: string) => call<{ output: string }>("POST", "/api/k8s/apply", manifest),
+  k8sStack: (spec: StackSpec) => call<{ namespace: string; name: string; services: K8sDeployResult[] }>("POST", "/api/k8s/stack", spec),
+  k8sStackDelete: (ns: string, name: string, pvc: boolean) =>
+    call<void>("DELETE", `/api/k8s/stack/${encodeURIComponent(ns)}/${encodeURIComponent(name)}${pvc ? "?pvc=1" : ""}`),
+  fsSources: () => call<FileSources>("GET", "/api/fs/sources"),
+  fsList: (kind: string, name: string, path = "", start = false) =>
+    call<FileListing>("GET", `/api/fs/list?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}${start ? "&start=1" : ""}`),
+  composePreview: (req: ComposePreviewRequest) => call<ComposePreview>("POST", "/api/k8s/compose/preview", req),
   getSettings: () => call<Settings>("GET", "/api/settings"),
   putSettings: (s: Settings) => call<Settings>("PUT", "/api/settings", s),
   getLAN: () => call<LANStatus>("GET", "/api/lan"),

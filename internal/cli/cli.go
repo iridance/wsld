@@ -133,6 +133,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.cmdLan(ctx, rest)
 	case "k8s":
 		err = a.cmdK8s(ctx, rest)
+	case "kubectl":
+		err = a.cmdKubectl(ctx, rest)
 	default:
 		err = fail(ExitUsage, errors.New(i18n.T("cli.unknown_command", cmd)))
 	}

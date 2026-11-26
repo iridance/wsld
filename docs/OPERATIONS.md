@@ -153,12 +153,21 @@ WSL2 的 VM 在 Windows 重開機、`wsl --shutdown`、或閒置一段時間後�
 預設關閉。開啟後 wsld 建立專用的 Debian distro `k8s-engine` 跑單節點 k3s，**pod 直接跑在 engine 的 Docker 上**（映像共用、pod 與一般容器同一個 docker 網段互通）。設計見 SPEC §4.6。
 
 - **開啟**：GUI 的 Kubernetes 頁（頂部 Machines 右邊）→「開啟 Kubernetes」，畫面依序顯示步驟：確認 engine 的 Docker → 建立 k8s-engine（第一次要下載 Debian）→ 安裝 cri-dockerd 與 k3s → 與 engine 對應路徑 → 啟動 k3s → 等 node Ready → 匯出 kubeconfig。失敗會標出卡在哪一步，按「重試」從頭檢查（每一步都冪等）。CLI：`wsld k8s on`（逐步印出）／`wsld k8s status [--json]`。
+- **kubectl**：`wsld kubectl get pods -A`（在 k8s-engine 跑 k3s kubectl，不必另裝）。要用自己的 `kubectl.exe`／Lens 等工具：Kubernetes 頁 engine 卡的 Info →「使用 wsld context」，或 `wsld k8s kubeconfig`，把 `wsld` cluster／user／context 併進 `~/.kube/config` 並設為 current-context（其他 context 不動；之後每次啟動自動更新 `wsld` 項目）。
 - **kubeconfig**：Windows 端 `%APPDATA%\wsld\kubeconfig.yaml`（context 名稱 `wsld`）：`kubectl --kubeconfig "%APPDATA%\wsld\kubeconfig.yaml" get pods -A`，或設 `KUBECONFIG`。其他 distro 用 `/mnt/wsl/wsld/k8s/kubeconfig`（k3s 啟動後自動更新）。API 在 `https://127.0.0.1:26443`（`k8s_api_port` 可改，只影響新安裝）。
-- **映像**：`docker build` 出來的映像 pod 直接可用（同一個 dockerd），不必推 registry；`imagePullPolicy: IfNotPresent` 或 `Never` 即可。
-- **對外**：用 `type: LoadBalancer`（k3s 內建 klipper：變成 engine 上的 published 埠）或 NodePort，Windows 的 `http://localhost:<埠>` 連得到，區網存取開啟時也會一起轉發。Containers 頁會把 pod 容器收成「Kubernetes」群組。
-- **不支援**：`kubectl port-forward`（cri-dockerd 要 nsenter 進容器的 PID，跨 distro 的 PID namespace 不同）、`kubectl top`。
+- **映像**：`docker build` 出來的映像 pod 直接可用（同一個 dockerd），不必推 registry；`imagePullPolicy: IfNotPresent` 或 `Never` 即可。注意 `:latest` 標籤預設是 `Always`（每次都去 pull，本機建的映像會拉不到）：改用其他標籤（`:dev`）或明確設 `imagePullPolicy: IfNotPresent`。
+- **對外**：用 `type: LoadBalancer`（k3s 內建 klipper：變成 engine 上的 published 埠）或 NodePort，Windows 的 `http://localhost:<埠>` 連得到，區網存取開啟時（Settings › 網路）LoadBalancer 埠與 NodePort 也會一起轉發。Kubernetes 頁 Services 表格的地球按鈕直接開瀏覽器。Containers 頁會把 pod 容器收成「Kubernetes」群組。
+- **部署**：Kubernetes 頁工具列
+  - **Import**：瀏覽 Windows 磁碟或 WSL 機器，選 Compose 檔 → 預覽（服務、部署順序、讀到的 `.env`、無法轉換的警告、可展開 YAML，密碼等值遮蔽）→ Deploy stack；選到的是 k8s manifest 就直接 apply。bind mount 會掛載原本的資料夾（Windows 的經 `/mnt/c`，其他機器的經曝露，該機器要在執行）。CLI：`wsld k8s compose -f docker-compose.yml [--dry-run]`。Pods 的 namespace 列有「刪除 stack」（PVC 保留；CLI `wsld k8s stack rm shop/shop --pvc` 連 PVC 一起刪）。
+  - **Apply YAML**：貼上或載入 `.yaml`／`.json`，以 `kubectl apply` 套用並顯示結果。CLI：`wsld k8s apply -f app.yaml`（`-f -` 讀 stdin）。
+- **Port forward**：ClusterIP service 或 pod 要從 Windows 連：Services／Pods 列的「轉發埠」，或 `wsld k8s forward default/svc/web 8080:80`（`forward ls`、`forward rm 8080`）。wsld 在 engine 跑一個 `alpine/socat` 容器在 `127.0.0.1:8080` 監聽（第一次會拉映像）；k8s 關閉時一併移除。
+- **Ingress**：沒有預設的 ingress controller，自行安裝 ingress-nginx 或 Traefik（它的 Service 是 LoadBalancer，會出現在 localhost:80/443）。主機名稱用 `*.localhost`，例如 Ingress host `app.k8s.localhost`，瀏覽器會解析到 127.0.0.1，不必改 hosts。
+- **Pods 頁**：依 namespace 分組（可收合），`kube-system` 等系統 namespace 預設隱藏（工具列「顯示系統 namespace」）；每列顯示容器（init 容器標示）、labels、CPU／記憶體（engine 的 `docker stats` 加總），可看日誌、開終端（多容器時先選容器）、轉發、刪除 pod。
+- **kind／k3d**：engine 是一般的 dockerd，`kind create cluster`／`k3d cluster create` 可直接用（與 wsld 的 k3s 各自獨立）。
+- **不支援**：`kubectl port-forward`（cri-dockerd 要 nsenter 進容器的 PID，跨 distro 的 PID namespace 不同；用上面的 Port forward）、`kubectl top`（Pods 表格的 CPU／記憶體取代）、NetworkPolicy（沒有 CNI）；ClusterIP／pod IP／`cluster.local` 只在 WSL 內可達。
+- **進階設定**（config.toml，下次啟動生效）：`k8s_tls_san = ["my-pc.lan"]`（從其他機器用主機名稱連 API 時）、`k8s_kubelet_args = ["max-pods=200"]`。
 - **關閉**：Kubernetes 頁「關閉」或 `wsld k8s off`：停 k3s、從 engine 移除 pod 容器、卸載路徑對應、engine 停止分享。k8s-engine 與叢集資料（含 PV）保留，再次開啟沿用。k8s-engine 不列在 Machines 頁，它的狀態、版本、磁碟與 Endpoint 在 Kubernetes 頁的 engine 卡上。
-- **重設叢集**：關閉後 `wsl -d k8s-engine -u root -- /usr/local/bin/k3s-uninstall.sh`（清掉 k3s 與叢集資料），再開啟會重新安裝。**完全移除**：關閉後 `wsld unregister --confirm k8s-engine k8s-engine`（或 `wsl --unregister k8s-engine`）。
+- **重新啟動／重置叢集**：engine 卡的「重新啟動」（`wsld k8s restart`）；「重置叢集」（`wsld k8s reset --yes`）會刪除所有 Kubernetes 資源與 PV，保留 k8s-engine、engine 上的映像與憑證（kubeconfig 仍有效）。要連 k3s 一起重裝：關閉後 `wsl -d k8s-engine -u root -- /usr/local/bin/k3s-uninstall.sh`，再開啟。**完全移除**：關閉後 `wsld unregister --confirm k8s-engine k8s-engine`（或 `wsl --unregister k8s-engine`）。
 - **故障排除**：`wsld doctor`（`k8s_distro`、`k8s_share`、`k8s_api`）；`wsl -d k8s-engine -u root -- journalctl -u k3s -n 50`、`-u wsld-cri-dockerd`、`-u wsld-k8s-mounts`。k3s 一定要等掛載到位才會啟動（避免 kubelet 寫進 `/mnt/wsl` 的記憶體 tmpfs）。
 
 ## 機器的磁碟上限
@@ -203,4 +212,4 @@ wsld compact-disk --shutdown Ubuntu-26.04     # 需要關閉 WSL 時，確認後
 - **自動更新（Extra）**：無；以發布頁下載新版覆蓋。
 - **安全**：API 只綁 loopback、無 TLS；同機任何程序可存取 Docker API（等同本機 root）。不要把 `hosts` 改成 `0.0.0.0`。要讓內網連到**容器**，請開啟區網存取（wsld-gui 轉發），不要對外開放 API。
 - **區網存取只在 wsld-gui 執行時有效**，且只轉發 TCP；容器看到的來源 IP 是本機。
-- **Kubernetes**：單節點；不支援 `kubectl port-forward`／`kubectl top`；k8s-engine 的保活與自動帶起只在 wsld-gui 執行時有效（只用 CLI 時閒置會被 WSL 回收，`wsld k8s on` 再帶起）。
+- **Kubernetes**：單節點；不支援 `kubectl port-forward`（改用 `wsld k8s forward`）／`kubectl top`／NetworkPolicy；k8s-engine 的保活與自動帶起只在 wsld-gui 執行時有效（只用 CLI 時閒置會被 WSL 回收，`wsld k8s on` 再帶起）。

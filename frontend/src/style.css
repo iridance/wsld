@@ -743,9 +743,55 @@ table[data-testid="skeleton"] tbody td { height: 44px; }
 
 /* ---- Kubernetes 頁 ---- */
 .k8s-status .engine-grid { margin-bottom: 10px; }
+.k8s-status { margin-bottom: 0; }
 .k8s-limits { margin: 6px 0 0; font-size: 12px; }
 .k8s-hero .k8s-steps { margin: 2px 0; }
 .k8s-hero .install-progress { width: 100%; }
 .k8s-pods .list-table, .k8s-pods table { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.k8s-pods + .k8s-pods { margin-top: 14px; }
+.k8s-labels { display: flex; gap: 4px; overflow: hidden; white-space: nowrap; margin-top: 2px; }
+.k8s-label { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px; background: var(--hover, rgba(127,127,127,.12)); color: var(--muted); font-family: var(--mono, ui-monospace, monospace); }
+.k8s-pods td.actions { white-space: nowrap; }
+.k8s-tabs { margin: 18px 0 12px; padding: 0 4px; }
+.k8s-tabs .ui-tab[aria-selected="true"] .ui-tab-count { background: var(--accent-soft); color: var(--accent); }
+.k8s-tabs + .k8s-pods { margin-top: 0; }
+/* 表格內的文字連結（開瀏覽器、跳到 Pods） */
+button.link { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+button.link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+button.link:disabled { cursor: default; text-decoration: none; }
+.k8s-access { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.k8s-access-item { display: inline-flex; align-items: center; gap: 6px; }
 .info-field dd.with-action:has(> .mono) { min-width: 0; max-width: 100%; }
 .info-field dd.with-action > .mono { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Kubernetes：Deploy／Import／Apply 對話框 ---- */
+dialog.deploy-dialog { width: min(600px, calc(100vw - 32px)); max-width: none; padding: 20px 24px; }
+dialog.deploy-dialog form { gap: 12px; }
+dialog.deploy-dialog .dialog-head { margin-bottom: 10px; }
+.deploy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.deploy-grid.name-row { grid-template-columns: minmax(0, 1fr) 120px; }
+.deploy-grid .field[hidden] { display: none; }
+dialog.import-dialog { width: min(720px, calc(100vw - 32px)); }
+.import-step { display: flex; flex-direction: column; gap: 10px; }
+.import-step[hidden] { display: none; }
+.import-path { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; max-height: 280px; min-height: 120px; overflow-y: auto; }
+.import-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--border); background: transparent; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.import-item:last-child { border-bottom: 0; }
+.import-item:hover { background: var(--surface-hover, rgba(127,127,127,.08)); }
+.import-item.on { background: var(--accent-soft, rgba(80,140,255,.15)); }
+.import-item.dim { color: var(--muted); }
+.import-item small { margin-left: auto; color: var(--muted); font-size: 12px; }
+.import-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.import-stopped { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.import-read, .import-order { font-size: 12px; color: var(--muted); }
+.import-services { display: flex; flex-direction: column; gap: 6px; }
+.import-svc { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.import-svc span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-svc small { font-size: 12px; color: var(--muted); }
+.import-warn { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: 1.6; }
+.import-manifest { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.import-yaml { max-height: 240px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+dialog.apply-dialog textarea { width: 100%; min-height: 260px; resize: vertical; box-sizing: border-box; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); font: 12px/1.5 var(--mono); }
+.apply-output { max-height: 160px; overflow: auto; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; white-space: pre-wrap; }
+.k8s-actions { display: flex; gap: 8px; }

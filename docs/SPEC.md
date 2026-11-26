@@ -171,7 +171,16 @@ dockerd 在**開發用 Ubuntu**（rootful），利於 `$HOME` bind mount。
 - **停止**：`systemctl stop k3s` → 在 engine 移除 `io.kubernetes.pod.namespace` 標籤的容器（停 k3s 不會停它們，它們還接著曝露路徑）→ 停 cri-dockerd 與掛載。**關閉**＝停止＋engine 停止分享；k8s-engine 與叢集資料保留，下次開啟沿用。
 - **API**：`https://127.0.0.1:<k8s_api_port>`（預設 26443）。k8s API 本來就是 TCP，WSL 的 localhost 轉發讓 Windows 直接連，不需要另外的 proxy socket。kubeconfig（cluster／user／context 改名為 `wsld`）匯出到 `%APPDATA%\wsld\kubeconfig.yaml`，另一份在 `/mnt/wsl/wsld/k8s/kubeconfig`（0644）給其他 distro。
 - **保活與自動帶起**：開啟中的 k8s-engine 由 wsld-gui 保活；Supervise 在 engine 就緒後每 30 秒檢查一次，沒在跑就背景帶起（失敗退避）。k8s-distro 不出現在 Machines 頁（GUI 的 Kubernetes 頁以對齊 Docker engine 卡的 engine 卡顯示它）；開啟中時 API 也拒絕停止、取消管理或刪除它。
-- **已知限制**：`kubectl port-forward`（cri-dockerd 用 nsenter 進入容器 PID）與 `kubectl top`／cAdvisor 統計不能用；exec／logs／attach 走 Docker API，可以用。
+- **重新啟動／重置**：Restart＝停止（含移除 pod 與轉發容器）→ 啟動；Reset＝停止 → `03-k8s.sh reset`（刪 `/var/lib/rancher/k3s/server/db`、`/var/lib/wsld-k8s/{storage,kubelet/pods,cri-dockerd}`；先確認 k3s 已停、狀態目錄下沒有掛載）→ 啟動。憑證、token、k8s-engine 與 engine 上的映像保留，kubeconfig 仍有效。步驟清單：Restart `stop → engine → share → start → ready → kubeconfig`，Reset 多一步 `wipe`。
+- **k3s 設定**：每次啟動前 `03-k8s.sh configure <distro> <port> [--tls-san=…] [--kubelet-arg=…]` 重寫 `/etc/rancher/k3s/config.yaml`（內容不變就不寫），`k8s_tls_san`／`k8s_kubelet_args` 因此在下次啟動生效。值只允許 `[A-Za-z0-9._/:=,*-]`（經 wsl.exe 命令列傳入，並直接寫進 YAML）。
+- **Port forward**（取代 `kubectl port-forward`）：在 engine 以 `--network host` 跑 `alpine/socat` 容器（名稱 `wsld-k8s-fwd-<本機埠>`、標籤 `wsld.k8s.forward=<ns>/<svc|pod>/<名稱>:<遠端埠>`），在 `127.0.0.1:<本機埠>` 監聽並連到 service 的 ClusterIP（kube-proxy 規則在共用 netns）或 pod IP；WSL 的 localhost 轉發讓 Windows 也連得到。同一本機埠再建會取代；k8s 停止時一併移除。
+- **Pod 用量**：`kubectl top` 不能用，改在 engine 跑 `docker stats --no-stream --format json`，以 cri-dockerd 的容器名稱（`k8s_<容器>_<pod>_<ns>_<uid>_<n>`，略過 `k8s_POD_` sandbox）加總到 pod。
+- **區網**：區網存取開啟時，NodePort／LoadBalancer 的 TCP nodePort 也加入轉發（每 30 秒最多查一次 service；LoadBalancer 的 port 本來就是 docker published 埠）。
+- **~/.kube/config 合併**（`k8s_merge_kubeconfig`）：只新增／取代名為 `wsld` 的 cluster／user／context，其他項目原樣保留；GUI「使用 wsld context」與 `wsld k8s kubeconfig` 會同時把 current-context 設成 `wsld`，之後每次啟動只更新項目、不改 current-context。路徑為 `$KUBECONFIG` 的第一個，否則 `~/.kube/config`。
+- **部署只有 Apply YAML 與 Import Compose**：Apply＝`k3s kubectl apply -f -`（≤ 1 MB）。Import 讀 Compose 檔（同資料夾 `.env`、`env_file`，不可跳出該資料夾）轉成 stack：每個服務一個 Deployment（`imagePullPolicy: IfNotPresent`）、有埠就有同名 ClusterIP Service（`ports:` 有 host 埠時改 LoadBalancer：localhost 埠被其他 LoadBalancer 或 Windows 程式占用時往後最多找 20 個）、具名 volume → PVC、`depends_on` 決定部署順序並注入 `<DEP>_HOST`／`<DEP>_PORT`；每個物件帶 `wsld.stack=<名稱>`，namespace 預設＝stack 名稱。無法轉換的欄位（healthcheck、secrets、privileged…）列為警告。最多 12 個服務。
+- **bind mount（hostPath）**：由 engine 的 dockerd 經 cri-dockerd 解析，所以路徑以 engine 為準：Windows 的 `C:\x` → `/mnt/c/x`；engine 本身的路徑不變；其他 WSL 機器（client）的路徑 → `/mnt/wsl/distro/<名稱>/…`，部署前 wsld 先確保該 distro 已曝露。`~`、網路路徑、跨來源（Windows 的 Compose 用 Linux 路徑）無法對應，列為警告並略過該 volume。k8s-engine 不列為匯入來源。
+- **Ingress 主機名稱**：不做 Windows DNS；用 `*.localhost`（瀏覽器原生解析到 127.0.0.1），例如 Ingress host `app.k8s.localhost` 搭配 LoadBalancer 的 ingress controller。
+- **已知限制**：`kubectl port-forward`（cri-dockerd 用 nsenter 進入容器 PID）與 `kubectl top`／cAdvisor 統計不能用（以上述 Port forward、pod 用量替代）；exec／logs／attach 走 Docker API，可以用。沒有 CNI，所以 NetworkPolicy 不生效；ClusterIP、pod IP 與 `cluster.local` DNS 只在 WSL 內可達，Windows 端請用 LoadBalancer／NodePort 或 Port forward。
 
 ## 5. 元件規格
 
@@ -207,7 +216,7 @@ api_endpoint = "tcp://127.0.0.1:23750"
 
 0.5 形狀：全局 `lang`／`tray_autostart`／`refresh_interval_sec`／`exec_shell`／`theme`；`active`＋多筆 `[[machines]]`（各含 `distro`／`user`／`api_endpoint`）。舊扁平格式載入時自動遷移。範例見 `config.example.toml`。
 
-0.20.0：`k8s = true`（Kubernetes 開啟；預設省略＝關）、`k8s_api_port`（省略＝26443，只影響新安裝）；k8s distro 以 `role = "k8s"` 登記在 `[[machines]]`（user 固定 root、沒有 api_endpoint；最多一台）。
+0.20.0：`k8s = true`（Kubernetes 開啟；預設省略＝關）、`k8s_api_port`（省略＝26443，只影響新安裝）、`k8s_tls_san`（API server 憑證的額外 SAN，主機名稱或 IP）、`k8s_kubelet_args`（額外 kubelet 參數，`旗標=值`、不含開頭 `--`）、`k8s_merge_kubeconfig`（把 wsld context 併進 ~/.kube/config）；k8s distro 以 `role = "k8s"` 登記在 `[[machines]]`（user 固定 root、沒有 api_endpoint；最多一台）。
 
 ### 5.3 Bootstrap
 
@@ -240,7 +249,9 @@ api_endpoint = "tcp://127.0.0.1:23750"
 | `start-ct`／`stop-ct` | 啟停容器 |
 | `doctor` | 見 §5.6 |
 | `exec`（可選對齊 GUI） | 進入容器 shell（策略同 GUI） |
-| `k8s status\|on\|off` | 本機 Kubernetes（§4.6）：`on` 帶起 engine 後走完整的開啟流程（逐步印出步驟）並匯出 kubeconfig；`off` 停止並保留 k8s-engine；`status [--json]`（關閉時不碰 WSL） |
+| `k8s status\|on\|off\|restart\|reset\|pods\|svc\|forward\|kubeconfig` | 本機 Kubernetes（§4.6）：`on` 帶起 engine 後走完整的開啟流程（逐步印出步驟）並匯出 kubeconfig；`off` 停止並保留 k8s-engine；`status [--json]`（關閉時不碰 WSL）；`restart`；`reset --yes`（清除所有資源與 PV）；`pods`／`svc [--json]`；`forward [ns/]svc\|pod/<名稱> <本機>[:<遠端>]`、`forward ls`、`forward rm <本機埠>`；`kubeconfig [--current=false]` 併入 ~/.kube/config。除 `status`／`on`／`off` 外都要求 Kubernetes 已開啟 |
+| `k8s apply\|compose\|stack rm` | `apply -f <檔案\|->`；`compose -f <docker-compose.yml> [--name] [--namespace] [--dry-run]`（檔案在 `\\wsl.localhost\<distro>\…` 時視為該 distro 的路徑）；`stack rm <namespace>/<名稱> [--pvc] [--yes]` |
+| `kubectl <參數…>` | 在 k8s-engine 跑 `k3s kubectl`（繼承 stdio；Windows 不必另裝 kubectl） |
 | `lan on\|off\|status\|restore-nat` | 區網存取（§4.5）：on／off 寫入 `lan_access`（由 wsld-gui 轉發）；`status --json`；`restore-nat [--yes]` 還原 0.9.0 的 mirrored 設定並重啟 WSL |
 
 **退出碼**：

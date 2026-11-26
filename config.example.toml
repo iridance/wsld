@@ -12,6 +12,9 @@ active = "Ubuntu-26.04"
 # lang = "en"            # en | zh-TW；GUI 右下角切換後會寫回這裡（WSLD_LANG 環境變數可強制覆寫）
 # k8s = false            # 本機 Kubernetes（k3s 跑在專用的 k8s-engine，pod 跑在 engine 的 Docker）；GUI Kubernetes 頁或 wsld k8s on|off
 # k8s_api_port = 26443   # k3s API 埠（只影響新安裝）
+# k8s_tls_san = ["my-pc.lan"]          # API server 憑證的額外 SAN（下次啟動 k3s 生效）
+# k8s_kubelet_args = ["max-pods=200"]  # 額外的 kubelet 參數（旗標=值，不含 --；下次啟動生效）
+# k8s_merge_kubeconfig = false         # 把 wsld context 併進 ~/.kube/config（GUI「使用 wsld context」會打開）
 
 [[machines]]
 distro = "Ubuntu-26.04"

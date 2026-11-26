@@ -1,0 +1,191 @@
+package k8s
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// DefaultNamespace 是未指定 namespace 時使用的 namespace。
+const DefaultNamespace = "default"
+
+// MaxApplyBytes 是 Apply 接受的 YAML／JSON 大小上限。
+const MaxApplyBytes = 1 << 20
+
+// imageRe 接受 `name[:tag][@sha256:…]` 與 registry／路徑（`host:5000/a/b:tag`）。
+// 第一個字元必為英數，避免被 kubectl 當成旗標。
+var imageRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$`)
+
+// 對外方式（DeploySpec.Expose）。
+const (
+	ExposeNone         = "none"         // 只建 Deployment，不建 Service
+	ExposeNodePort     = "nodeport"     // NodePort Service，埠由 k8s 配發（30000–32767）
+	ExposeLoadBalancer = "loadbalancer" // LoadBalancer Service，localhost 上用指定的埠
+)
+
+// hostPortScan 是指定埠被占用時，往後最多嘗試的埠數。
+const hostPortScan = 20
+
+// DeploySpec 是單一服務（Deployment＋可選的 Service）的設定；stack 的每個服務以它驗證名稱、映像、埠、副本與對外方式。
+type DeploySpec struct {
+	Image     string `json:"image"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Port      int    `json:"port,omitempty"` // 容器埠；0 = 不建立 Service
+	// Expose：none | nodeport | loadbalancer。空值向下相容：有 Port → nodeport，否則 none。
+	Expose string `json:"expose,omitempty"`
+	// HostPort：Expose = loadbalancer 時 Windows localhost 上想用的埠（預設與容器埠相同）。
+	HostPort int `json:"host_port,omitempty"`
+	Replicas int `json:"replicas,omitempty"` // 0 → 1
+}
+
+// DeployResult 是 stack 內一個服務的部署結果。
+type DeployResult struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	NodePort  int    `json:"node_port,omitempty"` // Expose = nodeport 時，k8s 配發的 NodePort
+	Expose    string `json:"expose"`
+	// HostPort 是 Expose = loadbalancer 時實際使用的 localhost 埠；與要求不同（被占用而順延）時 PortChanged = true。
+	HostPort    int  `json:"host_port,omitempty"`
+	PortChanged bool `json:"port_changed,omitempty"`
+}
+
+// Normalize 驗證並補上預設值。
+func (s DeploySpec) Normalize() (DeploySpec, error) {
+	if s.Namespace == "" {
+		s.Namespace = DefaultNamespace
+	}
+	if s.Replicas == 0 {
+		s.Replicas = 1
+	}
+	if s.Expose == "" {
+		s.Expose = ExposeNone
+		if s.Port > 0 {
+			s.Expose = ExposeNodePort
+		}
+	}
+	switch s.Expose {
+	case ExposeNone, ExposeNodePort, ExposeLoadBalancer:
+	default:
+		return s, fmt.Errorf("invalid expose %q", s.Expose)
+	}
+	if s.Expose != ExposeNone && s.Port < 1 {
+		return s, errors.New("a container port is required to expose the app")
+	}
+	if s.Expose == ExposeLoadBalancer {
+		if s.HostPort == 0 {
+			s.HostPort = s.Port
+		}
+		if s.HostPort < 1 || s.HostPort > 65535 {
+			return s, errors.New("host port must be between 1 and 65535")
+		}
+	}
+	if !ValidName(s.Namespace) {
+		return s, fmt.Errorf("invalid namespace %q", s.Namespace)
+	}
+	// Deployment／Service 名稱須為 DNS-1035 標籤（≤ 63 字元）；比一般物件名稱更嚴格。
+	if !ValidName(s.Name) || len(s.Name) > 63 || strings.Contains(s.Name, ".") {
+		return s, fmt.Errorf("invalid name %q", s.Name)
+	}
+	if !imageRe.MatchString(s.Image) {
+		return s, fmt.Errorf("invalid image %q", s.Image)
+	}
+	if s.Port < 0 || s.Port > 65535 {
+		return s, errors.New("port must be between 1 and 65535")
+	}
+	if s.Replicas < 1 || s.Replicas > MaxReplicas {
+		return s, fmt.Errorf("replicas must be between 1 and %d", MaxReplicas)
+	}
+	return s, nil
+}
+
+// serviceObject 組出一個單埠 Service；selector 同時作為它自己的 label。
+func serviceObject(ns, name, typ string, port, targetPort int, selector map[string]string) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1", "kind": "Service",
+		"metadata": map[string]any{"name": name, "namespace": ns, "labels": selector},
+		"spec": map[string]any{
+			"type":     typ,
+			"selector": selector,
+			"ports":    []any{map[string]any{"port": port, "targetPort": targetPort}},
+		},
+	}
+}
+
+// pickHostPort 從想要的埠起，找第一個沒被占用的 localhost 埠：
+// 排除其他 LoadBalancer Service 已綁的埠（k3s ServiceLB 用 hostPort，同埠會 Pending）與 Windows 端已被占用的埠。
+// 同名 Service 自己目前用的埠視為可用（重新 Deploy／Expose 不會把自己擠掉）。
+func (m *Manager) pickHostPort(ctx context.Context, s DeploySpec) int {
+	used, own := map[int]bool{}, map[int]bool{}
+	if svcs, err := m.ListServices(ctx); err == nil {
+		for _, sv := range svcs {
+			if sv.Type != "LoadBalancer" {
+				continue
+			}
+			for _, p := range sv.Ports {
+				if sv.Namespace == s.Namespace && sv.Name == s.Name {
+					own[p.Port] = true
+				} else {
+					used[p.Port] = true
+				}
+			}
+		}
+	}
+	busy := m.PortBusy
+	if busy == nil {
+		busy = portBusy
+	}
+	for p := s.HostPort; p < s.HostPort+hostPortScan && p <= 65535; p++ {
+		if own[p] || (!used[p] && !busy(p)) {
+			return p
+		}
+	}
+	return s.HostPort
+}
+
+// MaxReplicas 是 stack 服務副本數的上限（防止誤輸入把單節點壓垮）。
+const MaxReplicas = 100
+
+// root 在 k8s-engine 以 root 執行（stdin 可為 nil；kubectl apply -f - 由 stdin 讀 manifest）。
+func (m *Manager) root(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
+	return m.in(ctx, m.Distro, stdin, args...)
+}
+
+func checkRef(ns, name string) error {
+	if !ValidName(ns) {
+		return fmt.Errorf("invalid namespace %q", ns)
+	}
+	if !ValidName(name) {
+		return fmt.Errorf("invalid name %q", name)
+	}
+	return nil
+}
+
+// portBusy：Windows 端（wsld／wsld-gui 所在）該 localhost 埠是否已有人在聽。
+func portBusy(port int) bool {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// Apply 以 `kubectl apply -f -` 套用使用者提供的 YAML／JSON，回傳 kubectl 的輸出
+// （每行一個 `kind/name created|configured|unchanged`）。
+func (m *Manager) Apply(ctx context.Context, manifest []byte) (string, error) {
+	if len(bytes.TrimSpace(manifest)) == 0 {
+		return "", errors.New("empty manifest")
+	}
+	if len(manifest) > MaxApplyBytes {
+		return "", fmt.Errorf("manifest is larger than %d bytes", MaxApplyBytes)
+	}
+	return m.root(ctx, bytes.NewReader(manifest), "k3s", "kubectl", "apply", "-f", "-")
+}

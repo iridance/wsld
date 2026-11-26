@@ -813,3 +813,38 @@ func TestK8sRoundTrip(t *testing.T) {
 		t.Fatalf("engine untouched: %+v active=%q", got.Machines, got.Active)
 	}
 }
+
+func TestK8sExtrasRoundTripAndValidation(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.K8sTLSSAN = []string{"my-pc.lan", "192.168.1.20", "*.k8s.localhost"}
+	c.K8sKubeletArgs = []string{"max-pods=50", "eviction-hard=memory.available<1Gi"}
+	if err := Save(p, c); err == nil {
+		t.Fatal("kubelet arg with < accepted")
+	}
+	c.K8sKubeletArgs = []string{"max-pods=50"}
+	c.K8sMergeKubeconfig = true
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.K8sTLSSAN) != 3 || got.K8sKubeletArgs[0] != "max-pods=50" || !got.K8sMergeKubeconfig {
+		t.Fatalf("round trip: %+v", got)
+	}
+	for _, bad := range [][]string{{"has space"}, {"semi;colon"}, {"$(x)"}} {
+		c.K8sTLSSAN = bad
+		if err := Save(p, c); err == nil {
+			t.Errorf("tls san %q accepted", bad)
+		}
+	}
+	c.K8sTLSSAN = nil
+	for _, bad := range []string{"--max-pods=1", "max-pods", "a=b c"} {
+		c.K8sKubeletArgs = []string{bad}
+		if err := Save(p, c); err == nil {
+			t.Errorf("kubelet arg %q accepted", bad)
+		}
+	}
+}

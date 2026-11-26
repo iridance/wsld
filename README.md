@@ -4,7 +4,7 @@
 
 把 WSL2 當開發機（程式放 Linux 檔系統），裡面跑 dockerd；外面用 `wsld` CLI 或 `wsld-gui` 管引擎與容器。感覺接近 mac 上的 OrbStack。
 
-目前 **0.20.0**（tag `v0.20.0`）：0.20.0 本機 Kubernetes（預設關閉；開啟後建立專用的 Debian distro `k8s-engine` 跑單節點 k3s，pod 直接跑在共用 engine 的 Docker 上，與容器共用映像和網路；GUI 頂部 Kubernetes 頁、`wsld k8s on|off|status`）；0.19.1 engine 卡片顯示 engine 版本、拿掉 icon，Machines 的非 engine 群組標題改為「已安裝」；0.19.0 各頁首次載入前先顯示對齊資料版面的 loading 佔位；App 啟動時自動連線；0.17.2 機器卡片圖示改為各 distro 的 logo；修正：主要機器不再於閒置約 20 秒後被 WSL 自動停止；0.17.1 開啟已停止機器的 Info 不再把它啟動；0.17.0 機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
+目前 **0.20.0**（tag `v0.20.0`）：0.20.0 本機 Kubernetes（預設關閉；開啟後建立專用的 Debian distro `k8s-engine` 跑單節點 k3s，pod 直接跑在共用 engine 的 Docker 上，與容器共用映像和網路；GUI 頂部 Kubernetes 頁：Pods／Services 兩個分頁，Pods 依 namespace 分組（日誌、終端、CPU／記憶體、刪除），Services 顯示後端 pods 與可直接點開的 localhost 位址、Port forward、重新啟動／重置叢集、併入 ~/.kube/config、Import Compose／Apply YAML；`wsld k8s on|off|status|restart|reset|pods|svc|forward|kubeconfig|apply|compose|stack`、`wsld kubectl`）；0.19.1 engine 卡片顯示 engine 版本、拿掉 icon，Machines 的非 engine 群組標題改為「已安裝」；0.19.0 各頁首次載入前先顯示對齊資料版面的 loading 佔位；App 啟動時自動連線；0.17.2 機器卡片圖示改為各 distro 的 logo；修正：主要機器不再於閒置約 20 秒後被 WSL 自動停止；0.17.1 開啟已停止機器的 Info 不再把它啟動；0.17.0 機器磁碟上限：新增機器時可指定虛擬磁碟上限（預設 60 GB，取代 WSL 預設的 1 TB），既有機器可在 Info 或以 `wsld resize-disk` 調整）：見 [ROADMAP](docs/ROADMAP.md)、[SPEC](docs/SPEC.md)。Phase 0–4 基底可用；之後 v2.0 會換成 WinUI。
 
 ```text
 Windows                         WSL2

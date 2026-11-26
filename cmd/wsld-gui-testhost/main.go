@@ -118,6 +118,8 @@ func main() {
 		Shell:           gui.FakeDistroShell{},
 		K8sFor:          fk8s.For,
 		KubeconfigPath:  filepath.Join(kubeDir, "kubeconfig.yaml"),
+		// 不可碰到真正的 ~/.kube/config
+		UserKubeconfigPath: filepath.Join(kubeDir, "user-kube-config"),
 		InstallK8sDistro: func(_ context.Context, _, name string, _ int) error {
 			fwsl.AddDistro(name, "Running")
 			return nil
@@ -376,7 +378,7 @@ func main() {
 		srv.RefreshExposure()
 		ok(w)
 	})
-	// k8s 場景：?installed=1&running=1&fail=<step>&delay=<ms>&pods=1（pods=1 放入幾個示範 pod）。
+	// k8s 場景：?installed=1&running=1&fail=<step>&delay=<ms>&pods=1（pods=1 放入幾個示範 pod、service 與用量）。
 	// running=1 同時把設定的 k8s 打開（模擬已開啟的 Kubernetes）。
 	mux.HandleFunc("POST /__test/k8s", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -397,9 +399,34 @@ func main() {
 			if q.Get("pods") == "1" {
 				now := time.Now()
 				f.SetPods([]k8s.Pod{
-					{Namespace: "default", Name: "web-747498c8dc-xxztk", Status: "Running", Ready: "1/1", IP: "172.17.0.5", Created: now.Add(-12 * time.Minute)},
-					{Namespace: "default", Name: "worker-5d9f7c6b4-q2wkp", Status: "CrashLoopBackOff", Ready: "0/1", Restarts: 7, IP: "172.17.0.7", Created: now.Add(-40 * time.Minute)},
-					{Namespace: "kube-system", Name: "coredns-577d995dff-d6ddg", Status: "Running", Ready: "1/1", IP: "172.17.0.2", Created: now.Add(-3 * time.Hour)},
+					{Namespace: "default", Name: "web-747498c8dc-xxztk", Status: "Running", Ready: "2/2", IP: "172.17.0.5", Created: now.Add(-12 * time.Minute),
+						Labels: map[string]string{"app": "web", "pod-template-hash": "747498c8dc"},
+						Containers: []k8s.PodContainer{
+							{Name: "migrate", ID: "c0ffee000001", Init: true, State: "terminated", Reason: "Completed"},
+							{Name: "nginx", ID: "c0ffee000002", Ready: true, State: "running"},
+							{Name: "sidecar", ID: "c0ffee000003", Ready: true, State: "running"},
+						}},
+					{Namespace: "default", Name: "worker-5d9f7c6b4-q2wkp", Status: "CrashLoopBackOff", Ready: "0/1", Restarts: 7, IP: "172.17.0.7", Created: now.Add(-40 * time.Minute),
+						Labels:     map[string]string{"app": "worker"},
+						Containers: []k8s.PodContainer{{Name: "worker", ID: "c0ffee000004", State: "waiting", Reason: "CrashLoopBackOff", Restarts: 7}}},
+					{Namespace: "kube-system", Name: "coredns-577d995dff-d6ddg", Status: "Running", Ready: "1/1", IP: "172.17.0.2", Created: now.Add(-3 * time.Hour),
+						Labels:     map[string]string{"k8s-app": "kube-dns"},
+						Containers: []k8s.PodContainer{{Name: "coredns", ID: "c0ffee000005", Ready: true, State: "running"}}},
+				})
+				f.SetServices([]k8s.Service{
+					{Namespace: "default", Name: "kubernetes", Type: "ClusterIP", ClusterIP: "10.43.0.1", Created: now.Add(-3 * time.Hour),
+						Ports: []k8s.ServicePort{{Name: "https", Port: 443, TargetPort: "6443", Protocol: "TCP"}}, URLs: []string{}},
+					{Namespace: "default", Name: "web", Type: "LoadBalancer", ClusterIP: "10.43.12.7", External: []string{"172.20.3.68"}, Created: now.Add(-12 * time.Minute),
+						Labels: map[string]string{"app": "web"}, Selector: map[string]string{"app": "web"},
+						Ports: []k8s.ServicePort{{Port: 8080, TargetPort: "80", NodePort: 31080, Protocol: "TCP"}}, URLs: []string{"http://localhost:8080"}},
+					{Namespace: "default", Name: "worker", Type: "ClusterIP", ClusterIP: "10.43.88.3", Created: now.Add(-40 * time.Minute), Selector: map[string]string{"app": "worker"},
+						Ports: []k8s.ServicePort{{Port: 9000, TargetPort: "9000", Protocol: "TCP"}}, URLs: []string{}},
+					{Namespace: "kube-system", Name: "kube-dns", Type: "ClusterIP", ClusterIP: "10.43.0.10", Created: now.Add(-3 * time.Hour), Selector: map[string]string{"k8s-app": "kube-dns"},
+						Ports: []k8s.ServicePort{{Name: "dns", Port: 53, TargetPort: "53", Protocol: "UDP"}}, URLs: []string{}},
+				})
+				f.SetStats([]k8s.PodStats{
+					{Namespace: "default", Name: "web-747498c8dc-xxztk", CPU: 1.5, MemBytes: 24 << 20},
+					{Namespace: "kube-system", Name: "coredns-577d995dff-d6ddg", CPU: 0.3, MemBytes: 18 << 20},
 				})
 			}
 		})
@@ -417,6 +444,8 @@ func main() {
 	mux.HandleFunc("POST /__test/reset", func(w http.ResponseWriter, r *http.Request) {
 		stopSupervise()
 		fk8s.Reset()
+		_ = os.Remove(filepath.Join(kubeDir, "user-kube-config"))
+		_ = os.Remove(filepath.Join(kubeDir, "kubeconfig.yaml"))
 		srv.ResetK8sState()
 		srv.ResetStart()
 		reset()

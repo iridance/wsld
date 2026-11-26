@@ -113,6 +113,8 @@ type Server struct {
 	InstallK8sDistro func(ctx context.Context, base, name string, vhdSizeGB int) error
 	// KubeconfigPath 是 Windows 端匯出 kubeconfig 的路徑（"" = config 目錄下的 kubeconfig.yaml）。
 	KubeconfigPath string
+	// UserKubeconfigPath 是使用者的 ~/.kube/config（"" = k8s.UserKubeconfigPath()；測試主機指到暫存目錄）。
+	UserKubeconfigPath string
 
 	k8sMu        sync.Mutex
 	k8sOp        string // 背景作業（enabling|disabling|starting）
@@ -122,6 +124,10 @@ type Server struct {
 	k8sLast      *k8s.Status // 上一次確定的狀態（查詢逾時時沿用）
 	k8sCheckedAt time.Time   // Supervise 上次檢查 k8s 的時間（節流）
 	k8sNextTry   time.Time   // 自動帶起失敗後的退避
+	k8sSteps     []string    // 目前（或上一次失敗的）背景作業的步驟清單
+	// k8sNodePorts：NodePort／LoadBalancer 的 nodePort（區網轉發用；每 k8sNodePortsEvery 更新一次）。
+	k8sNodePorts   map[int]string
+	k8sNodePortsAt time.Time
 
 	diskBusy atomic.Bool // 調整／壓縮磁碟中：/config 不在 distro 內執行命令（避免把 WSL 叫醒）
 
@@ -215,6 +221,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/k8s/enable", s.handleK8sEnable)
 	mux.HandleFunc("POST /api/k8s/disable", s.handleK8sDisable)
 	mux.HandleFunc("GET /api/k8s/pods", s.handleK8sPods)
+	mux.HandleFunc("DELETE /api/k8s/pods/{ns}/{name}", s.handleK8sPodDelete)
+	mux.HandleFunc("GET /api/k8s/services", s.handleK8sServices)
+	mux.HandleFunc("GET /api/k8s/stats", s.handleK8sStats)
+	mux.HandleFunc("GET /api/k8s/forwards", s.handleK8sForwards)
+	mux.HandleFunc("POST /api/k8s/forwards", s.handleK8sForwardCreate)
+	mux.HandleFunc("DELETE /api/k8s/forwards/{port}", s.handleK8sForwardDelete)
+	mux.HandleFunc("POST /api/k8s/restart", s.handleK8sRestart)
+	mux.HandleFunc("POST /api/k8s/reset", s.handleK8sReset)
+	mux.HandleFunc("POST /api/k8s/kubeconfig/merge", s.handleK8sMerge)
+	mux.HandleFunc("POST /api/k8s/apply", s.handleK8sApply)
+	mux.HandleFunc("POST /api/k8s/stack", s.handleK8sStack)
+	mux.HandleFunc("DELETE /api/k8s/stack/{ns}/{name}", s.handleK8sStackDelete)
+	mux.HandleFunc("POST /api/k8s/compose/preview", s.handleComposePreview)
+	mux.HandleFunc("GET /api/fs/sources", s.handleFSSources)
+	mux.HandleFunc("GET /api/fs/list", s.handleFSList)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("POST /api/window/{action}", s.handleWindow)
 	mux.HandleFunc("POST /api/distro/{action}", s.handleDistro)

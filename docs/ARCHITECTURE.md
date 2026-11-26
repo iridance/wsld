@@ -65,7 +65,7 @@ docker-engine (role=engine)                         k8s-engine (role=k8s, Debian
   pod = docker 容器（docker0 網段，與一般容器互通）   API https://127.0.0.1:26443 ◄── Windows kubectl／其他 distro
 ```
 
-- 程式：`internal/k8s`（Manager：Status／Enable／Start／Stop／Disable／Kubeconfig／ListPods）、`scripts/03-k8s.sh`＋`scripts/lib/k8s-lib.sh`（`scripts.K8sBundle()`）、`internal/gui/k8s.go`（`/api/k8s*`、背景作業、Supervise）、`internal/cli/k8s.go`。
+- 程式：`internal/k8s`（Manager：Status／Enable／Start／Restart／Reset／Stop／Disable／Kubeconfig；`pods.go` ListPods／DeletePod、`services.go`、`stats.go`（engine 的 docker stats）、`forward.go`（engine 上的 socat 轉發容器）、`kubeconfig.go`（併入 ~/.kube/config））、`deploy.go`（Deploy／Apply）、`stack.go`（StackSpec → manifest、依相依順序 rollout）、`compose.go`（Compose → StackSpec、ResolveBind）、`internal/gui/k8sres.go`（Pods／Services／Stats／Forwards 端點、區網 NodePort）、`internal/gui/compose.go`（檔案瀏覽 `/api/fs/*`、Compose 預覽、Deploy／Apply／Stack 端點）、`scripts/03-k8s.sh`＋`scripts/lib/k8s-lib.sh`（`scripts.K8sBundle()`）、`internal/gui/k8s.go`（`/api/k8s*`、背景作業、Supervise）、`internal/cli/k8s.go`。
 - 為什麼不是「kubelet 在 engine、控制面在 k8s-engine」或 kind／k3d：使用者要的是獨立的 k8s distro＋pod 直接是 engine 上的容器；跨 distro 的路徑用 `/mnt/wsl` 對應即可，沿用 client 曝露的同一套機制。
 
 ## 4. v1 vs v2 UI

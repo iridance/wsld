@@ -91,7 +91,7 @@ func (s *Server) SyncLAN(ctx context.Context) {
 		return
 	}
 	apiPort, _ := cfg.APIPort()
-	s.Forwarder.Sync(addrs, lan.PublishedTargets(cs, apiPort))
+	s.Forwarder.Sync(addrs, mergeLANTargets(lan.PublishedTargets(cs, apiPort), s.k8sLANTargets(ctx)))
 }
 
 // RunLAN 每 every 同步一次轉發，直到 ctx 結束（結束時關閉所有轉發）。

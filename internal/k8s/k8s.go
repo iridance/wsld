@@ -34,7 +34,8 @@ const (
 	// statusScript：9 = 未安裝、8 = 服務未啟動、0 = 印出 nodes JSON；其他 = API 還沒好。
 	statusScript = "test -x /usr/local/bin/k3s || exit 9; systemctl is-active --quiet k3s || exit 8; k3s kubectl get nodes -o json --request-timeout=5s"
 	// removePodsScript：在 engine 移除 cri-dockerd 建立的 pod 容器（停 k3s 不會停它們，它們還接著 k8s-engine 的曝露路徑）。
-	removePodsScript = "docker ps -aq --filter label=io.kubernetes.pod.namespace | xargs -r docker rm -f"
+	// 轉發容器（forward.go）連的是叢集內的位址，也一併移除。
+	removePodsScript = "docker ps -aq --filter label=io.kubernetes.pod.namespace | xargs -r docker rm -f; docker ps -aq --filter label=" + LabelForward + " | xargs -r docker rm -f"
 )
 
 // State 是 k8s 的概括狀態。
@@ -69,10 +70,18 @@ const (
 	StepStart      = "start"
 	StepReady      = "ready"
 	StepKubeconfig = "kubeconfig"
+	StepStop       = "stop" // Restart／Reset：先停止
+	StepWipe       = "wipe" // Reset：清除叢集資料
 )
 
 // Steps 是 Enable 的完整步驟順序。
 var Steps = []string{StepEngine, StepDistro, StepBootstrap, StepShare, StepStart, StepReady, StepKubeconfig}
+
+// RestartSteps／ResetSteps 是 Restart／Reset 的步驟順序。
+var (
+	RestartSteps = []string{StepStop, StepEngine, StepShare, StepStart, StepReady, StepKubeconfig}
+	ResetSteps   = []string{StepStop, StepWipe, StepEngine, StepShare, StepStart, StepReady, StepKubeconfig}
+)
 
 // StepError 標出失敗在哪一步。
 type StepError struct {
@@ -86,12 +95,14 @@ func (e *StepError) Unwrap() error { return e.Err }
 // Manager 管理 k8s-engine。
 type Manager struct {
 	WSL          wsl.Runner
-	Distro       string // k8s-engine
-	EngineDistro string // 跑 dockerd 的 distro
-	Base         string // 新建 distro 用的發行版（`wsl --install -d`）；"" = Debian
-	VHDSizeGB    int    // 新建 distro 的磁碟上限；0 = DefaultVHDSizeGB
-	APIPort      int    // k3s API 埠（呼叫端已正規化）
-	Bundle       []byte // scripts.K8sBundle()
+	Distro       string   // k8s-engine
+	EngineDistro string   // 跑 dockerd 的 distro
+	Base         string   // 新建 distro 用的發行版（`wsl --install -d`）；"" = Debian
+	VHDSizeGB    int      // 新建 distro 的磁碟上限；0 = DefaultVHDSizeGB
+	APIPort      int      // k3s API 埠（呼叫端已正規化）
+	TLSSAN       []string // 額外的 API server 憑證 SAN（config 的 k8s_tls_san）
+	KubeletArgs  []string // 額外的 kubelet 參數（config 的 k8s_kubelet_args）
+	Bundle       []byte   // scripts.K8sBundle()
 	Output       io.Writer
 
 	// Progress 在每個步驟開始時呼叫（可為 nil）。
@@ -102,10 +113,24 @@ type Manager struct {
 	ReadyAttempts int           // 預設 180
 	ReadyInterval time.Duration // 預設 1s
 	Sleep         func(time.Duration)
+	// PortBusy：Windows 端該 localhost 埠是否已被占用（nil = 以 127.0.0.1 撥號探測；Deploy 挑 LoadBalancer 埠用）。
+	PortBusy func(port int) bool
 }
 
 // Endpoint 是 Windows 與各 distro 連 API 的位址（WSL2 共用 network namespace，localhost 轉發到 Windows）。
 func Endpoint(port int) string { return "https://127.0.0.1:" + strconv.Itoa(port) }
+
+// configArgs 是 03-k8s.sh install／configure 的參數（值已由 config 驗證過）。
+func (m *Manager) configArgs() []string {
+	args := []string{m.Distro, strconv.Itoa(m.APIPort)}
+	for _, v := range m.TLSSAN {
+		args = append(args, "--tls-san="+v)
+	}
+	for _, v := range m.KubeletArgs {
+		args = append(args, "--kubelet-arg="+v)
+	}
+	return args
+}
 
 func (m *Manager) progress(step string) {
 	if m.Progress != nil {
@@ -257,6 +282,10 @@ func (m *Manager) start(ctx context.Context) ([]byte, error) {
 		return nil, &StepError{StepShare, fmt.Errorf("%s: %w", i18n.T("k8s.share_failed", m.EngineDistro), err)}
 	}
 	m.progress(StepStart)
+	// 每次啟動前重寫 k3s 設定：config.toml 的 tls-san／kubelet-arg 變更在下次啟動生效。
+	if err := m.runScript(ctx, m.Distro, append([]string{"configure"}, m.configArgs()...)...); err != nil {
+		return nil, &StepError{StepStart, fmt.Errorf("%s: %w", i18n.T("k8s.start_failed", m.Distro), err)}
+	}
 	// 之前連續失敗會觸發 start limit，start 會直接被拒；先 reset-failed。
 	_, _ = m.in(ctx, m.Distro, nil, "systemctl", "reset-failed", "k3s", "wsld-cri-dockerd", "wsld-k8s-mounts")
 	if _, err := m.in(ctx, m.Distro, nil, "systemctl", "start", "k3s"); err != nil {
@@ -309,7 +338,7 @@ func (m *Manager) ensureDistro(ctx context.Context) error {
 
 // bootstrap 在 k8s-engine 跑安裝腳本；結束碼 3 = systemd 剛啟用，重開 distro 再跑一次。
 func (m *Manager) bootstrap(ctx context.Context) error {
-	args := []string{"install", m.Distro, strconv.Itoa(m.APIPort)}
+	args := append([]string{"install"}, m.configArgs()...)
 	err := m.runScript(ctx, m.Distro, args...)
 	if wsl.ExitCode(err) == 3 {
 		if terr := wsl.Terminate(ctx, m.WSL, m.Distro); terr != nil {
@@ -366,6 +395,33 @@ func (m *Manager) Stop(ctx context.Context) error {
 		return fmt.Errorf("%s: %w", i18n.T("k8s.stop_failed", m.Distro), err)
 	}
 	return nil
+}
+
+// Restart 停止再啟動 k3s（pod 容器會由 kubelet 重建）。
+func (m *Manager) Restart(ctx context.Context) ([]byte, error) {
+	m.progress(StepStop)
+	if err := m.Stop(ctx); err != nil {
+		return nil, &StepError{StepStop, err}
+	}
+	return m.Start(ctx)
+}
+
+// Reset 清除叢集（所有資源與 PV）後重新啟動；k8s-engine、映像檔與憑證保留。
+func (m *Manager) Reset(ctx context.Context) ([]byte, error) {
+	m.progress(StepStop)
+	if err := m.Stop(ctx); err != nil {
+		return nil, &StepError{StepStop, err}
+	}
+	if state, err := m.distroState(ctx, m.Distro); err != nil {
+		return nil, &StepError{StepWipe, err}
+	} else if state == "" {
+		return m.Enable(ctx) // 還沒有 distro：等同全新開啟
+	}
+	m.progress(StepWipe)
+	if err := m.runScript(ctx, m.Distro, "reset"); err != nil {
+		return nil, &StepError{StepWipe, fmt.Errorf("%s: %w", i18n.T("k8s.reset_failed", m.Distro), err)}
+	}
+	return m.Start(ctx)
 }
 
 // Disable 停止 k3s，並讓 engine 不再分享容器目錄。k8s-engine 與叢集資料保留（再次開啟會沿用）。

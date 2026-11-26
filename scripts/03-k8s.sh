@@ -2,7 +2,10 @@
 # wsld：單節點 k3s 跑在專用 distro（k8s-engine），runtime 用 engine 的 dockerd。架構見 scripts/lib/k8s-lib.sh。
 #
 # 用法（以 root 執行；冪等；wsld 把 bundle 寫到 /tmp 後執行）：
-#   03-k8s.sh install <distro> <api-port>   在 k8s-engine 內：套件、cri-dockerd、k3s、掛載與 unit（不啟動、不開機自啟）
+#   03-k8s.sh install <distro> <api-port> [選項…]    在 k8s-engine 內：套件、cri-dockerd、k3s、掛載與 unit（不啟動、不開機自啟）
+#   03-k8s.sh configure <distro> <api-port> [選項…]  在 k8s-engine 內：只重寫 k3s 設定（每次啟動前，套用 config.toml 的變更）
+#   03-k8s.sh reset                                  在 k8s-engine 內：清除叢集資料（k3s 必須已停止、掛載已卸載）
+#     選項：--tls-san=<名稱>、--kubelet-arg=<旗標=值>（可重複）
 #   03-k8s.sh share-engine                  在 engine 內：安裝並啟用 wsld-k8s-share（分享容器 log 目錄）
 #   03-k8s.sh unshare-engine                在 engine 內：停用並移除 wsld-k8s-share
 # 結束碼：2 用法錯誤、3 systemd 尚未生效（wsl --terminate 後重跑）、6 下載失敗、7 checksum 不符。
@@ -99,17 +102,45 @@ install_k3s() {
   rm -f "$tmp"
 }
 
+# 解析 <distro> <api-port> [--tls-san=…] [--kubelet-arg=…]，結果放在 K8S_NAME／K8S_PORT／K8S_EXTRA。
+parse_k8s_args() {
+  local x v
+  K8S_NAME="${1:-}" K8S_PORT="${2:-}" K8S_EXTRA=()
+  wsld_k8s_valid_name "$K8S_NAME" || die "用法: 03-k8s.sh install|configure <distro> <api-port> [選項…]" 2
+  [[ "$K8S_PORT" =~ ^[0-9]+$ ]] && [ "$K8S_PORT" -ge 1024 ] && [ "$K8S_PORT" -le 65535 ] || die "api-port 必須是 1024–65535" 2
+  shift 2 || true
+  for x in "$@"; do
+    case "$x" in
+      --tls-san=*) v="${x#--tls-san=}"; wsld_k8s_valid_extra "$v" || die "tls-san 不合法：$v" 2; K8S_EXTRA+=("tls-san=$v") ;;
+      --kubelet-arg=*) v="${x#--kubelet-arg=}"; wsld_k8s_valid_extra "$v" || die "kubelet-arg 不合法：$v" 2; K8S_EXTRA+=("kubelet-arg=$v") ;;
+      *) die "未知選項：$x" 2 ;;
+    esac
+  done
+}
+
+configure_k8s() {
+  parse_k8s_args "$@"
+  wsld_render_k3s_config "$K8S_NAME" "$K8S_PORT" "${K8S_EXTRA[@]}" | write_file /etc/rancher/k3s/config.yaml 0644
+}
+
+# 清除叢集資料：datastore、PV、kubelet 的 pod 目錄、cri-dockerd 的 sandbox 紀錄。憑證與 token 保留（kubeconfig 仍有效）。
+reset_k8s() {
+  systemctl is-active --quiet k3s && die "k3s 仍在執行" 3
+  findmnt -rn -o TARGET | grep -qF /var/lib/wsld-k8s/ && die "/var/lib/wsld-k8s 下仍有掛載" 3
+  rm -rf /var/lib/rancher/k3s/server/db /var/lib/wsld-k8s/storage /var/lib/wsld-k8s/kubelet/pods /var/lib/wsld-k8s/cri-dockerd
+  log "叢集資料已清除"
+}
+
 install_k8s() {
-  local name="${1:-}" port="${2:-}"
-  wsld_k8s_valid_name "$name" || die "用法: 03-k8s.sh install <distro> <api-port>" 2
-  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || die "api-port 必須是 1024–65535" 2
+  parse_k8s_args "$@"
+  local name="$K8S_NAME" port="$K8S_PORT"
   ensure_systemd
   install_packages
   install_cri_dockerd
   wsld_render_k8s_mounts_script "$name" | write_file /usr/local/sbin/wsld-k8s-mounts 0755
   wsld_render_k8s_mounts_unit | write_file /etc/systemd/system/wsld-k8s-mounts.service 0644
   wsld_render_cri_unit | write_file /etc/systemd/system/wsld-cri-dockerd.service 0644
-  wsld_render_k3s_config "$name" "$port" | write_file /etc/rancher/k3s/config.yaml 0644
+  wsld_render_k3s_config "$name" "$port" "${K8S_EXTRA[@]}" | write_file /etc/rancher/k3s/config.yaml 0644
   wsld_render_k3s_dropin "$name" | write_file /etc/systemd/system/k3s.service.d/10-wsld.conf 0644
   install_k3s
   systemctl daemon-reload </dev/null
@@ -139,9 +170,13 @@ unshare_engine() {
   log "engine 已停止分享"
 }
 
-case "${1:-}" in
-  install) install_k8s "${2:-}" "${3:-}" ;;
+mode="${1:-}"
+shift || true
+case "$mode" in
+  install) install_k8s "$@" ;;
+  configure) configure_k8s "$@" ;;
+  reset) reset_k8s ;;
   share-engine) share_engine ;;
   unshare-engine) unshare_engine ;;
-  *) die "用法: 03-k8s.sh install <distro> <api-port> | share-engine | unshare-engine" 2 ;;
+  *) die "用法: 03-k8s.sh install|configure <distro> <api-port> [選項…] | reset | share-engine | unshare-engine" 2 ;;
 esac

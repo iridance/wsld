@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -77,6 +78,12 @@ type Config struct {
 	K8s bool `toml:"k8s,omitempty"`
 	// K8sAPIPort：k3s API server 埠（0 = DefaultK8sAPIPort）。只影響新安裝。
 	K8sAPIPort int `toml:"k8s_api_port,omitzero"`
+	// K8sTLSSAN：額外的 API server 憑證 SAN（主機名稱或 IP）；K8sKubeletArgs：額外的 kubelet 參數（旗標=值）。
+	// 兩者在下次啟動 k3s 時套用。
+	K8sTLSSAN      []string `toml:"k8s_tls_san,omitempty"`
+	K8sKubeletArgs []string `toml:"k8s_kubelet_args,omitempty"`
+	// K8sMergeKubeconfig：把 wsld 的 cluster／user／context 併進使用者的 ~/.kube/config（只動名為 wsld 的項目）。
+	K8sMergeKubeconfig bool `toml:"k8s_merge_kubeconfig,omitempty"`
 
 	// 自 active machine 衍生，不寫入檔案（供 lifecycle／doctor 沿用欄位存取）。
 	Distro      string `toml:"-"`
@@ -98,6 +105,9 @@ type fileShape struct {
 	EngineBase         string    `toml:"engine_base"`
 	K8s                bool      `toml:"k8s"`
 	K8sAPIPort         int       `toml:"k8s_api_port"`
+	K8sTLSSAN          []string  `toml:"k8s_tls_san"`
+	K8sKubeletArgs     []string  `toml:"k8s_kubelet_args"`
+	K8sMergeKubeconfig bool      `toml:"k8s_merge_kubeconfig"`
 	// Legacy flat keys
 	Distro      string `toml:"distro"`
 	User        string `toml:"user"`
@@ -163,6 +173,9 @@ func Load(path string) (Config, error) {
 	c.EngineBase = raw.EngineBase
 	c.K8s = raw.K8s
 	c.K8sAPIPort = raw.K8sAPIPort
+	c.K8sTLSSAN = raw.K8sTLSSAN
+	c.K8sKubeletArgs = raw.K8sKubeletArgs
+	c.K8sMergeKubeconfig = raw.K8sMergeKubeconfig
 	if raw.RefreshIntervalSec != 0 {
 		c.RefreshIntervalSec = raw.RefreshIntervalSec
 	}
@@ -273,6 +286,9 @@ type saveShape struct {
 	EngineBase         string    `toml:"engine_base,omitempty"`
 	K8s                bool      `toml:"k8s,omitempty"`
 	K8sAPIPort         int       `toml:"k8s_api_port,omitzero"`
+	K8sTLSSAN          []string  `toml:"k8s_tls_san,omitempty"`
+	K8sKubeletArgs     []string  `toml:"k8s_kubelet_args,omitempty"`
+	K8sMergeKubeconfig bool      `toml:"k8s_merge_kubeconfig,omitempty"`
 }
 
 // Save 驗證後寫入新格式（會建立目錄）。
@@ -297,6 +313,9 @@ func Save(path string, c Config) error {
 		EngineBase:         c.EngineBase,
 		K8s:                c.K8s,
 		K8sAPIPort:         c.K8sAPIPort,
+		K8sTLSSAN:          c.K8sTLSSAN,
+		K8sKubeletArgs:     c.K8sKubeletArgs,
+		K8sMergeKubeconfig: c.K8sMergeKubeconfig,
 	}
 	data, err := toml.Marshal(out)
 	if err != nil {
@@ -602,8 +621,24 @@ func (c Config) validateGlobals() error {
 	default:
 		return fmt.Errorf("theme must be light, dark, or system, got %q", c.Theme)
 	}
+	for _, v := range c.K8sTLSSAN {
+		if !k8sSANRe.MatchString(v) {
+			return fmt.Errorf("k8s_tls_san: %q is not a host name or IP address", v)
+		}
+	}
+	for _, v := range c.K8sKubeletArgs {
+		if !k8sKubeletArgRe.MatchString(v) {
+			return fmt.Errorf("k8s_kubelet_args: %q must look like flag=value (letters, digits and ._/:=,*- only, no leading --)", v)
+		}
+	}
 	return nil
 }
+
+// k8s 額外設定的格式（會經 wsl.exe 命令列傳給安裝腳本、寫進 k3s 的 YAML，不可含空白或 shell 字元）。
+var (
+	k8sSANRe        = regexp.MustCompile(`^[A-Za-z0-9*]([A-Za-z0-9.:*-]{0,252})$`)
+	k8sKubeletArgRe = regexp.MustCompile(`^[a-z][a-z0-9-]*=[A-Za-z0-9._/:=,*-]{0,200}$`)
+)
 
 // APIPort 解析 active 的 api_endpoint，並要求 tcp + loopback host。
 func (c Config) APIPort() (int, error) {

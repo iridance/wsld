@@ -2,7 +2,7 @@ SHELL := /bin/bash
 export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(PATH)
 
 # 版號對齊 git tag（v0.5.1 → 注入 main.version → GUI 左下角 v0.5.1）；未在 exact tag 上時預設 0.5.1
-VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' | grep . || echo 0.19.0)
+VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' | grep . || echo 0.20.0)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: test test-go test-scripts test-scripts-bash test-scripts-ps lint-scripts build-win build-gui build-frontend test-ui readme-shots fmt icon winres

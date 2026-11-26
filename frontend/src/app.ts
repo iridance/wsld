@@ -7,8 +7,15 @@ import {
   type MachineConfig,
   type Image,
   type InstallProgress,
+  type ComposePreview,
+  type FileEntry,
+  type FileSources,
+  type K8sForward,
   type K8sInfo,
   type K8sPod,
+  type K8sPodContainer,
+  type K8sPodStats,
+  type K8sService,
   type LANForward,
   type LANStatus,
   type MachinesResponse,
@@ -34,6 +41,9 @@ type InfoDrawer =
 /** 側欄視圖。 */
 export type View = "containers" | "images" | "volumes" | "networks" | "machines" | "kubernetes" | "settings";
 type CtFilter = "all" | "running" | "stopped";
+/** 表格欄寬的儲存鍵：各頁，加上 Kubernetes 頁的 Services／Port forwards 表格。 */
+type TableKey = View | "kubernetes-svc" | "kubernetes-fwd";
+type K8sTab = "pods" | "services";
 type ImgKind = "inuse" | "unused" | "dangling" | "unknown";
 type ImgFilter = "all" | "inuse" | "unused" | "dangling";
 const IMG_FILTERS: { id: ImgFilter; label: string }[] = [
@@ -112,6 +122,14 @@ interface State {
   k8s?: K8sInfo;
   /** Kubernetes 已 Ready 時的 pod 清單 */
   k8sPods?: K8sPod[];
+  /** Kubernetes 已 Ready 時的 service、pod 用量與 port forward */
+  k8sServices?: K8sService[];
+  k8sStats?: K8sPodStats[];
+  k8sForwards?: K8sForward[];
+  /** Pods／Services 是否顯示系統 namespace（kube-system 等；記在 localStorage） */
+  k8sShowSystem: boolean;
+  /** Kubernetes 頁目前的分頁：Pods（工作負載）或 Services（存取方式＋port forward）。 */
+  k8sTab: K8sTab;
 }
 
 /** SVG 元素建立（命名空間不同於 HTML）。 */
@@ -412,6 +430,8 @@ export class App {
       usageOpen: false,
       lanForwards: [],
       lanEnabled: false,
+      k8sShowSystem: loadJSON<boolean>(LS_K8S_SYSTEM, false),
+      k8sTab: loadJSON<K8sTab>(LS_K8S_TAB, "pods") === "services" ? "services" : "pods",
     };
     if (!VIEWS.some((v) => v.id === this.st.view)) this.st.view = "containers";
     this.build();
@@ -544,12 +564,17 @@ export class App {
     const k = await api.k8s(signal);
     this.st.k8s = k;
     if (k.enabled && k.status.state === "ready" && !k.op) {
-      try {
-        this.st.k8sPods = await api.k8sPods(signal);
-      } catch {
-        /* 保留上一次 */
-      }
-    } else this.st.k8sPods = undefined;
+      // 各清單獨立：任一個失敗都保留它上一次的值
+      const [pods, svcs, stats, fws] = await Promise.allSettled([
+        api.k8sPods(signal), api.k8sServices(signal), api.k8sStats(signal), api.k8sForwards(signal),
+      ]);
+      if (pods.status === "fulfilled") this.st.k8sPods = pods.value;
+      if (svcs.status === "fulfilled") this.st.k8sServices = svcs.value;
+      if (stats.status === "fulfilled") this.st.k8sStats = stats.value;
+      if (fws.status === "fulfilled") this.st.k8sForwards = fws.value;
+    } else {
+      this.st.k8sPods = this.st.k8sServices = this.st.k8sStats = this.st.k8sForwards = undefined;
+    }
   }
 
   /** 磁碟用量是附加資訊：查詢失敗不影響列表，保留上一次的值。 */
@@ -800,6 +825,9 @@ export class App {
       this.buildFirewallDialog(),
       this.buildAddMachineDialog(),
       this.buildResizeDialog(),
+      this.buildForwardDialog(),
+      this.buildImportDialog(),
+      this.buildApplyDialog(),
     );
     this.renderNav();
     this.renderView();
@@ -885,8 +913,12 @@ export class App {
         return ready ? fmt(t("gui.sub.items"), String(this.st.networks.length)) : "";
       case "machines":
         return this.st.machines?.available ? fmt(t("gui.sub.items"), String(this.st.machines.machines.length)) : "";
-      case "kubernetes":
-        return this.st.k8s?.enabled && this.st.k8sPods ? fmt(t("gui.sub.items"), String(this.st.k8sPods.length)) : "";
+      case "kubernetes": {
+        if (!this.st.k8s?.enabled) return "";
+        const pods = this.st.k8sPods?.filter((p) => this.k8sVisible(p.namespace)).length;
+        const svcs = this.st.k8sServices?.filter((x) => this.k8sVisible(x.namespace)).length;
+        return pods === undefined || svcs === undefined ? "" : fmt(t("gui.k8s.summary"), String(pods), String(svcs));
+      }
       default:
         return "";
     }
@@ -1218,14 +1250,16 @@ export class App {
     networks: loadJSON(`${LS_COLS}.networks`, {}),
     machines: loadJSON(`${LS_COLS}.machines`, {}),
     kubernetes: loadJSON(`${LS_COLS}.kubernetes`, {}),
+    "kubernetes-svc": loadJSON(`${LS_COLS}.kubernetes-svc`, {}),
+    "kubernetes-fwd": loadJSON(`${LS_COLS}.kubernetes-fwd`, {}),
   };
   private collapsed: Set<string> = new Set(loadJSON<string[]>(LS_COLLAPSED, []));
 
-  private widthOf(view: View, col: Col): number {
+  private widthOf(view: TableKey, col: Col): number {
     return Math.max(col.min, this.colWidths[view][col.key] ?? col.def);
   }
 
-  private applyColWidths(view: View, cols: Col[], table: HTMLTableElement): void {
+  private applyColWidths(view: TableKey, cols: Col[], table: HTMLTableElement): void {
     // 可調欄位給明確像素寬；最後的操作欄不設寬度，吸收剩餘空間（table-layout: fixed 的行為），
     // 所以拖曳某欄 +N px 時，只有那一欄與操作欄改變。
     let total = 0;
@@ -1239,7 +1273,7 @@ export class App {
     table.style.minWidth = `${total}px`;
   }
 
-  private startResize(ev: MouseEvent, view: View, cols: Col[], col: Col, table: HTMLTableElement): void {
+  private startResize(ev: MouseEvent, view: TableKey, cols: Col[], col: Col, table: HTMLTableElement): void {
     ev.preventDefault();
     const startX = ev.clientX;
     const startW = this.widthOf(view, col);
@@ -1259,7 +1293,7 @@ export class App {
   }
 
   /** 建立含 colgroup／thead（可拖曳）的固定版面表格，回傳 table 與 tbody。 */
-  private table(view: View, cols: Col[]): { table: HTMLTableElement; tbody: HTMLTableSectionElement } {
+  private table(view: TableKey, cols: Col[]): { table: HTMLTableElement; tbody: HTMLTableSectionElement } {
     const table = el("table", { class: "fixed" });
     const colgroup = el("colgroup", {}, ...cols.map((c) => el("col", { "data-col": c.key })));
     const headRow = el("tr");
@@ -2157,7 +2191,7 @@ export class App {
       ));
       return;
     }
-    if (k.op === "enabling" || k.op === "starting" || (!k.enabled && k.error)) {
+    if (k.op === "enabling" || k.op === "starting" || k.op === "restarting" || k.op === "resetting" || (!k.enabled && k.error)) {
       list.replaceChildren(this.k8sProgress(k));
       return;
     }
@@ -2165,7 +2199,34 @@ export class App {
       list.replaceChildren(this.k8sHero(k));
       return;
     }
-    list.replaceChildren(this.k8sStatusCard(k), this.k8sPodsSection());
+    bar.replaceChildren(el("span", { class: "spacer" }), this.k8sSystemToggle(), this.k8sActions());
+    list.replaceChildren(this.k8sStatusCard(k), this.k8sTabs(),
+      ...(this.st.k8sTab === "pods" ? [this.k8sPodsSection()] : [this.k8sServicesSection(), this.k8sForwardsSection()]));
+  }
+
+  /** Pods（工作負載）／Services（存取）分頁，叢集卡下方、表格正上方；數字為目前可見的項目數。 */
+  private k8sTabs(): HTMLElement {
+    const count = (xs?: { namespace: string }[]) => (xs ? xs.filter((x) => this.k8sVisible(x.namespace)).length : undefined);
+    const bar = tabs({
+      testid: "k8s-tab",
+      selected: this.st.k8sTab,
+      bordered: true,
+      label: t("gui.nav.kubernetes"),
+      items: [
+        { id: "pods", label: t("gui.k8s.pods"), icon: "containers", count: count(this.st.k8sPods) },
+        { id: "services", label: t("gui.k8s.services"), icon: "networks", count: count(this.st.k8sServices) },
+      ],
+      onSelect: (id) => this.setK8sTab(id as K8sTab),
+    });
+    bar.classList.add("k8s-tabs");
+    return bar;
+  }
+
+  private setK8sTab(tab: K8sTab): void {
+    if (tab === this.st.k8sTab) return;
+    this.st.k8sTab = tab;
+    saveJSON(LS_K8S_TAB, tab);
+    this.renderK8s();
   }
 
   private k8sHero(k: K8sInfo): HTMLElement {
@@ -2195,7 +2256,10 @@ export class App {
     });
     const kids: (Node | string)[] = [
       el("div", { class: "engine-down-icon", "aria-hidden": "true" }, icon("wheel")),
-      el("h2", { text: failed ? t("gui.k8s.failed") : k.op === "starting" ? t("gui.k8s.state.starting") : t("gui.k8s.enabling") }),
+      el("h2", { text: failed ? t("gui.k8s.failed")
+        : k.op === "starting" ? t("gui.k8s.state.starting")
+          : k.op === "restarting" ? t("gui.k8s.restarting")
+            : k.op === "resetting" ? t("gui.k8s.resetting") : t("gui.k8s.enabling") }),
       steps,
     ];
     if (k.install && k.step === "distro") {
@@ -2251,10 +2315,16 @@ export class App {
     const compact = iconBtn({ "data-testid": `btn-machine-compact-${name}` }, "shrink", t("gui.machines.compact"));
     compact.disabled = locked;
     compact.onclick = () => void this.compactMachine(name, running);
+    const restart = iconBtn({ "data-testid": "btn-k8s-restart" }, "refresh", t("gui.k8s.restart"));
+    restart.disabled = locked;
+    restart.onclick = () => void this.k8sRestart(false);
+    const reset = iconBtn({ "data-testid": "btn-k8s-reset", class: "danger" }, "reset", t("gui.k8s.reset"));
+    reset.disabled = locked;
+    reset.onclick = () => void this.k8sRestart(true);
     const card = el("article", { class: "machine-card engine-card", "data-testid": "k8s-card", "data-name": k.distro, "data-state": s.state, "aria-label": k.distro },
       el("h2", { class: "machine-name sr-only", "data-testid": "machine-name", text: k.distro }),
       el("div", { class: "machine-stats" }, ...stats),
-      el("div", { class: "machine-tools" }, off, info, folder, term, compact),
+      el("div", { class: "machine-tools" }, off, restart, info, folder, term, compact, reset),
     );
     return el("section", { class: "machine-group k8s-status", "data-testid": "k8s-group-engine" },
       el("h3", { class: "machine-group-title", text: t("gui.k8s.group_engine") }),
@@ -2278,11 +2348,25 @@ export class App {
         el("dd", { class: "with-action" }, el("span", { class: "mono", "data-testid": testid, title: path, text: path }), copy),
       );
     };
-    return [
+    const fields = [
       infoField(t("gui.machines.stat_endpoint"), k.status.endpoint, "info-machine-endpoint"),
       pathField(t("gui.k8s.f.kubeconfig"), "k8s-kubeconfig", k.kubeconfig_path),
       pathField(t("gui.k8s.f.kubeconfig_wsl"), "k8s-kubeconfig-wsl", k.shared_kubeconfig),
     ];
+    if (k.user_kubeconfig) {
+      // ~/.kube/config：目前的 current-context；不是 wsld 時可一鍵合併並切換
+      const merge = btn({ class: "small", "data-testid": "btn-k8s-merge", title: t("gui.k8s.merge_hint") }, "check", t("gui.k8s.merge"));
+      merge.disabled = this.st.busy.has("k8s-merge");
+      merge.onclick = () => void this.k8sMerge(name);
+      const cur = k.current_context || "—";
+      fields.push(el("div", { class: "info-field" },
+        el("dt", { text: t("gui.k8s.f.user_kubeconfig") }),
+        el("dd", { class: "with-action" },
+          el("span", { class: "mono", "data-testid": "k8s-current-context", "data-context": k.current_context ?? "", title: `${k.user_kubeconfig}\n${t("gui.k8s.f.current_context")}: ${cur}`, text: `${t("gui.k8s.f.current_context")}: ${cur}` }),
+          ...(k.current_context === "wsld" && k.merge_kubeconfig ? [] : [merge])),
+      ));
+    }
+    return fields;
   }
 
   /** k8s distro 是否在執行（Kubernetes 頁沒有 Machines 清單，從 /api/k8s 的狀態判斷）。 */
@@ -2306,27 +2390,738 @@ export class App {
     return names;
   }
 
+  /** 系統 namespace（kube-system 等）預設隱藏。 */
+  private k8sVisible(ns: string): boolean {
+    return this.st.k8sShowSystem || !K8S_SYSTEM_NS.includes(ns);
+  }
+
+  private k8sSystemToggle(): HTMLElement {
+    const box = el("input", { type: "checkbox", "data-testid": "k8s-show-system" }) as HTMLInputElement;
+    box.checked = this.st.k8sShowSystem;
+    box.onchange = () => {
+      this.st.k8sShowSystem = box.checked;
+      saveJSON(LS_K8S_SYSTEM, box.checked);
+      this.renderPageHead();
+      this.renderK8s();
+    };
+    return el("label", { class: "check k8s-system-toggle" }, box, el("span", { text: t("gui.k8s.show_system") }));
+  }
+
+  /** 依 namespace 分組（保持原順序）。 */
+  private k8sByNamespace<T extends { namespace: string }>(xs: T[]): Map<string, T[]> {
+    const by = new Map<string, T[]>();
+    for (const x of xs) (by.get(x.namespace) ?? by.set(x.namespace, []).get(x.namespace)!).push(x);
+    return by;
+  }
+
+  /** namespace 分組列：收合鈕、名稱、數量；Import 部署的 stack（物件帶 wsld.stack 標籤）可整組刪除（PVC 保留）。
+   *  Pods 與 Services 各自記住收合狀態（key 前綴不同）。 */
+  private k8sNsRow(prefix: string, ns: string, count: string, cols: number, labels: (Record<string, string> | undefined)[]): { row: HTMLTableRowElement; expanded: boolean } {
+    const key = `${prefix}:${ns}`;
+    const expanded = !this.collapsed.has(key);
+    const toggle = el("button", { class: "small ghost", "data-testid": "group-toggle", "aria-label": expanded ? "collapse" : "expand" });
+    toggle.append(icon(expanded ? "chevron-down" : "chevron-right"));
+    toggle.onclick = () => {
+      if (this.collapsed.has(key)) this.collapsed.delete(key);
+      else this.collapsed.add(key);
+      saveJSON(LS_COLLAPSED, [...this.collapsed]);
+      this.renderK8s();
+    };
+    const stacks = [...new Set(labels.map((l) => l?.[LABEL_K8S_STACK]).filter((x): x is string => !!x))];
+    const stackBtns = stacks.map((name) => {
+      const b = iconBtn({ "data-testid": `btn-k8s-stack-delete-${name}`, class: "danger" }, "trash", `${t("gui.k8s.stack.delete")} ${name}`);
+      b.disabled = this.st.busy.has(`k8s-stack:${ns}/${name}`);
+      b.onclick = () =>
+        void this.resourceAction(`k8s-stack:${ns}/${name}`, fmt(t("cli.k8s.stack_rm_confirm"), `${ns}/${name}`), async () => {
+          await api.k8sStackDelete(ns, name, false);
+          return fmt(t("cli.k8s.stack_removed"), `${ns}/${name}`);
+        });
+      return b;
+    });
+    const row = el("tr", { class: "group", "data-testid": "k8s-ns-row", "data-namespace": ns, "aria-expanded": String(expanded) },
+      el("td", { colspan: String(cols) },
+        el("div", { class: "group-bar" }, toggle,
+          el("span", { class: "group-name", "data-testid": "group-name", text: ns }),
+          el("span", { class: "group-count", "data-testid": "group-count", text: count }),
+          el("span", { class: "spacer" }),
+          ...stackBtns,
+        )),
+    ) as HTMLTableRowElement;
+    return { row, expanded };
+  }
+
+  /** Pods（工作負載面向）：依 namespace 分組（可收合），狀態、資源用量；每列可看日誌、開終端、轉發、刪除。 */
   private k8sPodsSection(): HTMLElement {
-    const pods = this.st.k8sPods;
-    const head = el("h3", { class: "machine-group-title", text: t("gui.k8s.pods") });
-    if (!pods) return el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, head);
-    if (pods.length === 0) {
-      return el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, head, el("div", { class: "empty", "data-testid": "k8s-pods-empty", text: t("gui.k8s.pods.empty") }));
-    }
+    const all = this.st.k8sPods;
+    const section = (...kids: Node[]) => el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, ...kids);
+    if (!all) return section();
+    const pods = all.filter((p) => this.k8sVisible(p.namespace));
+    if (pods.length === 0) return section(el("div", { class: "empty", "data-testid": "k8s-pods-empty", text: t("gui.k8s.pods.empty") }));
+    const stats = new Map((this.st.k8sStats ?? []).map((x) => [`${x.namespace}/${x.name}`, x]));
     const { table, tbody } = this.table("kubernetes", K8S_COLS);
-    for (const p of pods) {
-      const cls = p.status === "Running" ? "running" : p.status === "Completed" || p.status === "Succeeded" ? "exited" : p.status === "Pending" || p.status === "ContainerCreating" ? "pending" : "failed";
-      tbody.append(el("tr", { "data-testid": "k8s-pod-row", "data-name": p.name, "data-namespace": p.namespace },
-        el("td", { class: "muted", text: p.namespace }),
-        el("td", { class: "name", title: p.name, text: p.name }),
-        el("td", {}, el("span", { class: `state ${cls}`, "data-testid": "k8s-pod-status", text: p.status })),
-        el("td", { text: p.ready }),
-        el("td", { text: String(p.restarts) }),
-        el("td", { class: "mono muted", text: p.ip ?? "" }),
-        el("td", { class: "muted", title: fmtISO(p.created), text: fmtAge(p.created) }),
+    for (const [ns, items] of this.k8sByNamespace(pods)) {
+      const running = items.filter((p) => p.status === "Running").length;
+      const { row, expanded } = this.k8sNsRow("k8sns", ns, `${running}/${items.length}`, K8S_COLS.length, items.map((p) => p.labels));
+      tbody.append(row);
+      if (!expanded) continue;
+      for (const p of items) tbody.append(this.k8sPodRow(p, stats.get(`${p.namespace}/${p.name}`)));
+    }
+    return section(table);
+  }
+
+  private k8sPodRow(p: K8sPod, st?: K8sPodStats): HTMLTableRowElement {
+    const cls = p.status === "Running" ? "running" : p.status === "Completed" || p.status === "Succeeded" ? "exited"
+      : p.status === "Pending" || p.status === "ContainerCreating" || p.status.startsWith("Init:") && !/Err|BackOff|Error/.test(p.status) ? "pending" : "failed";
+    const key = `${p.namespace}/${p.name}`;
+    const withID = p.containers.filter((c) => c.id);
+    const runningCs = p.containers.filter((c) => c.id && c.state === "running");
+    const logs = iconBtn({ "data-testid": `btn-k8s-logs-${p.name}` }, "logs", t("gui.k8s.pod.logs"));
+    logs.disabled = withID.length === 0;
+    logs.onclick = (e) => {
+      e.stopPropagation();
+      this.k8sPickContainer(logs, p, withID, (c) => this.openLogs(podContainer(p, c)));
+    };
+    const term = iconBtn({ "data-testid": `btn-k8s-term-${p.name}` }, "terminal", t("gui.k8s.pod.terminal"));
+    term.disabled = runningCs.length === 0;
+    term.onclick = (e) => {
+      e.stopPropagation();
+      this.k8sPickContainer(term, p, runningCs, (c) => this.openTerminal(podContainer(p, c)));
+    };
+    const fwd = iconBtn({ "data-testid": `btn-k8s-forward-pod-${p.name}` }, "networks", t("gui.k8s.forward"));
+    fwd.disabled = !p.ip;
+    fwd.onclick = () => this.openForward(p.namespace, "pod", p.name, 0);
+    const del = iconBtn({ "data-testid": `btn-k8s-delete-${p.name}`, class: "danger" }, "trash", t("gui.k8s.pod.delete"));
+    del.disabled = this.st.busy.has(`k8s-del:${key}`) || p.status === "Terminating";
+    del.onclick = () =>
+      void this.resourceAction(`k8s-del:${key}`, fmt(t("gui.k8s.pod.delete_prompt"), key), async () => {
+        await api.k8sDeletePod(p.namespace, p.name);
+        return fmt(t("gui.k8s.pod.deleted"), key);
+      });
+    const labels = Object.entries(p.labels ?? {}).filter(([k]) => k !== "pod-template-hash" && k !== "controller-revision-hash");
+    const containers = p.containers.map((c) => (c.init ? `${c.name} (${t("gui.k8s.init")})` : c.name)).join(" · ");
+    return el("tr", { "data-testid": "k8s-pod-row", "data-name": p.name, "data-namespace": p.namespace },
+      el("td", { class: "name-cell indent" },
+        el("span", { class: "ct-name", title: p.name, text: p.name }),
+        el("span", { class: "ct-sub", "data-testid": "k8s-pod-containers", title: containers, text: containers }),
+        ...(labels.length
+          ? [el("span", { class: "k8s-labels", "data-testid": "k8s-pod-labels", title: labels.map(([k, v]) => `${k}=${v}`).join("\n") },
+            ...labels.map(([k, v]) => el("span", { class: "k8s-label", text: `${k}=${v}` })))]
+          : []),
+      ),
+      el("td", {}, el("span", { class: `state ${cls}`, "data-testid": "k8s-pod-status", text: p.status })),
+      el("td", { text: p.ready }),
+      el("td", { text: String(p.restarts) }),
+      el("td", { class: "num", "data-testid": "k8s-pod-cpu", text: st ? `${st.cpu.toFixed(1)}%` : "–" }),
+      el("td", { class: "num", "data-testid": "k8s-pod-mem", text: st ? humanSize(st.mem_bytes) : "–" }),
+      el("td", { class: "mono muted", text: p.ip ?? "" }),
+      el("td", { class: "muted", title: fmtISO(p.created), text: fmtAge(p.created) }),
+      el("td", { class: "actions" }, logs, term, fwd, del),
+    );
+  }
+
+  /** 單一容器直接執行；多個（含 init）時在按鈕下方列出讓使用者挑。 */
+  private k8sPickContainer(anchor: HTMLElement, p: K8sPod, cs: K8sPodContainer[], run: (c: K8sPodContainer) => void): void {
+    if (cs.length === 1) {
+      run(cs[0]);
+      return;
+    }
+    const existing = document.querySelector<HTMLElement>('[data-testid="k8s-container-menu"]');
+    existing?.remove();
+    if (existing && existing.dataset.for === anchor.dataset.testid) return;
+    const menu = el("div", { class: "lan-menu", role: "menu", "data-testid": "k8s-container-menu", "data-for": anchor.dataset.testid ?? "", "aria-label": p.name });
+    for (const c of cs) {
+      const item = el("button", { type: "button", role: "menuitem", "data-testid": "k8s-container-item", "data-container": c.name, text: c.init ? `${c.name} (${t("gui.k8s.init")})` : c.name }) as HTMLButtonElement;
+      item.onclick = (e) => {
+        e.stopPropagation();
+        menu.remove();
+        run(c);
+      };
+      menu.append(item);
+    }
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = `${r.bottom + 4}px`;
+    menu.style.left = `${Math.max(8, r.right - 220)}px`;
+    document.body.append(menu);
+    const done = () => {
+      menu.remove();
+      document.removeEventListener("click", close, true);
+      document.removeEventListener("keydown", esc, true);
+    };
+    const close = (ev: Event) => {
+      if (ev.target instanceof Node && menu.contains(ev.target)) return;
+      done();
+    };
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") done();
+    };
+    setTimeout(() => document.addEventListener("click", close, true));
+    document.addEventListener("keydown", esc, true);
+  }
+
+  /** Services（存取面向）：依 namespace 分組；每個 service 列出後端 pods（selector 比對）、
+   *  從 Windows 可開的位址（LoadBalancer／NodePort 與指向它的 port forward），可再開 Forward。 */
+  private k8sServicesSection(): HTMLElement {
+    const all = this.st.k8sServices;
+    const section = (...kids: Node[]) => el("section", { class: "machine-group k8s-pods k8s-services", "data-testid": "k8s-services" }, ...kids);
+    if (!all) return section();
+    const svcs = all.filter((x) => this.k8sVisible(x.namespace));
+    if (svcs.length === 0) return section(el("div", { class: "empty", "data-testid": "k8s-services-empty", text: t("gui.k8s.services.empty") }));
+    const { table, tbody } = this.table("kubernetes-svc", K8S_SVC_COLS);
+    for (const [ns, items] of this.k8sByNamespace(svcs)) {
+      const { row, expanded } = this.k8sNsRow("k8ssvcns", ns, String(items.length), K8S_SVC_COLS.length, items.map((x) => x.labels));
+      tbody.append(row);
+      if (!expanded) continue;
+      for (const x of items) tbody.append(this.k8sServiceRow(x));
+    }
+    return section(table);
+  }
+
+  private k8sServiceRow(x: K8sService): HTMLTableRowElement {
+    const tcp = x.ports.find((p) => p.protocol === "TCP");
+    const fwd = iconBtn({ "data-testid": `btn-k8s-forward-svc-${x.name}` }, "networks", t("gui.k8s.forward"));
+    fwd.disabled = !tcp || !x.cluster_ip || x.cluster_ip === "None";
+    fwd.onclick = () => this.openForward(x.namespace, "svc", x.name, tcp?.port ?? 0);
+    const ports = x.ports.map((p) => `${p.port}${p.node_port ? `:${p.node_port}` : ""}/${p.protocol}`).join(", ");
+    const portsTitle = x.ports.map((p) => `${p.name ? `${p.name}: ` : ""}${p.port} → ${p.target_port || p.port}${p.node_port ? ` (NodePort ${p.node_port})` : ""}/${p.protocol}`).join("\n");
+    // 存取：service 自己的 localhost 位址＋指向它的 port forward
+    const link = (url: string, testid: string, tag?: string) => {
+      const b = el("button", { type: "button", class: "link mono", "data-testid": testid, title: fmt(t("gui.browser.open"), url), text: url.replace(/^https?:\/\//, "") }) as HTMLButtonElement;
+      b.onclick = () => this.openBrowserURL(url);
+      return tag ? el("span", { class: "k8s-access-item" }, b, el("span", { class: "k8s-label", text: tag })) : b;
+    };
+    const fws = (this.st.k8sForwards ?? []).filter((f) => f.kind === "svc" && f.namespace === x.namespace && f.name === x.name && f.running);
+    const access = [
+      ...x.urls.map((u) => link(u, "k8s-svc-url")),
+      ...fws.map((f) => link(f.url, "k8s-svc-fwd-url", t("gui.k8s.forward.tag"))),
+    ];
+    const accessCell = access.length
+      ? el("td", { "data-testid": "k8s-svc-access" }, el("div", { class: "k8s-access" }, ...access))
+      : el("td", { class: "muted", "data-testid": "k8s-svc-access", text: x.type === "ExternalName" ? (x.external ?? []).join(", ") : t("gui.k8s.svc.cluster_only") });
+    const ext = (x.external ?? []).join(", ");
+    return el("tr", { "data-testid": "k8s-svc-row", "data-name": x.name, "data-namespace": x.namespace, "data-type": x.type },
+      el("td", { class: "name-cell indent" }, el("span", { class: "ct-name", title: x.name, text: x.name })),
+      el("td", { "data-testid": "k8s-svc-type", title: ext ? `${t("gui.k8s.col.external")}: ${ext}` : "", text: x.type }),
+      el("td", { class: "mono muted", text: x.cluster_ip ?? "" }),
+      el("td", { class: "mono", "data-testid": "k8s-svc-ports", title: portsTitle, text: ports }),
+      this.k8sEndpointsCell(x),
+      accessCell,
+      el("td", { class: "actions" }, fwd),
+    ) as HTMLTableRowElement;
+  }
+
+  /** 後端 pods：同 namespace、labels 符合 selector 的 pod，顯示「Ready 數/總數」（滑過列出名稱與狀態）。 */
+  private k8sEndpointsCell(x: K8sService): HTMLElement {
+    const sel = Object.entries(x.selector ?? {});
+    if (sel.length === 0) return el("td", { class: "muted", "data-testid": "k8s-svc-pods", title: t("gui.k8s.svc.no_selector"), text: "–" });
+    const pods = (this.st.k8sPods ?? []).filter((p) => p.namespace === x.namespace && sel.every(([k, v]) => p.labels?.[k] === v));
+    const ready = pods.filter((p) => {
+      const [a, b] = p.ready.split("/");
+      return p.status === "Running" && a === b;
+    }).length;
+    const cls = pods.length === 0 ? "failed" : ready === pods.length ? "running" : ready > 0 ? "pending" : "failed";
+    const title = [`${t("gui.k8s.svc.selector")}: ${sel.map(([k, v]) => `${k}=${v}`).join(", ")}`, ...pods.map((p) => `${p.name} · ${p.status}`)].join("\n");
+    const b = el("button", { type: "button", class: `link state ${cls}`, "data-testid": "k8s-svc-pods", "data-ready": String(ready), "data-total": String(pods.length), title, text: `${ready}/${pods.length}` }) as HTMLButtonElement;
+    b.disabled = pods.length === 0;
+    b.onclick = () => {
+      // 跳到 Pods 分頁並展開這個 namespace
+      this.collapsed.delete(`k8sns:${x.namespace}`);
+      saveJSON(LS_COLLAPSED, [...this.collapsed]);
+      this.setK8sTab("pods");
+    };
+    return el("td", {}, b);
+  }
+
+  /** 目前的 port forward（沒有就不顯示整節）。 */
+  private k8sForwardsSection(): HTMLElement {
+    const fws = this.st.k8sForwards ?? [];
+    const sec = el("section", { class: "machine-group k8s-pods k8s-forwards", "data-testid": "k8s-forwards" });
+    if (fws.length === 0) {
+      sec.hidden = true;
+      return sec;
+    }
+    const { table, tbody } = this.table("kubernetes-fwd", K8S_FWD_COLS);
+    for (const f of fws) {
+      const open = iconBtn({ "data-testid": `btn-k8s-fwd-open-${f.local_port}` }, "globe", fmt(t("gui.browser.open"), f.url));
+      open.disabled = !f.running;
+      open.onclick = () => this.openBrowserURL(f.url);
+      const stop = iconBtn({ "data-testid": `btn-k8s-fwd-stop-${f.local_port}`, class: "danger" }, "stop", t("gui.k8s.forward.stop"));
+      stop.disabled = this.st.busy.has(`k8s-fwd:${f.local_port}`);
+      stop.onclick = () => void this.k8sStopForward(f.local_port);
+      tbody.append(el("tr", { "data-testid": "k8s-fwd-row", "data-port": String(f.local_port) },
+        el("td", { class: "mono", text: `localhost:${f.local_port}` }),
+        el("td", { class: "mono", text: `${f.namespace}/${f.kind}/${f.name}:${f.remote_port}` }),
+        el("td", {}, el("span", { class: `state ${f.running ? "running" : "exited"}`, text: f.running ? "running" : "stopped" })),
+        el("td", { class: "actions" }, open, stop),
       ));
     }
-    return el("section", { class: "machine-group k8s-pods", "data-testid": "k8s-pods" }, head, table);
+    sec.append(el("h3", { class: "machine-group-title", text: t("gui.k8s.forwards") }), table);
+    return sec;
+  }
+
+  /** Import：先選來源（Windows 或 WSL distro）與檔案，再預覽 Compose 轉換結果與警告，最後 Deploy。
+   *  選到 k8s manifest（沒有 services）時改走 kubectl apply。檔案瀏覽與讀取都在後端（含同資料夾的 .env）。 */
+  private buildImportDialog(): ImportDialog {
+    const d = el("dialog", { class: "deploy-dialog import-dialog", "data-testid": "import-dialog" }) as ImportDialog;
+    const SRC_KEY = "wsld.import.src";
+    let sources: FileSources = { drives: [], wsl: [] };
+    let kind = "wsl";
+    let source = "";
+    let dir = "";
+    let parent = "";
+    let selected = "";
+    let preview: ComposePreview | undefined;
+    let seq = 0;
+    const sep = () => (kind === "windows" ? "\\" : "/");
+    const join = (base: string, name: string) => base.replace(/[\\/]+$/, "") + sep() + name;
+    const mk = (testid: string) => el("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", "data-testid": testid }) as HTMLInputElement;
+    const errBox = el("div", { class: "field-error", "data-testid": "import-error", hidden: "" });
+    const showErr = (m: string) => {
+      errBox.textContent = m;
+      errBox.hidden = !m;
+    };
+    const msg = (e: unknown) => (e instanceof ApiError ? e.message : String(e));
+
+    // ---- 步驟 1：來源與檔案
+    const kindLabel = el("span", { class: "field-label", id: "import-kind-label", text: t("gui.k8s.import.kind") });
+    const srcLabel = el("span", { class: "field-label", id: "import-source-label" });
+    const kindDd = dropdown({ testid: "import-kind", labelledby: "import-kind-label" }, [], kind, (v) => {
+      kind = v;
+      source = "";
+      fillSources();
+      void load("");
+    });
+    const srcDd = dropdown({ testid: "import-source", labelledby: "import-source-label" }, [], "", (v) => {
+      source = v;
+      void load("");
+    });
+    const ownerHint = el("p", { class: "field-hint", "data-testid": "import-engine-hint", hidden: "" });
+    const crumb = el("div", { class: "import-path mono", "data-testid": "import-path" });
+    const list = el("div", { class: "import-list", "data-testid": "import-list" });
+    const stoppedBtn = btn({ type: "button", "data-testid": "import-start" }, "play", t("gui.k8s.import.start_browse"));
+    const stopped = el("div", { class: "import-stopped", "data-testid": "import-stopped", hidden: "" }, el("span", { text: t("gui.k8s.import.stopped_note") }), stoppedBtn);
+    const step1 = el("div", { class: "import-step" },
+      el("div", { class: "deploy-grid" }, el("div", { class: "field" }, kindLabel, kindDd.el), el("div", { class: "field" }, srcLabel, srcDd.el)),
+      ownerHint, crumb, list, stopped,
+      el("p", { class: "field-hint", text: t("gui.k8s.import.hint") }),
+    );
+
+    const fillSources = () => {
+      const opts: DropdownOption[] = kind === "wsl"
+        ? sources.wsl.map((x): DropdownOption => [x.name, x.running ? x.name : `${x.name} (${t("gui.k8s.import.stopped_tag")})`])
+        : sources.drives.map((x): DropdownOption => [x, x]);
+      if (!opts.some(([v]) => v === source)) source = opts[0]?.[0] ?? "";
+      srcDd.setOptions(opts, source, t("gui.k8s.import.no_source"));
+      srcLabel.textContent = kind === "wsl" ? t("gui.k8s.import.distro") : t("gui.k8s.import.drive");
+      ownerHint.hidden = !sources.engine;
+      ownerHint.textContent = sources.engine ? fmt(t("gui.k8s.import.engine_hint"), sources.engine) : "";
+    };
+
+    const renderList = (entries: FileEntry[]) => {
+      const rows: HTMLElement[] = [];
+      if (parent) {
+        const up = el("button", { type: "button", class: "import-item dim", "data-testid": "import-up" }, icon("chevron-left"), el("span", { text: t("gui.k8s.import.up") }));
+        up.onclick = () => void load(parent);
+        rows.push(up);
+      }
+      for (const e of entries) {
+        const full = join(dir, e.name);
+        const row = el("button", { type: "button", class: `import-item${full === selected ? " on" : ""}`, "data-testid": `import-item-${e.name}`, "data-kind": e.dir ? "dir" : "file" },
+          icon(e.dir ? "folder" : "file"), el("span", { text: e.name }), el("small", { text: e.dir ? "" : humanSize(e.size ?? 0) }));
+        row.onclick = () => {
+          if (e.dir) return void load(full);
+          selected = full;
+          list.querySelectorAll(".import-item.on").forEach((x) => x.classList.remove("on"));
+          row.classList.add("on");
+          crumb.textContent = full;
+          syncButtons();
+        };
+        row.ondblclick = () => {
+          if (!e.dir) void toPreview();
+        };
+        rows.push(row);
+      }
+      if (!entries.length) rows.push(el("div", { class: "import-empty", text: t("gui.k8s.import.empty") }));
+      list.replaceChildren(...rows);
+    };
+
+    const load = async (path: string, start = false) => {
+      const mine = ++seq;
+      stopped.hidden = true;
+      showErr("");
+      selected = "";
+      syncButtons();
+      if (!source) {
+        list.replaceChildren(el("div", { class: "import-empty", text: t("gui.k8s.import.no_source") }));
+        crumb.textContent = "";
+        return;
+      }
+      try {
+        const r = await api.fsList(kind, source, path, start);
+        if (mine !== seq) return;
+        dir = r.path;
+        parent = r.parent;
+        crumb.textContent = dir;
+        renderList(r.entries);
+        saveJSON(SRC_KEY, { kind, source });
+      } catch (e) {
+        if (mine !== seq) return;
+        list.replaceChildren();
+        if (e instanceof ApiError && e.code === "stopped") stopped.hidden = false;
+        else showErr(msg(e));
+      }
+    };
+    stoppedBtn.onclick = () => {
+      void api.fsSources().then((s) => (sources = s)).catch(() => undefined);
+      void load("", true);
+    };
+
+    // ---- 步驟 2：預覽
+    const nameIn = mk("import-stack-name");
+    const nsIn = mk("import-namespace");
+    const readLine = el("div", { class: "import-read", "data-testid": "import-read" });
+    const svcBox = el("div", { class: "import-services", "data-testid": "import-services" });
+    const warnBox = el("div", { class: "import-warn", "data-testid": "import-warnings", hidden: "" });
+    const plainNote = el("p", { class: "field-hint", "data-testid": "import-plain-env", text: t("gui.k8s.import.plain_env") });
+    const orderLine = el("div", { class: "import-order", "data-testid": "import-order" });
+    const yamlBox = el("pre", { class: "import-yaml mono", "data-testid": "import-yaml", hidden: "" });
+    const manifestNote = el("p", { class: "import-manifest", "data-testid": "import-manifest", text: t("gui.k8s.import.manifest_note"), hidden: "" });
+    const composeParts = el("div", { class: "import-step" },
+      el("div", { class: "deploy-grid" },
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.import.stack_name") }), textField(nameIn)),
+        el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.import.namespace") }), textField(nsIn))),
+      readLine, el("div", { class: "field-label", text: t("gui.k8s.import.services") }), svcBox, orderLine, warnBox, plainNote, yamlBox);
+    const step2 = el("div", { class: "import-step" }, manifestNote, composeParts);
+
+    const mask = (y: string) => y.replace(/("name": "[^"]*(?:PASSWORD|SECRET|TOKEN|KEY)[^"]*",\s*"value": )"[^"]*"/gi, '$1"••••"');
+    const renderPreview = () => {
+      const p = preview!;
+      manifestNote.hidden = p.kind !== "manifest";
+      composeParts.hidden = p.kind !== "compose";
+      if (p.kind !== "compose" || !p.spec) return;
+      readLine.textContent = fmt(t("gui.k8s.import.read"), [selectedName(), ...p.read_files].join(", "));
+      const byName = new Map(p.spec.services.map((s) => [s.name, s]));
+      svcBox.replaceChildren(...(p.order ?? []).map((n) => {
+        const s = byName.get(n)!;
+        const bits = [s.image];
+        if (s.depends_on?.length) bits.push(fmt(t("gui.k8s.import.depends"), s.depends_on.join(", ")));
+        if (s.env?.length) bits.push(fmt(t("gui.k8s.import.env_n"), String(s.env.length)));
+        if (s.volumes?.length) bits.push(fmt(t("gui.k8s.import.volumes_n"), String(s.volumes.length)));
+        if ((s.replicas ?? 1) > 1) bits.push(`replicas ${s.replicas}`);
+        const exposure = s.expose === "loadbalancer" ? `localhost:${s.host_port}` : s.expose === "nodeport" ? "NodePort" : s.port ? `${t("gui.k8s.import.cluster_only")} :${s.port}` : t("gui.k8s.import.cluster_only");
+        return el("div", { class: "import-svc", "data-testid": `import-svc-${n}` }, el("b", { text: n }), el("span", { text: bits.join(" · ") }), el("small", { text: exposure }));
+      }));
+      orderLine.textContent = `${t("gui.k8s.import.order")}: ${(p.order ?? []).join(" → ")}`;
+      warnBox.hidden = p.warnings.length === 0;
+      warnBox.replaceChildren(el("b", { text: fmt(t("gui.k8s.import.warnings"), String(p.warnings.length)) }), ...p.warnings.map((w) => el("div", { text: w })));
+      plainNote.hidden = !p.spec.services.some((s) => s.env?.length);
+      yamlBox.textContent = mask(p.yaml ?? "");
+    };
+    const selectedName = () => selected.split(/[\\/]/).pop() ?? selected;
+
+    // ---- 流程
+    const cancel = btn({ type: "button", "data-testid": "import-cancel" }, "close", t("gui.cancel"));
+    const next = btn({ class: "primary", type: "button", "data-testid": "import-next" }, "chevron-right", t("gui.k8s.import.next"));
+    const back = btn({ type: "button", "data-testid": "import-back" }, "chevron-left", t("gui.k8s.import.back"));
+    const yamlToggle = btn({ type: "button", "data-testid": "import-view-yaml" }, "file", t("gui.k8s.import.view_yaml"));
+    const submit = btn({ class: "primary", type: "button", "data-testid": "import-submit" }, "play", t("gui.k8s.import.deploy"));
+    let step: 1 | 2 = 1;
+    const syncButtons = () => {
+      step1.hidden = step !== 1;
+      step2.hidden = step !== 2;
+      next.hidden = step !== 1;
+      next.disabled = !selected;
+      back.hidden = step !== 2;
+      submit.hidden = step !== 2;
+      yamlToggle.hidden = step !== 2 || preview?.kind !== "compose";
+      submit.querySelector(".label")!.textContent = preview?.kind === "manifest" ? t("gui.k8s.import.apply") : t("gui.k8s.import.deploy");
+    };
+    const fetchPreview = async () => {
+      showErr("");
+      try {
+        const r = await api.composePreview({ kind, name: source, path: selected, stack_name: nameIn.value.trim() || undefined, namespace: nsIn.value.trim() || undefined });
+        preview = r;
+        if (r.kind === "compose" && r.spec) {
+          nameIn.value = r.spec.name;
+          nsIn.value = r.spec.namespace ?? r.spec.name;
+        }
+        renderPreview();
+        return true;
+      } catch (e) {
+        showErr(msg(e));
+        return false;
+      }
+    };
+    const toPreview = async () => {
+      if (!selected) return;
+      nameIn.value = "";
+      nsIn.value = "";
+      if (!(await fetchPreview())) return;
+      step = 2;
+      syncButtons();
+    };
+    next.onclick = () => void toPreview();
+    back.onclick = () => {
+      step = 1;
+      showErr("");
+      syncButtons();
+    };
+    cancel.onclick = () => d.close();
+    nameIn.onchange = () => void fetchPreview();
+    nsIn.onchange = () => void fetchPreview();
+    yamlToggle.onclick = () => {
+      yamlBox.hidden = !yamlBox.hidden;
+      yamlToggle.querySelector(".label")!.textContent = yamlBox.hidden ? t("gui.k8s.import.view_yaml") : t("gui.k8s.import.hide_yaml");
+    };
+    submit.onclick = async () => {
+      if (!preview) return;
+      submit.disabled = true;
+      const label = submit.querySelector(".label")!;
+      const prev = label.textContent;
+      label.textContent = t("gui.k8s.import.deploying");
+      try {
+        if (preview.kind === "manifest") {
+          const r = await api.k8sApply(preview.manifest ?? "");
+          d.close();
+          this.notify(fmt(t("gui.k8s.apply_done"), r.output.split("\n").join("; ")));
+        } else {
+          const res = await api.k8sStack(preview.spec!);
+          d.close();
+          const urls = res.services.map((r) => (r.host_port ? `${r.name} → http://localhost:${r.host_port}` : r.node_port ? `${r.name} → http://localhost:${r.node_port}` : "")).filter(Boolean);
+          this.notify([fmt(t("gui.k8s.import.done"), res.name, String(res.services.length)), ...urls].join("; "), { sticky: true });
+        }
+        await this.refresh();
+      } catch (e) {
+        showErr(msg(e));
+      } finally {
+        submit.disabled = false;
+        label.textContent = prev;
+      }
+    };
+
+    d.begin = async () => {
+      step = 1;
+      preview = undefined;
+      selected = "";
+      showErr("");
+      try {
+        sources = await api.fsSources();
+      } catch (e) {
+        sources = { drives: [], wsl: [] };
+        showErr(msg(e));
+      }
+      const kinds: DropdownOption[] = [];
+      if (sources.wsl.length) kinds.push(["wsl", "WSL"]);
+      if (sources.drives.length) kinds.push(["windows", "Windows"]);
+      const last = loadJSON<{ kind: string; source: string }>(SRC_KEY, { kind: "", source: "" });
+      kind = kinds.some(([v]) => v === last.kind) ? last.kind : (kinds[0]?.[0] ?? "wsl");
+      source = last.kind === kind ? last.source : "";
+      kindDd.setOptions(kinds, kind, t("gui.k8s.import.no_source"));
+      fillSources();
+      syncButtons();
+      d.showModal();
+      await load("");
+    };
+    d.append(
+      el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.import.title") })),
+      el("div", { class: "add-machine-form" }, step1, step2, errBox, el("div", { class: "row" }, yamlToggle, el("span", { class: "spacer" }), cancel, back, next, submit)),
+    );
+    syncButtons();
+    return d;
+  }
+
+  private async openImport(): Promise<void> {
+    await this.root.querySelector<ImportDialog>('[data-testid="import-dialog"]')!.begin();
+  }
+
+  /** Apply YAML：貼上或載入 manifest，以 kubectl apply 套用，結果留在對話框裡。 */
+  private buildApplyDialog(): HTMLDialogElement {
+    const d = el("dialog", { class: "deploy-dialog apply-dialog", "data-testid": "apply-dialog" }) as HTMLDialogElement;
+    const text = el("textarea", { "data-testid": "apply-text", spellcheck: "false", placeholder: "apiVersion: v1\nkind: ConfigMap\n…" }) as HTMLTextAreaElement;
+    const err = el("div", { class: "field-error", "data-testid": "apply-error", hidden: "" });
+    const out = el("pre", { class: "apply-output mono", "data-testid": "apply-output", hidden: "" });
+    const file = el("input", { type: "file", accept: ".yaml,.yml,.json", hidden: "", "data-testid": "apply-file" }) as HTMLInputElement;
+    const load = btn({ type: "button", "data-testid": "apply-load" }, "folder", t("gui.k8s.apply.load"));
+    const submit = btn({ class: "primary", type: "button", "data-testid": "apply-submit" }, "play", t("gui.k8s.apply.submit"));
+    const cancel = btn({ type: "button", "data-testid": "apply-cancel" }, "close", t("gui.cancel"));
+    const showErr = (m: string) => {
+      err.textContent = m;
+      err.hidden = !m;
+    };
+    load.onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files?.[0];
+      file.value = "";
+      if (!f) return;
+      if (f.size > 1 << 20) return showErr(t("gui.k8s.apply_too_large"));
+      text.value = await f.text();
+      showErr("");
+    };
+    text.oninput = () => showErr("");
+    cancel.onclick = () => d.close();
+    submit.onclick = async () => {
+      const body = text.value;
+      if (!body.trim()) return showErr(t("gui.k8s.apply.empty"));
+      if (/^services\s*:/m.test(body) && !/^kind\s*:/m.test(body)) return showErr(t("gui.k8s.apply.is_compose"));
+      submit.disabled = true;
+      const label = submit.querySelector(".label")!;
+      label.textContent = t("gui.k8s.apply.applying");
+      showErr("");
+      try {
+        const r = await api.k8sApply(body);
+        out.textContent = r.output;
+        out.hidden = false;
+        this.notify(fmt(t("gui.k8s.apply_done"), r.output.split("\n").join("; ")));
+        await this.refresh();
+      } catch (e) {
+        showErr(e instanceof ApiError ? e.message : String(e));
+      } finally {
+        submit.disabled = false;
+        label.textContent = t("gui.k8s.apply.submit");
+      }
+    };
+    d.addEventListener("close", () => {
+      out.hidden = true;
+      out.textContent = "";
+      showErr("");
+    });
+    d.append(
+      el("div", { class: "dialog-head" }, el("h2", { text: t("gui.k8s.apply.title") })),
+      el("div", { class: "add-machine-form" },
+        el("p", { class: "field-hint", text: t("gui.k8s.apply.body") }),
+        text, file, err, out,
+        el("div", { class: "row" }, load, el("span", { class: "spacer" }), cancel, submit)),
+    );
+    return d;
+  }
+
+  private openApply(): void {
+    const d = this.root.querySelector<HTMLDialogElement>('[data-testid="apply-dialog"]')!;
+    d.showModal();
+    d.querySelector<HTMLTextAreaElement>('[data-testid="apply-text"]')!.focus();
+  }
+
+  /** Kubernetes 頁工具列：Import（Compose／YAML 檔）、Apply YAML。 */
+  private k8sActions(): HTMLElement {
+    const imp = btn({ class: "primary", "data-testid": "btn-k8s-import" }, "layers", t("gui.k8s.import"));
+    imp.onclick = () => void this.openImport();
+    const apply = btn({ "data-testid": "btn-k8s-apply" }, "file", t("gui.k8s.apply.title"));
+    apply.onclick = () => this.openApply();
+    return el("div", { class: "k8s-actions" }, imp, apply);
+  }
+
+
+  // ---- Port forward 對話框 ----------------------------------------------------
+
+  private forwardTarget?: { namespace: string; kind: "svc" | "pod"; name: string };
+
+  private buildForwardDialog(): HTMLDialogElement {
+    const d = el("dialog", { "data-testid": "k8s-forward-dialog" }) as HTMLDialogElement;
+    const title = el("h2", { "data-testid": "k8s-forward-title" });
+    const num = (testid: string) => el("input", { type: "text", inputmode: "numeric", class: "mono", "data-testid": testid, autocomplete: "off", spellcheck: "false" }) as HTMLInputElement;
+    const local = num("k8s-forward-local");
+    const remote = num("k8s-forward-remote");
+    const err = el("div", { class: "field-error", "data-testid": "k8s-forward-error", hidden: "" });
+    const apply = btn({ class: "primary", type: "submit", "data-testid": "k8s-forward-apply" }, "play", t("gui.k8s.forward.start"));
+    const cancel = btn({ type: "button", "data-testid": "k8s-forward-cancel" }, "close", t("gui.cancel"));
+    const port = (v: string) => (/^\d{1,5}$/.test(v.trim()) && +v >= 1 && +v <= 65535 ? +v : 0);
+    const sync = () => {
+      apply.disabled = !port(local.value) || !port(remote.value) || this.st.busy.has("k8s-forward");
+    };
+    local.oninput = remote.oninput = () => {
+      err.hidden = true;
+      sync();
+    };
+    cancel.onclick = () => d.close();
+    const form = el("form", { method: "dialog", class: "add-machine-form" },
+      el("p", { class: "field-hint", text: t("gui.k8s.forward.body") }),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.forward.local") }), textField(local)),
+      el("label", { class: "field" }, el("span", { class: "field-label", text: t("gui.k8s.forward.remote") }), textField(remote)),
+      err,
+      el("div", { class: "row" }, cancel, apply),
+    );
+    form.noValidate = true;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const tg = this.forwardTarget;
+      const lp = port(local.value), rp = port(remote.value);
+      if (!tg || !lp || !rp) return;
+      this.st.busy.add("k8s-forward");
+      sync();
+      try {
+        const f = await api.k8sForward({ ...tg, local_port: lp, remote_port: rp });
+        d.close();
+        this.notify(fmt(t("gui.k8s.forward.started"), f.url));
+        await this.refresh();
+      } catch (e) {
+        err.textContent = e instanceof ApiError ? e.message : String(e);
+        err.hidden = false;
+      } finally {
+        this.st.busy.delete("k8s-forward");
+        sync();
+      }
+    };
+    (d as HTMLDialogElement & { open4?: (p: number) => void }).open4 = (p: number) => {
+      const tg = this.forwardTarget;
+      title.textContent = tg ? fmt(t("gui.k8s.forward.title"), `${tg.namespace}/${tg.kind}/${tg.name}`) : "";
+      local.value = p ? String(p >= 1024 ? p : p + 8000) : "";
+      remote.value = p ? String(p) : "";
+      err.hidden = true;
+      sync();
+    };
+    d.append(el("div", { class: "dialog-head" }, title), form);
+    return d;
+  }
+
+  /** 開啟轉發對話框；port = 預設的遠端埠（service 的第一個 TCP 埠；pod 為 0 由使用者填）。 */
+  private openForward(namespace: string, kind: "svc" | "pod", name: string, port: number): void {
+    const d = this.root.querySelector<HTMLDialogElement & { open4?: (p: number) => void }>('[data-testid="k8s-forward-dialog"]')!;
+    this.forwardTarget = { namespace, kind, name };
+    d.open4?.(port);
+    d.showModal();
+    d.querySelector<HTMLInputElement>('[data-testid="k8s-forward-local"]')?.focus();
+  }
+
+  private async k8sStopForward(port: number): Promise<void> {
+    const key = `k8s-fwd:${port}`;
+    this.st.busy.add(key);
+    this.renderK8s();
+    try {
+      await api.k8sStopForward(port);
+      this.notify(fmt(t("gui.k8s.forward.stopped"), String(port)));
+    } catch (e) {
+      this.notify(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      this.st.busy.delete(key);
+    }
+    await this.refresh();
+  }
+
+  /** Restart（不確認）／Reset cluster（確認）：背景執行，進度由 /api/k8s 輪詢。 */
+  private async k8sRestart(reset: boolean): Promise<void> {
+    if (reset && !(await this.confirm(t("gui.k8s.reset_prompt"), undefined, { label: t("gui.k8s.reset"), icon: "reset", danger: true }))) return;
+    this.st.busy.add("k8s");
+    this.renderK8s();
+    try {
+      await (reset ? api.k8sReset() : api.k8sRestart());
+    } catch (e) {
+      this.notify(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      this.st.busy.delete("k8s");
+    }
+    await this.refresh();
+  }
+
+  private async k8sMerge(name: string): Promise<void> {
+    this.st.busy.add("k8s-merge");
+    try {
+      this.st.k8s = await api.k8sMerge();
+      this.notify(t("gui.k8s.merged"));
+    } catch (e) {
+      this.notify(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      this.st.busy.delete("k8s-merge");
+    }
+    if (this.st.info?.kind === "machine" && this.st.info.name === name) await this.openMachineInfo(name);
   }
 
   private async k8sEnable(): Promise<void> {
@@ -3646,14 +4441,45 @@ const MACHINE_COLS: Col[] = [
 ];
 
 const K8S_COLS: Col[] = [
-  { key: "namespace", label: "gui.k8s.col.namespace", def: 120, min: 70, resizable: true },
-  { key: "name", label: "gui.k8s.col.name", def: 260, min: 120, resizable: true },
-  { key: "status", label: "gui.k8s.col.status", def: 170, min: 80, resizable: true },
-  { key: "ready", label: "gui.k8s.col.ready", def: 70, min: 50, resizable: true },
-  { key: "restarts", label: "gui.k8s.col.restarts", def: 90, min: 50, resizable: true },
-  { key: "ip", label: "gui.k8s.col.ip", def: 120, min: 70, resizable: true },
-  { key: "age", label: "gui.k8s.col.age", def: 90, min: 50, resizable: false },
+  { key: "name", label: "gui.k8s.col.name", def: 300, min: 120, resizable: true },
+  { key: "status", label: "gui.k8s.col.status", def: 150, min: 80, resizable: true },
+  { key: "ready", label: "gui.k8s.col.ready", def: 60, min: 50, resizable: true },
+  { key: "restarts", label: "gui.k8s.col.restarts", def: 70, min: 50, resizable: true },
+  { key: "cpu", label: "gui.k8s.col.cpu", def: 70, min: 50, resizable: true },
+  { key: "mem", label: "gui.k8s.col.mem", def: 90, min: 60, resizable: true },
+  { key: "ip", label: "gui.k8s.col.ip", def: 110, min: 70, resizable: true },
+  { key: "age", label: "gui.k8s.col.age", def: 60, min: 50, resizable: true },
+  { key: "actions", label: "gui.k8s.col.actions", def: 150, min: 120, resizable: false },
 ];
+
+const K8S_SVC_COLS: Col[] = [
+  { key: "name", label: "gui.k8s.col.name", def: 220, min: 100, resizable: true },
+  { key: "type", label: "gui.k8s.col.type", def: 120, min: 70, resizable: true },
+  { key: "cluster_ip", label: "gui.k8s.col.cluster_ip", def: 110, min: 70, resizable: true },
+  { key: "ports", label: "gui.k8s.col.ports", def: 140, min: 70, resizable: true },
+  { key: "pods", label: "gui.k8s.col.pods", def: 70, min: 50, resizable: true },
+  { key: "access", label: "gui.k8s.col.access", def: 220, min: 90, resizable: true },
+  { key: "actions", label: "gui.k8s.col.actions", def: 60, min: 50, resizable: false },
+];
+
+const K8S_FWD_COLS: Col[] = [
+  { key: "local", label: "gui.k8s.forward.local", def: 150, min: 100, resizable: true },
+  { key: "target", label: "gui.k8s.forward.target", def: 320, min: 120, resizable: true },
+  { key: "state", label: "gui.k8s.col.status", def: 110, min: 70, resizable: true },
+  { key: "actions", label: "gui.k8s.col.actions", def: 80, min: 70, resizable: false },
+];
+
+/** 預設隱藏的系統 namespace（與 k8s.SystemNamespaces 一致）。 */
+const K8S_SYSTEM_NS = ["kube-system", "kube-public", "kube-node-lease"];
+const LS_K8S_SYSTEM = "wsld.k8sShowSystem";
+const LS_K8S_TAB = "wsld.k8sTab";
+/** Import 部署的 stack 標籤（與 k8s.StackLabel 一致）。 */
+const LABEL_K8S_STACK = "wsld.stack";
+
+/** pod 內的容器當成容器頁的 Container 交給 logs／terminal 面板（pod 容器本來就是 engine 上的 docker 容器）。 */
+function podContainer(p: K8sPod, c: K8sPodContainer): Container {
+  return { Id: c.id ?? "", Names: [`/${c.name} · ${p.name} (${p.namespace})`] } as Container;
+}
 
 const LS_COLS = "wsld.colWidths";
 const LS_COLLAPSED = "wsld.collapsedGroups";

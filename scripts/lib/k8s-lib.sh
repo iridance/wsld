@@ -34,9 +34,21 @@ wsld_k8s_state_dir() { printf '%s/var/lib/wsld-k8s\n' "$(wsld_k8s_expose_path "$
 # 名稱只允許 distro 名稱字元（會寫進 unit 與 config）。
 wsld_k8s_valid_name() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; }
 
-# /etc/rancher/k3s/config.yaml。$1 = distro 名稱、$2 = API 埠。
+# 額外設定值（tls-san／kubelet-arg）只允許這些字元：會經 wsl.exe 的命令列傳進來，也直接寫進 YAML。
+wsld_k8s_valid_extra() { [[ "${1:-}" =~ ^[A-Za-z0-9*][A-Za-z0-9._/:=,*-]{0,252}$ ]]; }
+
+# /etc/rancher/k3s/config.yaml。$1 = distro 名稱、$2 = API 埠；
+# 其餘參數為 tls-san=<名稱> 或 kubelet-arg=<旗標=值>（config.toml 的 k8s_tls_san／k8s_kubelet_args）。
 wsld_render_k3s_config() {
-  local name="$1" port="$2" state
+  local name="$1" port="$2" state x
+  local sans=() kargs=()
+  shift 2
+  for x in "$@"; do
+    case "$x" in
+      tls-san=*) sans+=("${x#tls-san=}") ;;
+      kubelet-arg=*) kargs+=("${x#kubelet-arg=}") ;;
+    esac
+  done
   state="$(wsld_k8s_state_dir "$name")"
   printf '%s\n' \
     '# 由 wsld 產生：k3s 用 engine 的 dockerd（cri-dockerd），pod 走 docker 原生網路。' \
@@ -55,6 +67,11 @@ wsld_render_k3s_config() {
     '  - cgroups-per-qos=false' \
     '  - enforce-node-allocatable=' \
     '  - cgroup-driver=systemd'
+  for x in "${kargs[@]}"; do printf '  - %s\n' "$x"; done
+  if [ "${#sans[@]}" -gt 0 ]; then
+    printf '%s\n' 'tls-san:'
+    for x in "${sans[@]}"; do printf '  - %s\n' "$x"; done
+  fi
 }
 
 # k8s-engine 的掛載小程式 /usr/local/sbin/wsld-k8s-mounts（up|down|status）。$1 = distro 名稱。
