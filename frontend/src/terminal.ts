@@ -20,6 +20,16 @@ export function openTerminal(host: HTMLElement, urlFor: (cols: number, rows: num
       foreground: getComputedStyle(document.documentElement).getPropertyValue("--term-fg").trim() || "#e2e8f0",
     },
   });
+  // xterm 預設把 Ctrl+V 轉成 ^V 並 preventDefault，瀏覽器的 paste 事件不會發生；
+  // 回傳 false 讓 xterm 放手，由瀏覽器原生貼上到 xterm 的 textarea（走 xterm 的 paste 流程，含 bracketed paste）。
+  // Ctrl+C 有選取時同理交給原生 copy；沒選取時照常送 ^C。
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== "keydown" || !ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return true;
+    const k = ev.key.toLowerCase();
+    if (k === "v") return false;
+    if (k === "c" && term.hasSelection()) return false;
+    return true;
+  });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);

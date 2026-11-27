@@ -65,6 +65,26 @@ test("Terminal opens exec session, echoes typed command, and closes", async ({ p
   await expect(panel).toBeHidden();
 });
 
+test("Terminal: Ctrl+V pastes the clipboard instead of sending ^V; Ctrl+C copies a selection", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await open(page);
+  await page.getByTestId("btn-term-web").click();
+  const termText = () => page.evaluate(() => (window as unknown as { __wsld: { termText(): string } }).__wsld.termText());
+  await expect.poll(termText).toContain("fake-shell$");
+
+  await page.evaluate(() => navigator.clipboard.writeText("echo pasted-cmd"));
+  await page.locator(".xterm").click();
+  await page.keyboard.press("Control+V");
+  await page.keyboard.press("Enter");
+  await expect.poll(termText).toContain("you typed: echo pasted-cmd");
+
+  // 有選取時 Ctrl+C 複製選取文字
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await page.locator(".xterm").dblclick({ position: { x: 5, y: 8 } });
+  await page.keyboard.press("Control+C");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).not.toBe("");
+});
+
 test("Terminal button is disabled for stopped containers", async ({ page }) => {
   await open(page);
   await expect(page.getByTestId("btn-term-db")).toBeDisabled();
